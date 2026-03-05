@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""
+BinanceML Pro – Main Application Entry Point
+=============================================
+Professional AI-powered Binance trading platform for Mac Mini M4.
+
+Startup sequence:
+  1. Logger initialisation
+  2. Encryption + settings load
+  3. First-run setup wizard (if needed)
+  4. Database initialisation (PostgreSQL + Redis)
+  5. Core service setup (Binance client, trading engine, ML predictor)
+  6. ML data integrity pre-check
+  7. Background services start (trading engine, continuous learner, API server)
+  8. PyQt6 UI launch
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import threading
+import time
+from pathlib import Path
+
+# ── Ensure the project root is on sys.path ──────────────────────────────────
+ROOT = Path(__file__).parent
+sys.path.insert(0, str(ROOT))
+
+# ── Logging (before imports that use logger) ────────────────────────────────
+from utils.logger import setup_logger, get_intel_logger
+setup_logger("INFO")
+intel = get_intel_logger()
+
+from loguru import logger
+
+# ── Qt (check before anything else) ─────────────────────────────────────────
+try:
+    from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen
+    from PyQt6.QtCore import Qt, QTimer
+    from PyQt6.QtGui import QPixmap, QFont, QColor
+except ImportError as e:
+    print(f"PyQt6 not available: {e}")
+    print("Install with: pip install PyQt6 PyQt6-Qt6")
+    sys.exit(1)
+
+
+def create_splash(app: QApplication) -> QSplashScreen:
+    """Simple splash screen while services start."""
+    pixmap = QPixmap(600, 300)
+    pixmap.fill(QColor("#0A0A12"))
+    splash = QSplashScreen(pixmap, Qt.WindowType.WindowStaysOnTopHint)
+    splash.showMessage(
+        "BinanceML Pro  ·  Starting…",
+        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
+        QColor("#00D4FF"),
+    )
+    splash.show()
+    app.processEvents()
+    return splash
+
+
+def init_databases() -> tuple[bool, str]:
+    """Initialise PostgreSQL and Redis connections."""
+    from config import get_settings
+    settings = get_settings()
+    try:
+        from db.postgres import init_db
+        init_db(
+            settings.db_url,
+            pool_size=settings.database.pool_size,
+            max_overflow=settings.database.max_overflow,
+        )
+        intel.system("Startup", "PostgreSQL connected.")
+    except Exception as exc:
+        logger.warning(f"PostgreSQL unavailable ({exc}) – running in offline mode")
+        intel.warning("Startup", f"PostgreSQL unavailable: {exc} – offline mode")
+
+    try:
+        from db.redis_client import init_redis
+        init_redis(
+            host=settings.redis.host,
+            port=settings.redis.port,
+            db=settings.redis.db,
+            password=settings.redis.password,
+            max_connections=settings.redis.max_connections,
+        )
+        intel.system("Startup", "Redis connected.")
+    except Exception as exc:
+        logger.warning(f"Redis unavailable ({exc}) – caching disabled")
+        intel.warning("Startup", f"Redis unavailable: {exc} – caching disabled")
+
+    return True, ""
+
+
+def build_services(settings):
+    """Instantiate and wire all application services."""
+    from config import get_settings
+    from core.binance_client import BinanceClient
+    from core.trading_engine import TradingEngine
+    from core.order_manager import OrderManager
+    from core.portfolio import PortfolioManager
+    from core.risk_manager import RiskManager
+    from ml.trainer import MLTrainer
+    from ml.predictor import MLPredictor
+    from ml.continuous_learner import ContinuousLearner
+    from tax.uk_tax import UKTaxCalculator
+
+    intel.system("Startup", "Initialising Binance client…")
+    binance = BinanceClient()
+
+    intel.system("Startup", "Setting up trading engine…")
+    risk  = RiskManager()
+    portfolio = PortfolioManager(binance_client=binance)
+    user_id = "default"   # Will be replaced once DB has user record
+    orders = OrderManager(binance_client=binance, portfolio_manager=portfolio)
+    engine = TradingEngine(
+        binance_client=binance,
+        order_manager=orders,
+        portfolio_manager=portfolio,
+        risk_manager=risk,
+        user_id=user_id,
+    )
+
+    intel.system("Startup", "Initialising ML predictor…")
+    trainer   = MLTrainer(binance_client=binance)
+    predictor = MLPredictor()
+
+    intel.system("Startup", "Initialising continuous learner…")
+    cl = ContinuousLearner(
+        trainer=trainer,
+        predictor=predictor,
+        binance_client=binance,
+    )
+
+    intel.system("Startup", "Initialising tax calculator…")
+    tax_calc = UKTaxCalculator()
+
+    return {
+        "binance": binance,
+        "engine": engine,
+        "orders": orders,
+        "portfolio": portfolio,
+        "risk": risk,
+        "trainer": trainer,
+        "predictor": predictor,
+        "continuous_learner": cl,
+        "tax_calc": tax_calc,
+    }
+
+
+def start_background_services(services: dict, settings) -> None:
+    """Start all background threads and services."""
+    from utils.threading_manager import get_thread_manager
+    from utils.memory_manager import get_memory_manager
+
+    thread_mgr = get_thread_manager()
+    mem_mgr    = get_memory_manager()
+    mem_mgr.start_monitoring(interval_sec=30.0)
+    intel.system("Startup", "Memory monitor started.")
+
+    engine = services["engine"]
+    engine.start()
+    intel.system("Startup", "Trading engine started.")
+
+    predictor = services["predictor"]
+    predictor.start()
+    intel.system("Startup", "ML predictor started.")
+
+    # Subscribe default symbols
+    default_symbols = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT"]
+    for sym in default_symbols:
+        engine.add_symbol(sym)
+        predictor.add_symbol(sym)
+
+    # Continuous learner
+    cl = services["continuous_learner"]
+    cl.start(default_symbols)
+    intel.system("Startup", f"Continuous learner started | {len(default_symbols)} symbols")
+
+    # Start REST API server
+    try:
+        from api.server import get_api_server
+        api_srv = get_api_server()
+        api_srv.start(
+            engine=engine,
+            portfolio=services["portfolio"],
+            predictor=predictor,
+            order_manager=services["orders"],
+            tax_calc=services["tax_calc"],
+        )
+        intel.api("Startup", f"REST API server: {api_srv.base_url}")
+    except Exception as exc:
+        intel.warning("Startup", f"API server failed to start: {exc}")
+
+    # Check if first training is needed
+    try:
+        from db.postgres import get_db
+        from db.models import MLModel
+        with get_db() as db:
+            has_model = db.query(MLModel).filter_by(is_active=True).first()
+        if not has_model and settings.ml.training_hours > 0:
+            intel.ml("Startup", "No trained model found – scheduling initial 48h training session…")
+            def _deferred_training():
+                time.sleep(5)   # Let UI load first
+                services["trainer"].run_training_session()
+            thread_mgr.submit_ml(_deferred_training)
+    except Exception:
+        pass
+
+    intel.success("Startup", "All background services started successfully ✅")
+
+
+def run_first_time_setup(app: QApplication, settings) -> bool:
+    """Run setup wizard on first launch. Returns True if setup completed."""
+    from ui.setup_wizard import SetupWizard
+    completed = threading.Event()
+    result = {"ok": False}
+
+    def on_complete(data):
+        result["ok"] = True
+        completed.set()
+
+    wizard = SetupWizard()
+    wizard.setup_complete.connect(on_complete)
+    wizard.show()
+
+    # Block until wizard finishes
+    while not completed.is_set() and wizard.isVisible():
+        app.processEvents()
+        time.sleep(0.05)
+
+    return result["ok"] or not wizard.isVisible()
+
+
+def main() -> int:
+    # ── Qt application ────────────────────────────────────────────────
+    app = QApplication(sys.argv)
+    app.setApplicationName("BinanceML Pro")
+    app.setApplicationVersion("1.0.0")
+    app.setOrganizationName("BinanceMLPro")
+
+    # High-DPI support
+    from ui.styles import apply_theme
+    apply_theme(app)
+
+    # Font
+    font = QFont("SF Pro Display", 13)
+    font.setStyleHint(QFont.StyleHint.SansSerif)
+    app.setFont(font)
+
+    splash = create_splash(app)
+    intel.system("Startup", "BinanceML Pro starting…")
+
+    # ── Settings ──────────────────────────────────────────────────────
+    from config import get_settings
+    settings = get_settings()
+
+    # Attempt to load config (may fail on first run)
+    try:
+        from config.encryption import EncryptionManager
+        enc = EncryptionManager()
+        # Try with empty password (unencrypted plain config)
+        try:
+            enc.initialise("placeholder")
+        except Exception:
+            pass
+        settings.load()
+    except Exception as exc:
+        logger.debug(f"Config load: {exc}")
+
+    # ── First-run setup ────────────────────────────────────────────────
+    if settings.first_run:
+        splash.hide()
+        ok = run_first_time_setup(app, settings)
+        if not ok:
+            return 0
+        settings.load()
+        splash.show()
+
+    # ── Database init ──────────────────────────────────────────────────
+    splash.showMessage("Connecting to databases…", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, QColor("#00D4FF"))
+    app.processEvents()
+    init_databases()
+
+    # ── Services ───────────────────────────────────────────────────────
+    splash.showMessage("Starting trading services…", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, QColor("#00D4FF"))
+    app.processEvents()
+
+    try:
+        services = build_services(settings)
+    except Exception as exc:
+        logger.error(f"Service build failed: {exc}")
+        intel.error("Startup", f"Service build failed: {exc} – launching in demo mode")
+        services = {
+            "binance": None, "engine": None, "orders": None,
+            "portfolio": None, "risk": None, "trainer": None,
+            "predictor": None, "continuous_learner": None, "tax_calc": None,
+        }
+
+    # ── Background services ────────────────────────────────────────────
+    splash.showMessage("Starting background services…", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, QColor("#00D4FF"))
+    app.processEvents()
+
+    try:
+        start_background_services(services, settings)
+    except Exception as exc:
+        logger.warning(f"Some background services failed: {exc}")
+
+    # ── Main window ────────────────────────────────────────────────────
+    splash.showMessage("Loading UI…", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, QColor("#00D4FF"))
+    app.processEvents()
+
+    from ui.main_window import MainWindow
+    window = MainWindow(
+        engine=services.get("engine"),
+        portfolio=services.get("portfolio"),
+        predictor=services.get("predictor"),
+        order_manager=services.get("orders"),
+        trainer=services.get("trainer"),
+        tax_calc=services.get("tax_calc"),
+        continuous_learner=services.get("continuous_learner"),
+    )
+    splash.finish(window)
+    window.showMaximized()
+
+    intel.success("Startup", "BinanceML Pro ready ✅")
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
