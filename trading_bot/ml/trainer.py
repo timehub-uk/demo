@@ -55,6 +55,12 @@ class MLTrainer:
         self._progress_callbacks: list[Callable] = []
         self._session_id: str = ""
         self._is_training = False
+        # Callback fired after archive download completes and live training begins
+        self._live_training_callbacks: list[Callable] = []
+
+    def on_live_training_start(self, callback: Callable) -> None:
+        """Register a callback invoked when the pipeline transitions to live training."""
+        self._live_training_callbacks.append(callback)
 
     def on_progress(self, callback: Callable) -> None:
         self._progress_callbacks.append(callback)
@@ -96,19 +102,31 @@ class MLTrainer:
                 self._emit("stage", "Fetching top tokens…", 2)
                 symbols = self._get_top_symbols(ml_cfg.top_tokens)
 
-            # Phase 1: Data collection
-            self._emit("stage", f"Downloading data for {len(symbols)} tokens…", 5)
+            # ── Phase 1: Binance archive back-data (1 year) ─────────────
+            self._emit("stage", f"📦 Downloading 1-year archive data for {len(symbols)} tokens…", 3)
+            self._run_archive_download(symbols, session_row_id)
+            if self._stop_event.is_set():
+                return session_id
+
+            # ── Phase 2: Live API gap-fill (last 7 days) ─────────────────
+            self._emit("stage", f"🔄 Filling live data gaps for {len(symbols)} tokens…", 38)
             self._collector.on_progress(self._on_data_progress)
             self._collector.collect_top_tokens(
                 symbols=symbols,
                 intervals=["1m", "5m", "15m", "1h", "4h"],
-                days_back=365,
+                days_back=7,       # Archive covers to ~yesterday; fill the gap
             )
             if self._stop_event.is_set():
                 return session_id
 
-            # Phase 2: Train per-symbol models + universal model
-            self._emit("stage", "Training LSTM models…", 40)
+            # ── Phase 3: Train LSTM models on full historical data ────────
+            # Signal UI that we are now training on live/merged data
+            for cb in self._live_training_callbacks:
+                try:
+                    cb({"stage": "live_training", "symbols": symbols})
+                except Exception:
+                    pass
+            self._emit("stage", "🤖 Training LSTM on full year of data…", 42)
             best_model_path = self._train_universal(symbols, session_row_id)
 
             # Phase 3: Validate
@@ -327,6 +345,87 @@ class MLTrainer:
         win_rate = sum(1 for p, t in zip(all_preds, all_true) if p == t and p == 2) / max(1, len(all_preds))
         return {"accuracy": float(acc), "win_rate": float(win_rate), "sharpe": 1.2}
 
+    # ── Archive download ─────────────────────────────────────────────────
+    def _run_archive_download(self, symbols: list[str], session_row_id: str | None) -> None:
+        """
+        Download 1 year of back-data from data.binance.vision for all symbols.
+        Saves to:
+          • data/archive/{symbol}/{interval}/*.zip + *.csv  (raw Binance files)
+          • data/csv/{symbol}/{interval}/{symbol}-{interval}-FULL.csv  (merged flat CSV)
+          • PostgreSQL token_metrics table
+        After completion, emits a 'live_training' event so the UI can update.
+        """
+        from .archive_downloader import BinanceArchiveDownloader, DEFAULT_INTERVALS
+
+        self._emit("archive", f"📦 Starting 1-year Binance archive download for {len(symbols)} symbols…", 3)
+        intel = __import__("utils.logger", fromlist=["get_intel_logger"]).get_intel_logger()
+        intel.ml("MLTrainer", f"📦 Archive download starting – {len(symbols)} symbols × {len(DEFAULT_INTERVALS)} intervals")
+
+        downloader = BinanceArchiveDownloader(
+            workers=4,
+            months_back=12,
+            store_in_db=True,
+        )
+        done_symbols = 0
+        total_symbols = len(symbols)
+
+        def _on_archive_progress(data: dict) -> None:
+            # Map per-symbol archive pct (0-100) into overall pipeline 3-38% range
+            sym_pct   = data.get("pct", 0)
+            sym_done  = (done_symbols / total_symbols) if total_symbols > 0 else 0
+            global_pct = 3 + ((sym_done + (sym_pct / 100) / total_symbols) * 35)
+            filename  = data.get("filename", "")
+            rows      = data.get("rows", 0)
+            speed     = data.get("speed_kbps", 0)
+            skipped   = data.get("skipped", False)
+            suffix    = " (cached)" if skipped else f"  {rows:,} rows  {speed:.0f} KB/s"
+
+            self._emit(
+                "archive",
+                f"  ⬇ {filename}{suffix}",
+                min(global_pct, 37),
+            )
+            # Forward to Redis for UI polling
+            self._redis.set("archive:progress", {
+                "pct": global_pct,
+                "symbol": data.get("symbol", ""),
+                "interval": data.get("interval", ""),
+                "filename": filename,
+                "rows": rows,
+                "speed_kbps": speed,
+                "skipped": skipped,
+                "summary": data.get("summary", {}),
+            }, ttl=120)
+
+        downloader.on_progress(_on_archive_progress)
+
+        for sym in symbols:
+            if self._stop_event.is_set():
+                break
+            summaries = downloader.download([sym])
+            done_symbols += 1
+            s = summaries.get(sym)
+            if s:
+                intel.ml(
+                    "MLTrainer",
+                    f"  ✅ {sym}: {s.completed} files | {s.total_rows:,} rows | "
+                    f"{s.total_bytes/1e6:.1f} MB | {s.failed} failed",
+                )
+            pct = 3 + (done_symbols / total_symbols * 35)
+            self._emit(
+                "archive_symbol",
+                f"📦 Archive {done_symbols}/{total_symbols}: {sym} complete",
+                pct,
+            )
+            self._update_session(session_row_id, 0, 1, 0, 0, 0)
+
+        intel.success("MLTrainer", f"✅ Archive download complete – {total_symbols} symbols")
+        self._redis.set("archive:progress", {
+            "pct": 100, "symbol": "DONE", "interval": "", "filename": "Archive complete",
+            "rows": 0, "speed_kbps": 0, "skipped": False, "summary": {}
+        }, ttl=300)
+        self._emit("archive_done", "✅ 1-year archive download complete – starting live training…", 38)
+
     # ── Helpers ─────────────────────────────────────────────────────────
     def _get_top_symbols(self, n: int) -> list[str]:
         if self._client:
@@ -359,8 +458,9 @@ class MLTrainer:
         return [X], [y]
 
     def _on_data_progress(self, data: dict) -> None:
-        pct = 5 + data["pct"] * 0.35
-        self._emit("data", f"Downloading {data['symbol']} / {data['interval']} ({data['rows']} rows)", pct)
+        # Gap-fill live data sits in the 38–42 % pipeline window
+        pct = 38 + data["pct"] * 0.04
+        self._emit("data", f"🔄 Live gap-fill {data['symbol']} / {data['interval']} ({data['rows']} rows)", pct)
 
     def _emit(self, event: str, message: str, pct: float) -> None:
         payload = {"event": event, "message": message, "pct": pct, "ts": time.time()}

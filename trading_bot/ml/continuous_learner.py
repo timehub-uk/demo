@@ -231,20 +231,74 @@ class ContinuousLearner:
         self._active_symbols = symbols
         self._running = True
 
-        # Start data collection thread
-        self._collect_thread = threading.Thread(
-            target=self._collection_loop, daemon=True, name="cl-collector"
+        self._intel.ml("ContinuousLearner",
+            f"🚀 Starting continuous learning for {len(symbols)} symbols…")
+
+        # Bootstrap: run archive download first if CSV data is sparse
+        bootstrap_thread = threading.Thread(
+            target=self._bootstrap_archive, daemon=True, name="cl-bootstrap"
         )
-        self._collect_thread.start()
+        bootstrap_thread.start()
 
         # Schedule first integrity check
         self._schedule_integrity_check()
 
-        # Schedule first retrain
+        # Schedule first retrain (after archive bootstrap completes)
         retrain_secs = self._settings.ml.retrain_interval_hours * 3600
         self._schedule_retrain(retrain_secs)
 
-        self._intel.ml("ContinuousLearner", f"✅ Continuous learning started | {len(symbols)} symbols | retrain every {self._settings.ml.retrain_interval_hours}h | integrity check every {self.CHECK_INTERVAL_MINS}min")
+        self._intel.ml("ContinuousLearner",
+            f"✅ Continuous learning started | {len(symbols)} symbols | "
+            f"retrain every {self._settings.ml.retrain_interval_hours}h | "
+            f"integrity check every {self.CHECK_INTERVAL_MINS}min")
+
+    def _bootstrap_archive(self) -> None:
+        """
+        On startup, check if archive CSV data exists for active symbols.
+        If fewer than 500 rows are found for any symbol on 1h interval,
+        trigger a background archive download before starting live collection.
+        """
+        from ml.data_collector import DataCollector
+
+        symbols_needing_data: list[str] = []
+        for sym in self._active_symbols[:20]:
+            count = DataCollector.csv_row_count(sym, "1h")
+            if count < 500:
+                symbols_needing_data.append(sym)
+
+        if symbols_needing_data:
+            self._intel.ml("ContinuousLearner",
+                f"📥 Archive bootstrap: {len(symbols_needing_data)} symbols need historical data – starting download…")
+            try:
+                from ml.archive_downloader import BinanceArchiveDownloader
+                downloader = BinanceArchiveDownloader(workers=4, months_back=12, store_in_db=True)
+
+                def _on_progress(data: dict) -> None:
+                    try:
+                        self._redis.set("archive:bootstrap_progress", {
+                            "symbol": data.get("symbol"),
+                            "pct": data.get("pct", 0),
+                            "phase": "bootstrap",
+                        }, ttl=120)
+                    except Exception:
+                        pass
+
+                downloader.on_progress(_on_progress)
+                downloader.download(symbols_needing_data)
+                self._intel.ml("ContinuousLearner",
+                    "✅ Archive bootstrap complete – starting live data collection")
+            except Exception as exc:
+                self._intel.warning("ContinuousLearner",
+                    f"Archive bootstrap failed (continuing with live data): {exc}")
+        else:
+            self._intel.ml("ContinuousLearner",
+                "✅ Archive data already present – skipping bootstrap download")
+
+        # Start live data collection after archive is ready
+        self._collect_thread = threading.Thread(
+            target=self._collection_loop, daemon=True, name="cl-collector"
+        )
+        self._collect_thread.start()
 
     def stop(self) -> None:
         self._running = False
