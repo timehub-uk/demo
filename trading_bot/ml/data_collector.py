@@ -255,28 +255,72 @@ class DataCollector:
     # ── Query helpers ──────────────────────────────────────────────────
     @staticmethod
     def load_dataframe(symbol: str, interval: str, limit: int = 2000) -> pd.DataFrame:
-        """Load stored klines from DB into a DataFrame for ML training."""
-        with get_db() as db:
-            from sqlalchemy import text
-            result = db.execute(text("""
-                SELECT open_time, open, high, low, close, volume,
-                       rsi, macd, macd_signal, bb_upper, bb_lower,
-                       ema_20, ema_50, ema_200, atr, obv, vwap, adx
-                FROM token_metrics
-                WHERE symbol = :sym AND interval = :intv
-                ORDER BY open_time DESC
-                LIMIT :lim
-            """), {"sym": symbol, "intv": interval, "lim": limit})
-            rows = result.fetchall()
+        """
+        Load stored klines for ML training.
 
-        if not rows:
-            return pd.DataFrame()
-        df = pd.DataFrame(rows, columns=[
-            "open_time","open","high","low","close","volume",
-            "rsi","macd","macd_signal","bb_upper","bb_lower",
-            "ema_20","ema_50","ema_200","atr","obv","vwap","adx"
-        ])
-        df = df.sort_values("open_time").reset_index(drop=True)
-        for col in df.columns[1:]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        return df
+        Priority order:
+          1. Flat CSV at  data/csv/{symbol}/{interval}/{symbol}-{interval}-FULL.csv
+             (fastest – no DB round-trip, contains full year from archive)
+          2. PostgreSQL token_metrics table   (fallback / live data)
+          3. Empty DataFrame                 (if neither source has data)
+        """
+        # 1. Try flat archive CSV first
+        from pathlib import Path
+        csv_root = Path(__file__).parent.parent / "data" / "csv"
+        full_csv = csv_root / symbol / interval / f"{symbol}-{interval}-FULL.csv"
+        if full_csv.exists() and full_csv.stat().st_size > 1000:
+            try:
+                df = pd.read_csv(full_csv, parse_dates=["open_time"])
+                df = df.sort_values("open_time").reset_index(drop=True)
+                for col in df.select_dtypes(include="object").columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                if limit and len(df) > limit:
+                    df = df.tail(limit).reset_index(drop=True)
+                return df
+            except Exception as exc:
+                logger.warning(f"CSV load failed [{symbol}/{interval}]: {exc}")
+
+        # 2. Fallback: PostgreSQL
+        try:
+            with get_db() as db:
+                from sqlalchemy import text
+                result = db.execute(text("""
+                    SELECT open_time, open, high, low, close, volume,
+                           rsi, macd, macd_signal, bb_upper, bb_lower,
+                           ema_20, ema_50, ema_200, atr, obv, vwap, adx
+                    FROM token_metrics
+                    WHERE symbol = :sym AND interval = :intv
+                    ORDER BY open_time DESC
+                    LIMIT :lim
+                """), {"sym": symbol, "intv": interval, "lim": limit})
+                rows = result.fetchall()
+
+            if not rows:
+                return pd.DataFrame()
+            df = pd.DataFrame(rows, columns=[
+                "open_time","open","high","low","close","volume",
+                "rsi","macd","macd_signal","bb_upper","bb_lower",
+                "ema_20","ema_50","ema_200","atr","obv","vwap","adx"
+            ])
+            df = df.sort_values("open_time").reset_index(drop=True)
+            for col in df.columns[1:]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            return df
+        except Exception as exc:
+            logger.warning(f"DB load failed [{symbol}/{interval}]: {exc}")
+
+        return pd.DataFrame()
+
+    @staticmethod
+    def csv_row_count(symbol: str, interval: str) -> int:
+        """Return number of rows in the flat CSV for (symbol, interval)."""
+        from pathlib import Path
+        csv_root = Path(__file__).parent.parent / "data" / "csv"
+        full_csv = csv_root / symbol / interval / f"{symbol}-{interval}-FULL.csv"
+        if not full_csv.exists():
+            return 0
+        try:
+            with open(full_csv) as f:
+                return sum(1 for _ in f) - 1   # minus header
+        except Exception:
+            return 0
