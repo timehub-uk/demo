@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Data / models (large binary / generated files)
+trading_bot/data/archive/
+trading_bot/data/csv/
+trading_bot/data/models/
+trading_bot/data/launches/
+trading_bot/data/strategies/
+
+# Secrets / config
+*.env
+.env.*
+*.key
+*.pem
+~/.binanceml/
+
+# macOS
+.DS_Store
+*.DS_Store
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# PyTest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Compiled
+*.so
+*.dylib
