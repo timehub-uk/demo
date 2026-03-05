@@ -104,6 +104,12 @@ class MainWindow(QMainWindow):
         voice=None,
         telegram=None,
         new_token_watcher=None,
+        regime_detector=None,
+        ensemble=None,
+        dynamic_risk=None,
+        monte_carlo=None,
+        walk_forward=None,
+        trade_journal=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -122,6 +128,12 @@ class MainWindow(QMainWindow):
         self._voice = voice
         self._telegram = telegram
         self._new_token_watcher = new_token_watcher
+        self._regime_detector = regime_detector
+        self._ensemble = ensemble
+        self._dynamic_risk = dynamic_risk
+        self._monte_carlo = monte_carlo
+        self._walk_forward = walk_forward
+        self._trade_journal = trade_journal
         self._settings = get_settings()
         self._intel = get_intel_logger()
 
@@ -367,6 +379,22 @@ class MainWindow(QMainWindow):
                 self._new_token_watcher.on_signal(_on_launch_signal)
             except Exception:
                 pass
+
+        # Risk Dashboard tab
+        try:
+            from ui.risk_dashboard import RiskDashboard
+            self.risk_dashboard = RiskDashboard(
+                dynamic_risk=self._dynamic_risk,
+                regime_detector=self._regime_detector,
+                ensemble=self._ensemble,
+                trade_journal=self._trade_journal,
+                monte_carlo=self._monte_carlo,
+                walk_forward=self._walk_forward,
+                engine=self._engine,
+            )
+            right_tabs.addTab(self.risk_dashboard, "⚡ Risk")
+        except Exception:
+            self.risk_dashboard = None
 
         # ── Intel Log (bottom dock) ──────────────────────────────────────
         self.intel_dock = QDockWidget("Intel Log", self)
