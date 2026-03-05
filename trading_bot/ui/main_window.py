@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
 
 from config import get_settings
 from utils.logger import get_intel_logger, setup_logger
-from ui.styles import ACCENT, GREEN, RED, YELLOW, BG0, BG1, BG2, BG3, BORDER, FG0, FG1, FG2
+from ui.styles import ACCENT, GREEN, RED, YELLOW, BG0, BG1, BG2, BG3, BG4, BORDER, FG0, FG1, FG2
 from ui.chart_widget import ChartWidget
 from ui.orderbook_widget import OrderBookWidget
 from ui.trading_panel import TradingPanel
@@ -96,6 +96,14 @@ class MainWindow(QMainWindow):
         trainer=None,
         tax_calc=None,
         continuous_learner=None,
+        whale_watcher=None,
+        token_ml=None,
+        sentiment=None,
+        port_opt=None,
+        backtester=None,
+        voice=None,
+        telegram=None,
+        new_token_watcher=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -106,6 +114,14 @@ class MainWindow(QMainWindow):
         self._trainer = trainer
         self._tax_calc = tax_calc
         self._cl = continuous_learner
+        self._whale_watcher = whale_watcher
+        self._token_ml = token_ml
+        self._sentiment = sentiment
+        self._port_opt = port_opt
+        self._backtester = backtester
+        self._voice = voice
+        self._telegram = telegram
+        self._new_token_watcher = new_token_watcher
         self._settings = get_settings()
         self._intel = get_intel_logger()
 
@@ -140,6 +156,8 @@ class MainWindow(QMainWindow):
             lambda: self._set_engine_mode("auto")))
         trade_menu.addAction(self._action("Hybrid Mode",
             lambda: self._set_engine_mode("hybrid")))
+        trade_menu.addAction(self._action("Paper Trading (Simulated)",
+            lambda: self._set_engine_mode("paper")))
         trade_menu.addSeparator()
         trade_menu.addAction(self._action("Pause Engine",
             lambda: self._set_engine_mode("paused")))
@@ -283,6 +301,10 @@ class MainWindow(QMainWindow):
         right_splitter.addWidget(self.orderbook_widget)
 
         right_tabs = QTabWidget()
+        right_tabs.setStyleSheet(
+            f"QTabBar::tab {{ color:{FG1}; background:{BG2}; padding:4px 10px; }}"
+            f"QTabBar::tab:selected {{ background:{BG3}; color:{ACCENT}; }}"
+        )
         self.ml_widget = MLTrainingWidget(trainer=self._trainer)
         right_tabs.addTab(self.ml_widget, "🤖 ML Training")
 
@@ -290,10 +312,61 @@ class MainWindow(QMainWindow):
         self.integrity_widget = self._build_integrity_widget()
         right_tabs.addTab(self.integrity_widget, "🔍 Data Integrity")
 
+        # Backtest tab
+        try:
+            from ui.backtest_widget import BacktestWidget
+            self.backtest_widget = BacktestWidget(backtester=self._backtester)
+            right_tabs.addTab(self.backtest_widget, "📊 Backtest")
+        except Exception:
+            self.backtest_widget = None
+
+        # Strategy builder tab
+        try:
+            from ui.strategy_builder import StrategyBuilderWidget
+            self.strategy_widget = StrategyBuilderWidget(backtester=self._backtester)
+            self.strategy_widget.backtest_requested.connect(
+                lambda d: self._intel.ml("StrategyBuilder", f"Backtest requested: {d.get('name')}")
+            )
+            right_tabs.addTab(self.strategy_widget, "⚙️ Strategies")
+        except Exception:
+            self.strategy_widget = None
+
         right_splitter.addWidget(right_tabs)
         right_splitter.setSizes([420, 430])
         self._main_splitter.addWidget(right_splitter)
         self._main_splitter.setSizes([1000, 400])
+
+        # Wire whale events → ML widget
+        if self._whale_watcher:
+            try:
+                self._whale_watcher.on_event(
+                    lambda ev: self.ml_widget.add_whale_event(ev)
+                )
+            except Exception:
+                pass
+
+        # Wire token ML signals → ML widget
+        if self._token_ml:
+            try:
+                self._token_ml.on_signal(
+                    lambda sig: self.ml_widget.add_signal({**sig, "source": "TokenML"})
+                )
+            except Exception:
+                pass
+
+        # Wire new token launch signals → intel log + voice
+        if self._new_token_watcher:
+            try:
+                def _on_launch_signal(sig):
+                    self._intel.ml("NewTokenWatcher",
+                        f"🚀 {sig.symbol} bar {sig.bar_num}: {sig.action} ({sig.confidence:.0%}) – {sig.reason}")
+                    if self._voice and sig.action in ("ENTER_LONG", "EXIT_LONG"):
+                        self._voice.speak_alert(
+                            f"Launch signal: {sig.action.replace('_',' ')} {sig.symbol}"
+                        )
+                self._new_token_watcher.on_signal(_on_launch_signal)
+            except Exception:
+                pass
 
         # ── Intel Log (bottom dock) ──────────────────────────────────────
         self.intel_dock = QDockWidget("Intel Log", self)

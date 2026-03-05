@@ -136,6 +136,43 @@ def build_services(settings):
     intel.system("Startup", "Initialising tax calculator…")
     tax_calc = UKTaxCalculator()
 
+    intel.system("Startup", "Initialising whale watcher…")
+    from ml.whale_watcher import WhaleWatcher
+    whale_watcher = WhaleWatcher(binance_client=binance)
+
+    intel.system("Startup", "Initialising per-token ML manager…")
+    from ml.token_ml_task import TokenMLManager
+    token_ml = TokenMLManager(binance_client=binance, max_workers=4)
+
+    intel.system("Startup", "Initialising sentiment analyser…")
+    from ml.sentiment import SentimentAnalyser
+    sentiment = SentimentAnalyser()
+
+    intel.system("Startup", "Initialising portfolio optimiser…")
+    from core.portfolio_optimiser import PortfolioOptimiser
+    port_opt = PortfolioOptimiser()
+
+    intel.system("Startup", "Initialising backtester…")
+    from ml.backtester import Backtester
+    backtester = Backtester(predictor=predictor)
+
+    intel.system("Startup", "Initialising voice alerts…")
+    from core.voice_alerts import VoiceAlerts
+    voice = VoiceAlerts()
+
+    intel.system("Startup", "Initialising Telegram bot…")
+    from core.telegram_bot import TelegramBot
+    telegram = TelegramBot(engine=engine, portfolio=portfolio)
+
+    intel.system("Startup", "Initialising new token launch watcher…")
+    from ml.new_token_watcher import NewTokenWatcher
+    new_token_watcher = NewTokenWatcher(binance_client=binance)
+
+    # Wire whale watcher + token ML into trading engine
+    engine.set_whale_watcher(whale_watcher)
+    engine.set_token_ml_manager(token_ml)
+    engine.set_sentiment_analyser(sentiment)
+
     return {
         "binance": binance,
         "engine": engine,
@@ -146,6 +183,14 @@ def build_services(settings):
         "predictor": predictor,
         "continuous_learner": cl,
         "tax_calc": tax_calc,
+        "whale_watcher": whale_watcher,
+        "token_ml": token_ml,
+        "sentiment": sentiment,
+        "port_opt": port_opt,
+        "backtester": backtester,
+        "voice": voice,
+        "telegram": telegram,
+        "new_token_watcher": new_token_watcher,
     }
 
 
@@ -177,6 +222,60 @@ def start_background_services(services: dict, settings) -> None:
     cl = services["continuous_learner"]
     cl.start(default_symbols)
     intel.system("Startup", f"Continuous learner started | {len(default_symbols)} symbols")
+
+    # Whale watcher
+    whale = services.get("whale_watcher")
+    if whale:
+        whale.start(default_symbols)
+        intel.system("Startup", f"Whale watcher started | {len(default_symbols)} symbols")
+
+    # Sentiment analyser
+    sentiment = services.get("sentiment")
+    if sentiment:
+        sentiment.start(default_symbols)
+        intel.system("Startup", "Sentiment analyser started")
+
+    # Voice alerts
+    voice = services.get("voice")
+    if voice:
+        voice.start()
+
+    # Telegram bot
+    telegram = services.get("telegram")
+    if telegram:
+        telegram.start()
+
+    # Wire trade alerts → voice + telegram
+    engine_ref = engine
+    voice_ref  = voice
+    tg_ref     = telegram
+    def _on_trade(trade):
+        try:
+            if voice_ref:
+                pnl = trade.get("pnl")
+                voice_ref.speak_trade(trade.get("side",""), trade.get("symbol",""), float(trade.get("price",0)), pnl)
+            if tg_ref:
+                tg_ref.send_trade_alert(trade.get("side",""), trade.get("symbol",""), float(trade.get("price",0)), float(trade.get("qty",0)), trade.get("pnl"))
+        except Exception:
+            pass
+    engine.on("trade", _on_trade)
+
+    # Wire whale events → voice + telegram
+    def _on_whale(event):
+        try:
+            if voice_ref:
+                voice_ref.speak_whale_event(getattr(event,"event_type",""), getattr(event,"symbol",""), getattr(event,"volume_usd",0))
+            if tg_ref and getattr(event,"confidence",0) >= 0.75:
+                tg_ref.send_whale_alert(getattr(event,"event_type",""), getattr(event,"symbol",""), getattr(event,"volume_usd",0), getattr(event,"confidence",0))
+        except Exception:
+            pass
+    engine.on("whale", _on_whale)
+
+    # New token launch watcher
+    ntw = services.get("new_token_watcher")
+    if ntw:
+        ntw.start()
+        intel.system("Startup", "New token launch watcher started")
 
     # Start REST API server
     try:
@@ -320,6 +419,14 @@ def main() -> int:
         trainer=services.get("trainer"),
         tax_calc=services.get("tax_calc"),
         continuous_learner=services.get("continuous_learner"),
+        whale_watcher=services.get("whale_watcher"),
+        token_ml=services.get("token_ml"),
+        sentiment=services.get("sentiment"),
+        port_opt=services.get("port_opt"),
+        backtester=services.get("backtester"),
+        voice=services.get("voice"),
+        telegram=services.get("telegram"),
+        new_token_watcher=services.get("new_token_watcher"),
     )
     splash.finish(window)
     window.showMaximized()
