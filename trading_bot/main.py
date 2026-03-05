@@ -168,10 +168,63 @@ def build_services(settings):
     from ml.new_token_watcher import NewTokenWatcher
     new_token_watcher = NewTokenWatcher(binance_client=binance)
 
+    # ── Advanced intelligence layer ───────────────────────────────────
+    intel.system("Startup", "Initialising market regime detector…")
+    from ml.regime_detector import RegimeDetector
+    regime_detector = RegimeDetector()
+
+    intel.system("Startup", "Initialising MTF confluence filter…")
+    from ml.mtf_confluence import MTFConfluenceFilter
+    mtf_filter = MTFConfluenceFilter(predictor=predictor, token_ml_manager=token_ml)
+
+    intel.system("Startup", "Initialising signal council…")
+    from ml.signal_council import SignalCouncil
+    signal_council = SignalCouncil()
+
+    intel.system("Startup", "Initialising ensemble aggregator…")
+    from ml.ensemble import EnsembleAggregator
+    ensemble = EnsembleAggregator(
+        regime_detector=regime_detector,
+        mtf_filter=mtf_filter,
+        sentiment_analyser=sentiment,
+    )
+
+    intel.system("Startup", "Initialising dynamic risk manager…")
+    from core.dynamic_risk import DynamicRiskManager
+    dynamic_risk = DynamicRiskManager(base_risk_manager=risk,
+                                       regime_detector=regime_detector)
+
+    intel.system("Startup", "Initialising Monte Carlo simulator…")
+    from ml.monte_carlo import MonteCarloSimulator
+    monte_carlo = MonteCarloSimulator()
+
+    intel.system("Startup", "Initialising walk-forward validator…")
+    from ml.walk_forward import WalkForwardValidator
+    walk_forward = WalkForwardValidator(predictor=predictor, token_ml_manager=token_ml)
+
+    intel.system("Startup", "Initialising trade journal…")
+    from core.trade_journal import TradeJournal
+    trade_journal = TradeJournal(ensemble=ensemble, dynamic_risk=dynamic_risk)
+
     # Wire whale watcher + token ML into trading engine
     engine.set_whale_watcher(whale_watcher)
     engine.set_token_ml_manager(token_ml)
     engine.set_sentiment_analyser(sentiment)
+
+    # Wire advanced intelligence into trading engine
+    engine.set_regime_detector(regime_detector)
+    engine.set_ensemble(ensemble)
+    engine.set_signal_council(signal_council)
+    engine.set_mtf_filter(mtf_filter)
+    engine.set_dynamic_risk(dynamic_risk)
+    engine.set_trade_journal(trade_journal)
+
+    # Feed LSTM predictor signals through ensemble
+    predictor.on_signal(lambda s: ensemble.feed("lstm_predictor", {
+        "symbol": s.get("symbol", ""),
+        "signal": s.get("action", "HOLD"),
+        "confidence": s.get("confidence", 0.5),
+    }))
 
     return {
         "binance": binance,
@@ -191,6 +244,14 @@ def build_services(settings):
         "voice": voice,
         "telegram": telegram,
         "new_token_watcher": new_token_watcher,
+        "regime_detector": regime_detector,
+        "mtf_filter": mtf_filter,
+        "signal_council": signal_council,
+        "ensemble": ensemble,
+        "dynamic_risk": dynamic_risk,
+        "monte_carlo": monte_carlo,
+        "walk_forward": walk_forward,
+        "trade_journal": trade_journal,
     }
 
 
@@ -222,6 +283,12 @@ def start_background_services(services: dict, settings) -> None:
     cl = services["continuous_learner"]
     cl.start(default_symbols)
     intel.system("Startup", f"Continuous learner started | {len(default_symbols)} symbols")
+
+    # Regime detector
+    regime = services.get("regime_detector")
+    if regime:
+        regime.start(default_symbols)
+        intel.system("Startup", "Market regime detector started")
 
     # Whale watcher
     whale = services.get("whale_watcher")
@@ -427,6 +494,12 @@ def main() -> int:
         voice=services.get("voice"),
         telegram=services.get("telegram"),
         new_token_watcher=services.get("new_token_watcher"),
+        regime_detector=services.get("regime_detector"),
+        ensemble=services.get("ensemble"),
+        dynamic_risk=services.get("dynamic_risk"),
+        monte_carlo=services.get("monte_carlo"),
+        walk_forward=services.get("walk_forward"),
+        trade_journal=services.get("trade_journal"),
     )
     splash.finish(window)
     window.showMaximized()

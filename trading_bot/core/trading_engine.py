@@ -81,6 +81,18 @@ class TradingEngine:
         self._token_ml_manager = None    # Set via set_token_ml_manager()
         self._sentiment_analyser = None  # Set via set_sentiment_analyser()
 
+        # Advanced intelligence layer
+        self._regime_detector = None     # Set via set_regime_detector()
+        self._ensemble = None            # Set via set_ensemble()
+        self._signal_council = None      # Set via set_signal_council()
+        self._mtf_filter = None          # Set via set_mtf_filter()
+        self._dynamic_risk = None        # Set via set_dynamic_risk()
+        self._trade_journal = None       # Set via set_trade_journal()
+
+        # Candle cache per symbol for ATR computation (last 30 candles)
+        self._candle_cache: dict[str, list[dict]] = {}
+        self._open_trade_ids: dict[str, str] = {}   # symbol → journal trade_id
+
     # ── Lifecycle ──────────────────────────────────────────────────────
     def start(self) -> None:
         if self._running:
@@ -141,6 +153,26 @@ class TradingEngine:
 
     def set_sentiment_analyser(self, analyser) -> None:
         self._sentiment_analyser = analyser
+
+    def set_regime_detector(self, detector) -> None:
+        self._regime_detector = detector
+        detector.on_regime_change(self._on_regime_change)
+
+    def set_ensemble(self, ensemble) -> None:
+        self._ensemble = ensemble
+        ensemble.on_signal(self._on_ensemble_signal)
+
+    def set_signal_council(self, council) -> None:
+        self._signal_council = council
+
+    def set_mtf_filter(self, mtf) -> None:
+        self._mtf_filter = mtf
+
+    def set_dynamic_risk(self, drm) -> None:
+        self._dynamic_risk = drm
+
+    def set_trade_journal(self, journal) -> None:
+        self._trade_journal = journal
 
     # ── Paper trading ──────────────────────────────────────────────────
     def enable_paper_trading(self, initial_capital: float = 10_000.0) -> None:
@@ -230,18 +262,68 @@ class TradingEngine:
                 "source": "token_model",
             })
 
+    # ── Advanced intelligence pipeline ────────────────────────────────
+    def _on_regime_change(self, snapshot) -> None:
+        regime = snapshot.regime.value if hasattr(snapshot.regime, "value") else str(snapshot.regime)
+        self._intel_log(f"Regime changed → {regime} (conf {snapshot.confidence:.0%})")
+        self._emit("signal", {"type": "regime_change", "regime": regime,
+                               "confidence": snapshot.confidence})
+
+    def _on_ensemble_signal(self, ens_signal) -> None:
+        """Called by EnsembleAggregator when consensus is reached."""
+        if ens_signal.final_signal == "HOLD":
+            return
+        # Feed into the main signal pipeline as a first-class signal
+        self.on_ml_signal({
+            "symbol":     ens_signal.symbol,
+            "action":     ens_signal.final_signal,
+            "confidence": ens_signal.final_confidence,
+            "price":      self._get_last_price(ens_signal.symbol),
+            "source":     "ensemble",
+        })
+
+    def _feed_ensemble(self, source: str, symbol: str, signal: str, confidence: float) -> None:
+        """Route a raw signal from any source through the ensemble aggregator."""
+        if self._ensemble:
+            self._ensemble.feed(source, {
+                "symbol": symbol, "signal": signal, "confidence": confidence
+            })
+
+    def _get_last_price(self, symbol: str) -> float:
+        try:
+            from db.redis_client import RedisClient
+            t = RedisClient().get_ticker(symbol)
+            return float(t.get("price", 0)) if t else 0.0
+        except Exception:
+            return 0.0
+
+    def _intel_log(self, msg: str) -> None:
+        logger.info(f"[TradingEngine] {msg}")
+
     # ── ML Signal handling ─────────────────────────────────────────────
     def on_ml_signal(self, signal: dict) -> None:
-        """Called by ML predictor with a new signal dict."""
+        """
+        Main signal ingestion point.
+        Runs the full intelligence pipeline:
+          1. Regime gate (RegimeDetector)
+          2. Multi-timeframe confluence (MTFConfluenceFilter)
+          3. Signal Council deliberation (SignalCouncil)
+          4. Dynamic risk sizing (DynamicRiskManager)
+          5. Trade execution / paper trade
+        """
         self._metrics["signals_processed"] += 1
         self._emit("signal", signal)
 
         if self._mode == EngineMode.PAPER:
-            # Route to paper trading simulation
+            # Route through full pipeline for realism
             symbol = signal.get("symbol", "")
             side   = signal.get("action", "")
             price  = float(signal.get("price", 0))
             conf   = signal.get("confidence", 0.0)
+
+            # Still gate through regime + MTF even in paper mode
+            side, conf = self._run_intelligence_pipeline(symbol, side, conf, signal)
+
             if side == "BUY" and symbol not in self._paper_positions and price > 0:
                 qty = self._paper_capital * 0.95 / price
                 self.paper_buy(symbol, price, qty, conf)
@@ -255,39 +337,67 @@ class TradingEngine:
         symbol = signal.get("symbol", "")
         side = signal.get("action", "")
         confidence = signal.get("confidence", 0.0)
+
+        # ── Intelligence pipeline ──────────────────────────────────────
+        side, confidence = self._run_intelligence_pipeline(symbol, side, confidence, signal)
+        if side == "HOLD":
+            return
+
         price = Decimal(str(signal.get("price", 0)))
 
         if side not in ("BUY", "SELL") or price <= 0:
             return
 
         portfolio = self._portfolio.get_snapshot()
-        portfolio_value = portfolio.get("total_usdt", 0) if isinstance(portfolio, dict) else float(portfolio.total_usdt)
-        portfolio_value = Decimal(str(portfolio_value))
+        portfolio_value_f = portfolio.get("total_usdt", 0) if isinstance(portfolio, dict) else float(portfolio.total_usdt)
+        portfolio_value = Decimal(str(portfolio_value_f))
+        price_f = float(price)
 
-        stop_loss = self._risk.calculate_stop_loss(price, side)
-        take_profit = self._risk.calculate_take_profit(price, side)
-        qty = self._risk.calculate_position_size(portfolio_value, price, stop_loss)
+        # ── Dynamic risk evaluation ────────────────────────────────────
+        candles_df = self._get_candles_df(symbol)
+        council_decision = signal.get("_council")   # Attached by _run_intelligence_pipeline
+        if self._dynamic_risk:
+            # Update portfolio peak/drawdown
+            self._dynamic_risk.update_portfolio(portfolio_value_f)
+            check = self._dynamic_risk.evaluate_trade(
+                symbol=symbol, side=side,
+                entry_price=price, confidence=confidence,
+                portfolio_value=portfolio_value_f,
+                candles_df=candles_df,
+                council_decision=council_decision,
+            )
+            if not check.approved:
+                self._metrics["orders_rejected"] += 1
+                logger.debug(f"DynamicRisk rejected [{symbol}]: {check.reject_reason}")
+                return
+            qty       = check.final_quantity
+            stop_loss = check.stop_loss
+            take_profit = check.take_profit
+            size_mult = check.size_mult
+        else:
+            # Fallback to base risk manager
+            stop_loss   = self._risk.calculate_stop_loss(price, side)
+            take_profit = self._risk.calculate_take_profit(price, side)
+            qty         = self._risk.calculate_position_size(portfolio_value, price, stop_loss)
+            size_mult   = 1.0
 
-        proposal = TradeProposal(
-            symbol=symbol,
-            side=side,
-            entry_price=price,
-            quantity=qty,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            confidence=confidence,
-        )
-
-        metrics = RiskMetrics(
-            portfolio_value=portfolio_value,
-            open_trades=len(self._orders.get_open_orders()),
-        )
-        proposal = self._risk.evaluate(proposal, metrics)
-
-        if not proposal.approved:
-            self._metrics["orders_rejected"] += 1
-            logger.debug(f"Signal rejected [{symbol}]: {proposal.reject_reason}")
-            return
+            proposal = TradeProposal(
+                symbol=symbol, side=side, entry_price=price,
+                quantity=qty, stop_loss=stop_loss, take_profit=take_profit,
+                confidence=confidence,
+            )
+            metrics = RiskMetrics(
+                portfolio_value=portfolio_value,
+                open_trades=len(self._orders.get_open_orders()),
+            )
+            proposal = self._risk.evaluate(proposal, metrics)
+            if not proposal.approved:
+                self._metrics["orders_rejected"] += 1
+                logger.debug(f"Signal rejected [{symbol}]: {proposal.reject_reason}")
+                return
+            qty = proposal.quantity
+            stop_loss = proposal.stop_loss
+            take_profit = proposal.take_profit
 
         order = self._orders.place_limit_order(
             symbol=symbol,
@@ -303,6 +413,127 @@ class TradingEngine:
         if order:
             self._metrics["trades_today"] += 1
             self._emit("trade", order)
+
+            # Log to trade journal
+            if self._trade_journal:
+                regime = ""
+                if self._regime_detector:
+                    snap = self._regime_detector.current
+                    regime = snap.regime.value if hasattr(snap.regime, "value") else str(snap.regime)
+                mtf_score = getattr(signal.get("_mtf"), "confluence_pct", 0.0)
+                trade_id = self._trade_journal.open_trade(
+                    symbol=symbol, side=side,
+                    entry_price=price_f, quantity=float(qty),
+                    stop_loss=float(stop_loss), take_profit=float(take_profit),
+                    regime=regime, mtf_score=mtf_score,
+                    council_decision=council_decision,
+                    source_signals=signal.get("_sources", {}),
+                    size_mult=size_mult,
+                )
+                self._open_trade_ids[symbol] = trade_id
+
+    # ── Intelligence pipeline ──────────────────────────────────────────
+    def _run_intelligence_pipeline(
+        self, symbol: str, side: str, confidence: float, signal: dict
+    ) -> tuple[str, float]:
+        """
+        Run signal through regime → MTF → council deliberation.
+        Returns (final_side, final_confidence). Side may become "HOLD" if rejected.
+        """
+        if side not in ("BUY", "SELL"):
+            return "HOLD", 0.0
+
+        # ── 1. Regime gate ─────────────────────────────────────────────
+        if self._regime_detector:
+            ok, reason = self._regime_detector.filter_signal(side, confidence)
+            if not ok:
+                logger.debug(f"[{symbol}] Regime blocked: {reason}")
+                return "HOLD", 0.0
+            # Scale confidence by regime confidence
+            confidence *= self._regime_detector.current.confidence or 0.8
+
+        # ── 2. MTF confluence gate ─────────────────────────────────────
+        mtf_result = None
+        if self._mtf_filter:
+            mtf_result = self._mtf_filter.check(symbol, side, confidence)
+            signal["_mtf"] = mtf_result
+            if not mtf_result.passes_filter:
+                logger.debug(f"[{symbol}] MTF blocked: {mtf_result.reject_reason}")
+                return "HOLD", 0.0
+            # Blend confidence with MTF score
+            confidence = min(0.95, (confidence + mtf_result.confidence) / 2)
+
+        # ── 3. Signal council deliberation ────────────────────────────
+        council = None
+        if self._signal_council:
+            # Gather all source signals available for this symbol
+            sources = {signal.get("source", "lstm_predictor"): {
+                "signal": side, "confidence": confidence
+            }}
+            if self._whale_watcher:
+                try:
+                    profiles = self._whale_watcher.get_profiles()
+                    for p in (profiles or []):
+                        if getattr(p, "symbol", "") == symbol:
+                            bias = getattr(p, "signal_bias", "HOLD")
+                            bias_conf = getattr(p, "bias_confidence", 0.5)
+                            if bias in ("BUY", "SELL"):
+                                sources["whale_signal"] = {"signal": bias, "confidence": bias_conf}
+                except Exception:
+                    pass
+            if self._sentiment_analyser:
+                try:
+                    sent = self._sentiment_analyser.get(symbol)
+                    if sent and abs(sent.score) > 0.2:
+                        sources["sentiment"] = {
+                            "signal": "BUY" if sent.score > 0 else "SELL",
+                            "confidence": min(0.75, abs(sent.score)),
+                        }
+                except Exception:
+                    pass
+
+            regime_str = ""
+            if self._regime_detector:
+                snap = self._regime_detector.current
+                regime_str = snap.regime.value if hasattr(snap.regime, "value") else str(snap.regime)
+
+            council = self._signal_council.deliberate(sources, symbol=symbol, regime=regime_str)
+            signal["_council"] = council
+            signal["_sources"] = sources
+
+            if council.final_signal == "HOLD":
+                logger.debug(f"[{symbol}] Council returned HOLD (disagreement={council.disagreement_score:.2f})")
+                return "HOLD", 0.0
+            if council.vetoed_by:
+                logger.debug(f"[{symbol}] Council vetoed by: {council.vetoed_by}")
+                return "HOLD", 0.0
+            side       = council.final_signal
+            confidence = council.final_confidence
+
+        # ── 4. Feed into ensemble (non-blocking, for weight adaptation) ─
+        if self._ensemble:
+            self._ensemble.feed(
+                signal.get("source", "lstm_predictor"),
+                {"symbol": symbol, "signal": side, "confidence": confidence}
+            )
+
+        return side, confidence
+
+    def _get_candles_df(self, symbol: str):
+        """Return a small DataFrame of recent candles for ATR computation."""
+        try:
+            cache = self._candle_cache.get(symbol, [])
+            if len(cache) >= 20:
+                import pandas as pd
+                return pd.DataFrame(cache[-50:])
+            from db.redis_client import RedisClient
+            candles = RedisClient().get_candles(symbol, "1h")
+            if candles:
+                import pandas as pd
+                return pd.DataFrame(candles[-50:])
+        except Exception:
+            pass
+        return None
 
     # ── Manual trading ─────────────────────────────────────────────────
     def manual_buy(self, symbol: str, quantity: Decimal, price: Decimal) -> Optional[dict]:
@@ -323,8 +554,19 @@ class TradingEngine:
     # ── WebSocket handlers ─────────────────────────────────────────────
     def _on_kline(self, data: dict) -> None:
         k = data.get("k", {})
+        symbol = k.get("s", "")
+        if symbol:
+            candle_row = {
+                "open": float(k.get("o", 0)), "high": float(k.get("h", 0)),
+                "low": float(k.get("l", 0)), "close": float(k.get("c", 0)),
+                "volume": float(k.get("v", 0)),
+            }
+            cache = self._candle_cache.setdefault(symbol, [])
+            cache.append(candle_row)
+            if len(cache) > 200:
+                self._candle_cache[symbol] = cache[-200:]
+
         if k.get("x"):   # candle closed
-            symbol = k.get("s", "")
             self._emit("signal", {
                 "type": "candle_close",
                 "symbol": symbol,
