@@ -181,6 +181,19 @@ class MainWindow(QMainWindow):
         trade_menu.addAction(self._action("Cancel All Orders",
             self._cancel_all_orders))
 
+        # AutoTrader sub-menu
+        trade_menu.addSeparator()
+        at_menu = trade_menu.addMenu("🤖 AutoTrader")
+        at_menu.addAction(self._action("Semi-Auto Mode",
+            lambda: self._set_autotrader_mode("semi_auto")))
+        at_menu.addAction(self._action("Full-Auto Mode",
+            lambda: self._set_autotrader_mode("full_auto")))
+        at_menu.addSeparator()
+        at_menu.addAction(self._action("🎯 Take Aim (approve trade)", self._at_take_aim))
+        at_menu.addAction(self._action("🛑 Manual Exit (close position)", self._at_manual_exit))
+        at_menu.addSeparator()
+        at_menu.addAction(self._action("🔭 Scan Now", self._at_scan_now))
+
         # ML
         ml_menu = menubar.addMenu("&Machine Learning")
         ml_menu.addAction(self._action("Start 48h Training", self._start_training))
@@ -400,6 +413,17 @@ class MainWindow(QMainWindow):
         except Exception:
             self.risk_dashboard = None
 
+        # AutoTrader / Market Scanner tab
+        try:
+            from ui.auto_trader_widget import AutoTraderWidget
+            self.auto_trader_widget = AutoTraderWidget(
+                auto_trader=self._auto_trader,
+                market_scanner=self._market_scanner,
+            )
+            right_tabs.addTab(self.auto_trader_widget, "🤖 AutoTrader")
+        except Exception:
+            self.auto_trader_widget = None
+
         # ── Intel Log (bottom dock) ──────────────────────────────────────
         self.intel_dock = QDockWidget("Intel Log", self)
         self.intel_dock.setAllowedAreas(
@@ -579,6 +603,30 @@ class MainWindow(QMainWindow):
             from core.trading_engine import EngineMode
             self._engine.set_mode(EngineMode(mode))
 
+    def _set_autotrader_mode(self, mode: str) -> None:
+        if self._auto_trader:
+            from core.auto_trader import AutoTraderMode
+            self._auto_trader.set_mode(AutoTraderMode(mode))
+            self._intel.ml("MainWindow", f"AutoTrader mode set to {mode}")
+
+    def _at_take_aim(self) -> None:
+        if self._auto_trader:
+            ok = self._auto_trader.take_aim()
+            self._intel.ml("MainWindow", "Take Aim" + (" approved" if ok else " – nothing to aim at"))
+
+    def _at_manual_exit(self) -> None:
+        if self._auto_trader:
+            self._auto_trader.manual_exit()
+            self._intel.ml("MainWindow", "Manual exit requested")
+
+    def _at_scan_now(self) -> None:
+        if self._market_scanner:
+            import threading
+            threading.Thread(
+                target=self._market_scanner.scan_now, daemon=True, name="menu-scan"
+            ).start()
+            self._intel.ml("MainWindow", "Manual scan triggered")
+
     def _cancel_all_orders(self) -> None:
         reply = QMessageBox.question(
             self, "Cancel All Orders",
@@ -726,6 +774,10 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
+            if self._auto_trader:
+                self._auto_trader.stop()
+            if self._market_scanner:
+                self._market_scanner.stop()
             if self._engine:
                 self._engine.stop()
             if self._predictor:
