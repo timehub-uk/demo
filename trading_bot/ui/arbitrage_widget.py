@@ -329,20 +329,21 @@ class ArbitrageWidget(QWidget):
     # ── Backend wiring ─────────────────────────────────────────────────────────
 
     def _connect_backend(self) -> None:
+        from loguru import logger
         if self._det:
             try:
                 self._det.on_opportunity(
                     lambda opp: QTimer.singleShot(0, self._refresh)
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"ArbitrageWidget: failed to subscribe to detector: {exc}")
         if self._trader:
             try:
                 self._trader.on_trade(
                     lambda evt: QTimer.singleShot(0, self._refresh)
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"ArbitrageWidget: failed to subscribe to trader: {exc}")
 
     # ── Refresh ────────────────────────────────────────────────────────────────
 
@@ -567,9 +568,9 @@ class ArbitrageWidget(QWidget):
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _get_price(self, symbol: str, fallback: float) -> float:
-        """Read latest price from detector buffer or return fallback."""
+        """Read latest price from detector's public API or return fallback."""
         if self._det:
-            buf = self._det._price_buf.get(symbol, [])
-            if buf:
-                return float(buf[-1])
+            price = self._det.get_latest_price(symbol)
+            if price is not None:
+                return price
         return float(fallback)

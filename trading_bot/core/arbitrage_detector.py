@@ -195,6 +195,11 @@ class ArbitrageDetector:
     and emits callbacks when actionable signals are detected.
     """
 
+    @staticmethod
+    def _norm_pair(a: str, b: str) -> tuple[str, str]:
+        """Return pair tuple in canonical (alphabetical) order."""
+        return (a, b) if a <= b else (b, a)
+
     def __init__(
         self,
         binance_client=None,
@@ -205,13 +210,16 @@ class ArbitrageDetector:
         self._journal = trade_journal
         self._intel   = get_intel_logger()
 
-        self._pairs: list[tuple[str, str]] = pairs or list(DEFAULT_PAIRS)
+        raw_pairs = pairs or list(DEFAULT_PAIRS)
+        self._pairs: list[tuple[str, str]] = [
+            self._norm_pair(*p) for p in raw_pairs
+        ]
         self._tri_loops = list(TRIANGULAR_LOOPS)
 
         # Rolling price buffers: symbol → list of closes
         self._price_buf: dict[str, list[float]] = {}
 
-        # Per-pair stats for ML confidence
+        # Per-pair stats for ML confidence (keyed by normalised pair)
         self._pair_stats: dict[tuple[str, str], PairStats] = {
             p: PairStats(pair=p) for p in self._pairs
         }
@@ -247,7 +255,7 @@ class ArbitrageDetector:
 
     def add_pair(self, sym_a: str, sym_b: str) -> None:
         """Dynamically add a new pair to monitor."""
-        pair = (sym_a, sym_b)
+        pair = self._norm_pair(sym_a, sym_b)
         with self._lock:
             if pair not in self._pairs:
                 self._pairs.append(pair)
@@ -255,10 +263,11 @@ class ArbitrageDetector:
 
     def record_result(self, pair: tuple[str, str], pnl: float) -> None:
         """Record outcome of an arb trade for ML feedback."""
+        norm = self._norm_pair(*pair)
         with self._lock:
-            if pair not in self._pair_stats:
-                self._pair_stats[pair] = PairStats(pair=pair)
-            s = self._pair_stats[pair]
+            if norm not in self._pair_stats:
+                self._pair_stats[norm] = PairStats(pair=norm)
+            s = self._pair_stats[norm]
             if pnl > 0:
                 s.wins += 1; s.recent_wins += 1
             else:
@@ -267,9 +276,18 @@ class ArbitrageDetector:
             # Decay recent window to last 10
             total_r = s.recent_wins + s.recent_losses
             if total_r > 10:
-                ratio = s.recent_wins / total_r
+                ratio = s.recent_wins / total_r   # total_r ≥ 11 here, no ZeroDivision
                 s.recent_wins   = round(10 * ratio)
                 s.recent_losses = 10 - s.recent_wins
+
+    def get_latest_price(self, symbol: str) -> Optional[float]:
+        """Return the most-recent fetched price for `symbol`, or None."""
+        buf = self._price_buf.get(symbol, [])
+        return float(buf[-1]) if buf else None
+
+    def get_price_buffer(self, symbol: str) -> list:
+        """Return a snapshot copy of the rolling price buffer for `symbol`."""
+        return list(self._price_buf.get(symbol, []))
 
     def start(self) -> None:
         if self._running:
@@ -293,7 +311,7 @@ class ArbitrageDetector:
             try:
                 self._scan()
             except Exception as exc:
-                logger.warning(f"ArbitrageDetector scan error: {exc}")
+                logger.warning(f"ArbitrageDetector scan error: {exc!r}")
             time.sleep(SCAN_INTERVAL_SEC)
 
     def _scan(self) -> None:
@@ -400,7 +418,7 @@ class ArbitrageDetector:
             return None
 
         # ML confidence: cointegration × recent pair win rate
-        pair_key = (sym_a, sym_b)
+        pair_key = self._norm_pair(sym_a, sym_b)
         with self._lock:
             stats = self._pair_stats.get(pair_key, PairStats(pair=pair_key))
         confidence = min(0.95, coint * stats.recent_win_rate * 1.5)

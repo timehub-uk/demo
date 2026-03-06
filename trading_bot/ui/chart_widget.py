@@ -1416,59 +1416,86 @@ class ChartWidget(QWidget):
 
     @staticmethod
     def _trade_tooltip(trade, is_entry: bool) -> str:
-        """Build the rich hover tooltip text for a trade marker."""
-        ep = float(trade.entry_price)
-        qty = float(trade.quantity)
+        """Build the hover tooltip text for a trade marker."""
+        try:
+            ep  = float(trade.entry_price or 0)
+            qty = float(trade.quantity or 0)
+        except (TypeError, ValueError):
+            ep = qty = 0.0
+
         entry_dt = ""
         try:
             from datetime import datetime, timezone
-            dt = datetime.fromisoformat(trade.entry_time.replace("Z", "+00:00"))
-            entry_dt = dt.strftime("%Y-%m-%d %H:%M UTC")
+            raw_et = trade.entry_time or ""
+            if raw_et:
+                dt = datetime.fromisoformat(raw_et.replace("Z", "+00:00"))
+                entry_dt = dt.strftime("%Y-%m-%d %H:%M UTC")
         except Exception:
-            entry_dt = trade.entry_time
+            entry_dt = str(getattr(trade, "entry_time", ""))
+
+        try:
+            tid = str(trade.trade_id)[:8]
+        except Exception:
+            tid = "?"
+
+        try:
+            base = str(trade.symbol or "").replace("USDT", "")
+        except Exception:
+            base = ""
 
         label = "ENTRY" if is_entry else "EXIT"
         lines = [
-            f"  {label}  ─  {trade.trade_id[:8]}",
-            f"  Side:    {trade.side}",
+            f"  {label}  ─  {tid}",
+            f"  Side:    {getattr(trade, 'side', '?')}",
             f"  Entry:   {ep:.4f}  @  {entry_dt}",
-            f"  Qty:     {qty:.6f} {trade.symbol.replace('USDT','')}",
+            f"  Qty:     {qty:.6f} {base}",
         ]
 
-        if not trade.is_open and trade.exit_price and float(trade.exit_price) > 0:
-            xp = float(trade.exit_price)
-            xdt = ""
+        try:
+            is_closed = (
+                not getattr(trade, "is_open", True)
+                and getattr(trade, "exit_price", None)
+                and float(trade.exit_price or 0) > 0
+            )
+        except Exception:
+            is_closed = False
+
+        if is_closed:
             try:
-                from datetime import datetime
-                dt2 = datetime.fromisoformat(trade.exit_time.replace("Z", "+00:00"))
-                xdt = dt2.strftime("%Y-%m-%d %H:%M UTC")
+                xp = float(trade.exit_price)
+                xdt = ""
+                try:
+                    from datetime import datetime
+                    raw_xt = trade.exit_time or ""
+                    if raw_xt:
+                        dt2 = datetime.fromisoformat(raw_xt.replace("Z", "+00:00"))
+                        xdt = dt2.strftime("%Y-%m-%d %H:%M UTC")
+                except Exception:
+                    xdt = str(getattr(trade, "exit_time", ""))
+
+                entry_val  = ep * qty
+                exit_val   = xp * qty
+                side       = getattr(trade, "side", "BUY")
+                gross_pnl  = exit_val - entry_val if side == "BUY" else entry_val - exit_val
+                total_fees = (entry_val + exit_val) * _BINANCE_FEE_PCT
+                net_pnl    = gross_pnl - total_fees
+                tax        = max(0.0, net_pnl * _UK_CGT_RATE)
+                after_tax  = net_pnl - tax
+                pct        = (gross_pnl / entry_val * 100.0) if entry_val != 0 else 0.0
+                mins       = float(getattr(trade, "duration_minutes", 0) or 0)
+                held_str   = (f"{int(mins // 60)}h {int(mins % 60)}m"
+                             if mins >= 60 else f"{int(mins)}m")
+                sign       = "+" if net_pnl >= 0 else ""
+                lines += [
+                    f"  Exit:    {xp:.4f}  @  {xdt}",
+                    f"  Held:    {held_str}",
+                    f"  Gross:   {sign}${gross_pnl:,.4f}  ({sign}{pct:.2f}%)",
+                    f"  Fees:    -${total_fees:.4f}  (2 × 0.1%)",
+                    f"  Tax:     -${tax:.4f}  (UK CGT 20%)",
+                    f"  Net:     {sign}${after_tax:,.4f}",
+                ]
             except Exception:
-                xdt = trade.exit_time
-
-            # Financials
-            entry_val = ep * qty
-            exit_val  = xp * qty
-            gross_pnl = exit_val - entry_val if trade.side == "BUY" else entry_val - exit_val
-            fee_entry = entry_val * _BINANCE_FEE_PCT
-            fee_exit  = exit_val  * _BINANCE_FEE_PCT
-            total_fees = fee_entry + fee_exit
-            net_pnl    = gross_pnl - total_fees
-            tax = max(0.0, net_pnl * _UK_CGT_RATE)
-            after_tax  = net_pnl - tax
-            pct        = gross_pnl / entry_val * 100.0
-            mins       = float(trade.duration_minutes or 0)
-            held_str   = (f"{int(mins // 60)}h {int(mins % 60)}m"
-                         if mins >= 60 else f"{int(mins)}m")
-
-            sign = "+" if net_pnl >= 0 else ""
-            lines += [
-                f"  Exit:    {xp:.4f}  @  {xdt}",
-                f"  Held:    {held_str}",
-                f"  Gross:   {sign}${gross_pnl:,.4f}  ({sign}{pct:.2f}%)",
-                f"  Fees:    -${total_fees:.4f}  (2 × 0.1%)",
-                f"  Tax:     -${tax:.4f}  (UK CGT 20%)",
-                f"  Net:     {sign}${after_tax:,.4f}",
-            ]
+                lines.append("  Status:  CLOSED")
         else:
             lines.append("  Status:  OPEN")
 

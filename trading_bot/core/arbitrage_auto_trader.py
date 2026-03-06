@@ -289,7 +289,8 @@ class ArbitrageAutoTrader:
         net_pnl = gross_pnl - total_fees
 
         # Record result to detector for ML weight update
-        pair = (buy_sym, sell_sym)
+        # Always use normalised (alphabetical) pair key so it matches _pair_stats
+        pair = (min(buy_sym, sell_sym), max(buy_sym, sell_sym))
         if self._det:
             try:
                 self._det.record_result(pair, net_pnl)
@@ -370,8 +371,8 @@ class ArbitrageAutoTrader:
             return None
         buy_sym  = position["buy_symbol"]
         sell_sym = position["sell_symbol"]
-        buf_a = np.array(self._det._price_buf.get(buy_sym,  []), dtype=float)
-        buf_b = np.array(self._det._price_buf.get(sell_sym, []), dtype=float)
+        buf_a = np.array(self._det.get_price_buffer(buy_sym),  dtype=float)
+        buf_b = np.array(self._det.get_price_buffer(sell_sym), dtype=float)
         if len(buf_a) < 5 or len(buf_b) < 5:
             return None
         # Recompute spread z-score using log prices
@@ -385,9 +386,9 @@ class ArbitrageAutoTrader:
 
     def _get_price(self, symbol: str) -> Optional[float]:
         if self._det:
-            buf = self._det._price_buf.get(symbol, [])
-            if buf:
-                return float(buf[-1])
+            price = self._det.get_latest_price(symbol)
+            if price is not None:
+                return price
         if self._engine:
             try:
                 ticker = self._engine._client.get_symbol_ticker(symbol=symbol)
