@@ -143,7 +143,6 @@ class AutoTrader:
         self._pending_recommendation = None   # ScanSummary recommendation
         self._cycle_num  = 0
         self._cycle_results: list[CycleResult] = []
-        self._cooldown_until: float = 0.0
         self._last_scan_time: float = 0.0
 
         self._state_callbacks:  list[Callable] = []

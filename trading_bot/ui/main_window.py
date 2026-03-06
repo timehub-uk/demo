@@ -926,6 +926,31 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
 
+            # Start MarketPulse broad watcher and wire to AlertManager
+            try:
+                from ml.market_pulse import MarketPulse
+                from db.redis_client import RedisClient
+                self._market_pulse = MarketPulse(
+                    redis_client=RedisClient(),
+                    binance_client=getattr(self._engine, "_client", None),
+                )
+                self._market_pulse.on_alert(self._alert_mgr.on_pulse_alert)
+                self._market_pulse.start()
+            except Exception:
+                self._market_pulse = None
+
+            # Wire new-token watcher → AlertManager
+            if self._new_token_watcher:
+                try:
+                    self._new_token_watcher.on_launch(
+                        lambda sym, profile: self._alert_mgr.on_new_token(
+                            sym,
+                            price=getattr(profile, "launch_price", 0.0),
+                        )
+                    )
+                except Exception:
+                    pass
+
             # Build AutoTrader widget (pass chart widget if trading page has one)
             chart_ref = None
             try:

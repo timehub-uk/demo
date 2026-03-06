@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.styles import (
-    ACCENT, GREEN, RED, YELLOW, BG2, BG3, BG4, BORDER, FG0, FG1, FG2, PURPLE,
+    ACCENT, GREEN, RED, YELLOW, BG2, BG3, BG4, BORDER, FG0, FG1, FG2,
 )
 
 # ── State colour map ───────────────────────────────────────────────────────────
