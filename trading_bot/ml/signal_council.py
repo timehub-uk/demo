@@ -354,23 +354,27 @@ class SignalCouncil:
         if not correct_sources and not wrong_sources:
             return
         regime_key = regime or "UNKNOWN"
-        with self._lock:
-            mults = self._regime_weights.setdefault(regime_key, {})
-            for src in correct_sources:
-                old = mults.get(src, 1.0)
-                mults[src] = min(COUNCIL_W_MAX, old * (1 + COUNCIL_LR))
-            for src in wrong_sources:
-                old = mults.get(src, 1.0)
-                mults[src] = max(COUNCIL_W_MIN, old * (1 - COUNCIL_LR))
-            self._save_council_weights()
+        try:
+            with self._lock:
+                mults = self._regime_weights.setdefault(regime_key, {})
+                for src in correct_sources:
+                    old = mults.get(src, 1.0)
+                    mults[src] = min(COUNCIL_W_MAX, old * (1 + COUNCIL_LR))
+                for src in wrong_sources:
+                    old = mults.get(src, 1.0)
+                    mults[src] = max(COUNCIL_W_MIN, old * (1 - COUNCIL_LR))
+                self._save_council_weights()
 
-        self._intel.ml("SignalCouncil",
-            f"⚖️  Per-regime weights updated [{regime_key}] "
-            f"correct={correct_sources} wrong={wrong_sources} "
-            + " ".join(
-                f"{s}={self._regime_weights.get(regime_key, {}).get(s, 1.0):.2f}"
-                for s in correct_sources + wrong_sources
-            ))
+            self._intel.ml("SignalCouncil",
+                f"⚖️  Per-regime weights updated [{regime_key}] "
+                f"correct={correct_sources} wrong={wrong_sources} "
+                + " ".join(
+                    f"{s}={self._regime_weights.get(regime_key, {}).get(s, 1.0):.2f}"
+                    for s in correct_sources + wrong_sources
+                ))
+        except Exception as exc:
+            self._intel.error("SignalCouncil",
+                f"Failed to update per-regime weights [{regime_key}]: {exc}")
 
     # ── Weight persistence ─────────────────────────────────────────────
 

@@ -197,9 +197,13 @@ class TradeJournal:
             self._dynamic_risk.record_outcome(win, entry.pnl)
         # Feed per-regime source attribution back to signal council
         if self._signal_council:
-            self._signal_council.record_outcome(
-                entry.regime, entry.correct_sources, entry.wrong_sources
-            )
+            try:
+                self._signal_council.record_outcome(
+                    entry.regime, entry.correct_sources, entry.wrong_sources
+                )
+            except Exception as exc:
+                self._intel.error("TradeJournal",
+                    f"Council weight update failed for {entry.symbol}: {exc}")
 
         with self._lock:
             self._db_update(entry)

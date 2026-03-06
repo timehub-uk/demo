@@ -616,6 +616,88 @@ class TradingPage(QWidget):
 # STATUS BAR
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TOAST NOTIFICATION OVERLAY
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ToastOverlay(QWidget):
+    """
+    Transient floating notification that auto-dismisses after 4 seconds.
+    Appears in the bottom-right corner of the parent window.
+    Safe to call from background threads via show_toast().
+    """
+
+    _show_requested = pyqtSignal(str, str)   # message, level
+
+    _LEVEL_STYLE: dict[str, tuple[str, str]] = {
+        # level → (border colour, icon)
+        "ERROR":    (RED,    "🔴"),
+        "WARNING":  (YELLOW, "🟡"),
+        "SUCCESS":  (GREEN,  "🟢"),
+        "INFO":     (ACCENT, "ℹ️"),
+    }
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setWindowFlags(Qt.WindowType.SubWindow)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(4)
+
+        self._icon_lbl = QLabel()
+        self._icon_lbl.setStyleSheet(f"font-size:14px;")
+
+        self._msg_lbl = QLabel()
+        self._msg_lbl.setWordWrap(True)
+        self._msg_lbl.setStyleSheet(f"color:{FG0}; font-size:12px;")
+        self._msg_lbl.setMaximumWidth(340)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(self._icon_lbl)
+        row.addWidget(self._msg_lbl, 1)
+        layout.addLayout(row)
+
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(4000)
+        self._timer.timeout.connect(self.hide)
+
+        self._show_requested.connect(self._on_show)
+        self.hide()
+
+    def show_toast(self, message: str, level: str = "ERROR") -> None:
+        """Thread-safe: can be called from any thread."""
+        self._show_requested.emit(message[:160], level)
+
+    def _on_show(self, message: str, level: str) -> None:
+        border, icon = self._LEVEL_STYLE.get(level, (ACCENT, "ℹ️"))
+        self._icon_lbl.setText(icon)
+        self._msg_lbl.setText(message)
+        self.setStyleSheet(
+            f"ToastOverlay {{ background:{BG3}; border:1px solid {border}; "
+            f"border-radius:6px; }}"
+        )
+        self.adjustSize()
+        self._reposition()
+        self.show()
+        self.raise_()
+        self._timer.start()
+
+    def _reposition(self) -> None:
+        p = self.parent()
+        if p:
+            pw, ph = p.width(), p.height()
+            w, h = self.sizeHint().width(), self.sizeHint().height()
+            self.setGeometry(pw - w - 16, ph - h - 40, w, h)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._reposition()
+
+
 class TradingStatusBar(QStatusBar):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -689,6 +771,8 @@ class TradingStatusBar(QStatusBar):
 class MainWindow(QMainWindow):
     """BinanceML Pro – Futuristic AI Trading Desk."""
 
+    _toast_signal = pyqtSignal(str, str)   # message, level – cross-thread safe
+
     def __init__(
         self,
         engine=None,
@@ -756,6 +840,10 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._start_timers()
 
+        # Wire toast to intel logger (ERROR + WARNING entries from any thread)
+        self._toast_signal.connect(self._toast.show_toast)
+        self._intel.subscribe(self._on_intel_for_toast)
+
         self.nav.set_active(0)
         self._intel.system("MainWindow", "BinanceML Pro trading desk ready.")
 
@@ -800,6 +888,9 @@ class MainWindow(QMainWindow):
         self._build_connections_page()  # 4
         self._build_settings_page()     # 5
         self._build_help_page()         # 6
+
+        # Toast notification overlay (floats over the window)
+        self._toast = ToastOverlay(central)
 
         # Intel Log dock
         from ui.intel_log_widget import IntelLogWidget
@@ -991,6 +1082,16 @@ class MainWindow(QMainWindow):
     # ──────────────────────────────────────────────────────────────────
     # Signal connections
     # ──────────────────────────────────────────────────────────────────
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_toast"):
+            self._toast._reposition()
+
+    def _on_intel_for_toast(self, entry) -> None:
+        """Called by IntelLogger from any thread; only surfaces ERROR/WARNING as toasts."""
+        if entry.level in ("ERROR", "WARNING"):
+            self._toast_signal.emit(entry.message[:160], entry.level)
 
     def _connect_signals(self) -> None:
         if self._engine:
