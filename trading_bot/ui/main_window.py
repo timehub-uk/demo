@@ -1474,6 +1474,7 @@ class MainWindow(QMainWindow):
         )
         if reply == QMessageBox.StandardButton.Yes:
             for svc in (self._auto_trader, self._market_scanner,
+                        getattr(self, "_market_pulse", None),
                         self._engine, self._predictor, self._cl):
                 try:
                     if svc:
