@@ -255,7 +255,7 @@ class RiskDashboard(QWidget):
     def _refresh_circuit(self) -> None:
         if self._drm:
             broken = self._drm.circuit_broken
-            reason = self._drm._circuit_reason if broken else ""
+            reason = self._drm.circuit_reason if broken else ""
             if broken:
                 self.circuit_banner.setText(f"⛔  CIRCUIT BREAKER ACTIVE  |  {reason}")
                 self.circuit_banner.setStyleSheet(
@@ -271,7 +271,7 @@ class RiskDashboard(QWidget):
         if not self._regime:
             return
         snap = self._regime.current
-        regime = snap.regime.value if hasattr(snap.regime, "value") else str(snap.regime)
+        regime = snap.regime.value
         colour = {
             "TRENDING_UP": GREEN, "TRENDING_DOWN": RED,
             "RANGING": YELLOW, "VOLATILE": ORANGE, "UNKNOWN": FG2,

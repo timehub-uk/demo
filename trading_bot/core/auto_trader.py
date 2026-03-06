@@ -147,6 +147,12 @@ class AutoTrader:
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
 
+    # ── Properties ─────────────────────────────────────────────────────
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
     # ── Configuration ──────────────────────────────────────────────────
 
     def set_mode(self, mode: AutoTraderMode) -> None:
@@ -265,7 +271,7 @@ class AutoTrader:
         # Check circuit breaker
         if self._drm and self._drm.circuit_broken:
             self._intel.ml("AutoTrader",
-                f"⛔ Circuit breaker active: {self._drm.status['circuit_reason']} – waiting…")
+                f"⛔ Circuit breaker active: {self._drm.circuit_reason} – waiting…")
             self._set_state(CycleState.IDLE)
             time.sleep(60)
             return

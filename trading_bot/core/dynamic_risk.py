@@ -150,6 +150,10 @@ class DynamicRiskManager:
         return self._circuit_broken or time.time() < self._pause_until
 
     @property
+    def circuit_reason(self) -> str:
+        return self._circuit_reason
+
+    @property
     def status(self) -> dict:
         rolling_wr = self._rolling_win_rate()
         dd = self._current_drawdown()

@@ -495,7 +495,7 @@ class TradingEngine:
             regime_str = ""
             if self._regime_detector:
                 snap = self._regime_detector.current
-                regime_str = snap.regime.value if hasattr(snap.regime, "value") else str(snap.regime)
+                regime_str = snap.regime.value
 
             council = self._signal_council.deliberate(sources, symbol=symbol, regime=regime_str)
             signal["_council"] = council
