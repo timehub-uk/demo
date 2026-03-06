@@ -1,91 +1,693 @@
 """
-Main application window – the primary UI container.
+BinanceML Pro – Futuristic Trading Desk Main Window
 
 Layout:
-  ┌─────────────────────────────────────────────────────────────┐
-  │  Menu Bar                                                   │
-  ├─────────────────────────────────────────────────────────────┤
-  │  Status Bar (ticker strip – live prices)                    │
-  ├────────────────────────────────────────────────────────────-┤
-  │ ┌─────────────────────────────┐ ┌────────────────────────┐  │
-  │ │  Chart Widget               │ │  Order Book (L1/L2)    │  │
-  │ │                             │ │                        │  │
-  │ ├─────────────────────────────┤ ├────────────────────────┤  │
-  │ │  Trading Panel              │ │  ML Signals / Training │  │
-  │ └─────────────────────────────┘ └────────────────────────┘  │
-  ├─────────────────────────────────────────────────────────────┤
-  │  Intel Log (bottom, collapsible)                            │
-  └─────────────────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  HEADER BAR:  [Logo] [Brand] [Ticker Strip]  [Health dots] [Time]  │
+  ├──────┬──────────────────────────────────────────────────────────────┤
+  │      │                                                               │
+  │ NAV  │              STACKED CONTENT PANELS                          │
+  │ SIDE │  0: Trading  1: AutoTrader  2: ML  3: Risk                   │
+  │ BAR  │  4: Connections  5: Settings  6: Help                        │
+  │      │                                                               │
+  │      ├──────────────────────────────────────────────────────────────┤
+  │      │  INTEL LOG dock (collapsible)                                 │
+  └──────┴──────────────────────────────────────────────────────────────┘
+  STATUS BAR: Mode | AT State | Trades | P&L | API | DB | Redis | CPU
+
+Nav icons:  hover 5 s → tooltip    hover 10 s → contextual help popup
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from decimal import Decimal
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
-from PyQt6.QtGui import QAction, QFont, QIcon, QKeySequence
+from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal
+from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QTabWidget, QLabel, QStatusBar, QToolBar, QMenuBar, QMenu,
-    QFrame, QPushButton, QComboBox, QSizePolicy, QMessageBox,
-    QDockWidget,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QFrame, QSplitter, QSizePolicy, QStackedWidget,
+    QDockWidget, QMessageBox, QComboBox, QStatusBar, QMenu,
+    QTabWidget, QInputDialog,
 )
 
 from config import get_settings
-from utils.logger import get_intel_logger, setup_logger
-from ui.styles import ACCENT, GREEN, RED, YELLOW, BG0, BG1, BG2, BG3, BG4, BORDER, FG0, FG1, FG2
-from ui.chart_widget import ChartWidget
-from ui.orderbook_widget import OrderBookWidget
-from ui.trading_panel import TradingPanel
-from ui.ml_training_widget import MLTrainingWidget
-from ui.intel_log_widget import IntelLogWidget
+from utils.logger import get_intel_logger
+from ui.styles import (
+    ACCENT, ACCENT2, GREEN, RED, YELLOW, PURPLE,
+    BG0, BG1, BG2, BG3, BG4, BG5, BORDER, BORDER2, FG0, FG1, FG2, GLOW,
+)
+from ui.icons import svg_icon, svg_pixmap
 
 
-# ── Ticker strip widget ───────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# PANEL HELP TEXT  (shown after 10-second hover)
+# ══════════════════════════════════════════════════════════════════════════════
 
-class TickerStrip(QWidget):
-    """Scrolling ticker with live price updates."""
+_PANEL_HELP: dict[int, tuple[str, str]] = {
+    0: ("Trading Panel",
+        "Manual order entry, active orders, trade history, portfolio and P&L.\n\n"
+        "• Multi-tab charts: open any USDT pair in its own tab\n"
+        "• Overlay selector: EMA/SMA/Bollinger/RSI/MACD and more\n"
+        "• Order entry: LIMIT / MARKET / STOP / OCO with SL+TP\n"
+        "• Active Orders table with one-click cancel\n"
+        "• Portfolio tab shows free/locked balances in USD/GBP"),
+    1: ("AutoTrader",
+        "Fully autonomous scan → aim → enter → monitor → exit cycle.\n\n"
+        "• SEMI_AUTO: recommendation shown, press Take Aim to fire\n"
+        "• FULL_AUTO: executes automatically when confidence ≥ threshold\n"
+        "• Top-5 Profit and Top-5 R:R tables from market scan\n"
+        "• Active Trade panel with live P&L vs SL/TP levels\n"
+        "• Cooldown 15 min after stop-loss, circuit breaker guard"),
+    2: ("ML Training",
+        "LSTM + Transformer model training and live signal feed.\n\n"
+        "• Start/Stop 48-hour full training session\n"
+        "• Continuous Learner retrains every 24 hours automatically\n"
+        "• Per-token models trained for each USDT pair\n"
+        "• Live signal stream with confidence scores\n"
+        "• Whale detection and sentiment analysis feeds"),
+    3: ("Risk Dashboard",
+        "Dynamic risk and portfolio analytics.\n\n"
+        "• Circuit breaker: fires at −5% daily drawdown\n"
+        "• Kelly-based position sizing adapts to win rate\n"
+        "• Regime detector: Bull / Bear / Ranging / Volatile\n"
+        "• Monte Carlo projection of future portfolio paths\n"
+        "• Walk-forward validation of ML model performance"),
+    4: ("Connections",
+        "Live health monitoring for all external services.\n\n"
+        "• Binance REST API + WebSocket stream\n"
+        "• PostgreSQL with connection latency\n"
+        "• Redis cache ping latency\n"
+        "• Telegram bot and REST API server\n"
+        "• Auto-checks every 30 s, manual Check All button"),
+    5: ("Settings",
+        "Full system configuration.\n\n"
+        "• Binance API keys, testnet toggle\n"
+        "• ML hyperparameters: LSTM layers, learning rate, etc.\n"
+        "• Trading risk limits and execution mode\n"
+        "• UK CGT tax settings and email reports\n"
+        "• UI theme, font size, accent colour"),
+    6: ("Help",
+        "Documentation and keyboard shortcuts.\n\n"
+        "• Complete keyboard shortcut reference table\n"
+        "• Architecture overview and data flow\n"
+        "• Risk management rules and defaults\n"
+        "• UK HMRC CGT tax reporting documentation\n"
+        "• About BinanceML Pro"),
+}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NAV BUTTON
+# ══════════════════════════════════════════════════════════════════════════════
+
+class NavButton(QPushButton):
+    """
+    Sidebar navigation button.
+    • Mouse enter + 5 s  → QToolTip with panel title
+    • Mouse enter + 10 s → contextual help QMessageBox
+    • Mouse leave        → cancel both timers
+    """
+
+    clicked_index = pyqtSignal(int)
+
+    def __init__(self, index: int, icon_name: str, label: str, parent=None) -> None:
+        super().__init__(parent)
+        self._index     = index
+        self._icon_name = icon_name
+        self._label     = label
+
+        self.setObjectName("nav_btn")
+        self.setFixedSize(64, 64)
+        self.setText(label)
+        self._set_icon(FG2)
+
+        # 5-second tooltip timer
+        self._tip_timer = QTimer(self)
+        self._tip_timer.setSingleShot(True)
+        self._tip_timer.setInterval(5000)
+        self._tip_timer.timeout.connect(self._show_tooltip)
+
+        # 10-second popup timer
+        self._pop_timer = QTimer(self)
+        self._pop_timer.setSingleShot(True)
+        self._pop_timer.setInterval(10000)
+        self._pop_timer.timeout.connect(self._show_popup)
+
+        self.clicked.connect(lambda: self.clicked_index.emit(self._index))
+
+    def _set_icon(self, color: str) -> None:
+        self.setIcon(svg_icon(self._icon_name, color, 22))
+        self.setIconSize(QSize(22, 22))
+
+    def set_active(self, active: bool) -> None:
+        self._set_icon(ACCENT if active else FG2)
+        self.setProperty("active", "true" if active else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def enterEvent(self, event) -> None:
+        self._set_icon(FG1)
+        self._tip_timer.start()
+        self._pop_timer.start()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._set_icon(FG2)
+        self._tip_timer.stop()
+        self._pop_timer.stop()
+        super().leaveEvent(event)
+
+    def _show_tooltip(self) -> None:
+        from PyQt6.QtWidgets import QToolTip
+        title, _ = _PANEL_HELP.get(self._index, (self._label, ""))
+        pos = self.mapToGlobal(QPoint(self.width() + 8, self.height() // 2))
+        QToolTip.showText(pos, f"<b>{title}</b>", self)
+
+    def _show_popup(self) -> None:
+        title, body = _PANEL_HELP.get(self._index, (self._label, ""))
+        dlg = QMessageBox(self.window())
+        dlg.setWindowTitle(f"Help – {title}")
+        dlg.setIcon(QMessageBox.Icon.Information)
+        dlg.setText(f"<b style='color:{ACCENT};font-size:14px;'>{title}</b>")
+        dlg.setInformativeText(body.replace("\n", "<br>"))
+        dlg.setStyleSheet(f"QMessageBox {{ background:{BG3}; }} QLabel {{ color:{FG0}; }}")
+        dlg.exec()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HEADER BAR
+# ══════════════════════════════════════════════════════════════════════════════
+
+class HeaderBar(QFrame):
+    """Logo | Brand | Ticker strip | Health dots | Clock."""
+
+    symbol_changed = pyqtSignal(str)
 
     def __init__(self, symbols: list[str], parent=None) -> None:
         super().__init__(parent)
-        self.setFixedHeight(32)
-        self.setStyleSheet(f"background:{BG0}; border-bottom:1px solid {BORDER};")
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 0, 10, 0)
-        layout.setSpacing(20)
-        self._labels: dict[str, QLabel] = {}
-        for sym in symbols:
-            lbl = QLabel(f"{sym}  —")
-            lbl.setStyleSheet(f"font-size:11px; color:{FG1}; font-family:monospace;")
-            layout.addWidget(lbl)
-            self._labels[sym] = lbl
-        layout.addStretch()
-        self._timer = QTimer()
-        self._timer.timeout.connect(self._refresh)
-        self._timer.start(2000)
+        self._symbols = symbols
+        self.setFixedHeight(46)
+        self.setStyleSheet(
+            f"HeaderBar {{ background:{BG0}; border-bottom:1px solid {BORDER2}; }}"
+        )
 
-    def _refresh(self) -> None:
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 0, 12, 0)
+        layout.setSpacing(0)
+
+        # Logo
+        logo = QLabel()
+        logo.setPixmap(svg_pixmap("logo", ACCENT, 28))
+        layout.addWidget(logo)
+
+        # Brand
+        brand = QLabel(
+            f"  BINANCEML <span style='color:{ACCENT2};'>PRO</span>"
+        )
+        brand.setTextFormat(Qt.TextFormat.RichText)
+        brand.setStyleSheet(
+            f"color:{FG0}; font-size:14px; font-weight:700; letter-spacing:3px;"
+        )
+        layout.addWidget(brand)
+
+        layout.addWidget(_vsep())
+
+        # Ticker labels
+        self._tick_labels: dict[str, QLabel] = {}
+        for sym in symbols:
+            lbl = QLabel(f"{sym.replace('USDT','')}  —")
+            lbl.setStyleSheet(
+                f"color:{FG1}; font-size:11px; padding:0 10px; font-family:monospace;"
+            )
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            sym_copy = sym
+            lbl.mousePressEvent = lambda _e, s=sym_copy: self.symbol_changed.emit(s)
+            layout.addWidget(lbl)
+            self._tick_labels[sym] = lbl
+
+        layout.addStretch()
+        layout.addWidget(_vsep())
+
+        # Health dots
+        self.health_dots: dict[str, QLabel] = {}
+        for svc, tip in [("api","Binance API"),("db","PostgreSQL"),
+                         ("redis","Redis"),("tg","Telegram")]:
+            dot = QLabel("●")
+            dot.setStyleSheet(f"color:{FG2}; font-size:14px; padding:0 4px;")
+            dot.setToolTip(tip)
+            layout.addWidget(dot)
+            self.health_dots[svc] = dot
+
+        layout.addWidget(_vsep())
+
+        # Clock
+        self.clock_lbl = QLabel("--:--:--")
+        self.clock_lbl.setStyleSheet(
+            f"color:{ACCENT}; font-size:13px; font-weight:700; "
+            f"font-family:monospace; padding:0 14px; letter-spacing:1px;"
+        )
+        layout.addWidget(self.clock_lbl)
+
+        QTimer(self, interval=2000, timeout=self._refresh_tickers).start()
+        QTimer(self, interval=1000, timeout=self._update_clock).start()
+
+    def _refresh_tickers(self) -> None:
         try:
             from db.redis_client import RedisClient
             rc = RedisClient()
-            for sym, lbl in self._labels.items():
-                data = rc.get_ticker(sym)
-                if data:
-                    price = float(data.get("price", 0))
-                    chg = float(data.get("change_pct", 0))
-                    colour = GREEN if chg >= 0 else RED
-                    sign = "+" if chg >= 0 else ""
-                    lbl.setText(f"{sym}  {price:,.4f}  <span style='color:{colour};'>{sign}{chg:.2f}%</span>")
+            for sym, lbl in self._tick_labels.items():
+                d = rc.get_ticker(sym)
+                if d:
+                    price = float(d.get("price", 0))
+                    chg   = float(d.get("change_pct", 0))
+                    col   = GREEN if chg >= 0 else RED
+                    sign  = "+" if chg >= 0 else ""
+                    short = sym.replace("USDT", "")
+                    lbl.setText(
+                        f"{short}  "
+                        f"<b style='color:{FG0};'>{price:,.4f}</b>"
+                        f"  <span style='color:{col};'>{sign}{chg:.2f}%</span>"
+                    )
         except Exception:
             pass
 
+    def _update_clock(self) -> None:
+        self.clock_lbl.setText(time.strftime("%H:%M:%S"))
 
-# ── Main window ───────────────────────────────────────────────────────────────
+    def set_health(self, svc: str, ok: bool) -> None:
+        dot = self.health_dots.get(svc)
+        if dot:
+            dot.setStyleSheet(
+                f"color:{GREEN if ok else RED}; font-size:14px; padding:0 4px;"
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NAV SIDEBAR
+# ══════════════════════════════════════════════════════════════════════════════
+
+_NAV_ITEMS = [
+    (0, "trading",     "TRADE"),
+    (1, "autotrader",  "AUTO"),
+    (2, "ml",          "ML"),
+    (3, "risk",        "RISK"),
+    (4, "connections", "NET"),
+    (5, "settings",    "CFG"),
+    (6, "help",        "HELP"),
+]
+
+
+class NavSidebar(QFrame):
+    page_requested = pyqtSignal(int)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setFixedWidth(64)
+        self.setStyleSheet(
+            f"NavSidebar {{ background:{BG0}; border-right:1px solid {BORDER}; }}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 8, 0, 8)
+        layout.setSpacing(2)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self._buttons: list[NavButton] = []
+        for idx, icon, label in _NAV_ITEMS:
+            btn = NavButton(idx, icon, label)
+            btn.clicked_index.connect(self._on_nav)
+            layout.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
+            self._buttons.append(btn)
+
+        layout.addStretch()
+
+    def _on_nav(self, index: int) -> None:
+        for btn in self._buttons:
+            btn.set_active(btn._index == index)
+        self.page_requested.emit(index)
+
+    def set_active(self, index: int) -> None:
+        self._on_nav(index)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MULTI-CHART PANEL  (tabbed, multi-pair, overlay selector)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class MultiChartPanel(QWidget):
+    """
+    Tabbed chart panel.
+    • Each tab = one symbol's ChartWidget
+    • Overlay pulldown menu to select/deselect indicators
+    • Ctrl++ to add tab, Ctrl+W to close current, tabs are movable
+    """
+
+    symbol_changed = pyqtSignal(str)
+
+    _OVERLAYS = [
+        "EMA 9", "EMA 20", "EMA 50", "EMA 200",
+        "SMA 20", "SMA 50", "SMA 200",
+        "Bollinger Bands", "VWAP",
+        "Volume Profile", "RSI", "MACD",
+        "ATR", "Stochastic", "Ichimoku Cloud",
+    ]
+
+    def __init__(self, default_symbols: list[str], parent=None) -> None:
+        super().__init__(parent)
+        self._default_symbols = default_symbols
+        self._chart_widgets: dict[str, QWidget] = {}
+        self._active_overlays: set[str] = {"EMA 20", "EMA 50", "Volume Profile"}
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # ── Toolbar row ───────────────────────────────────────────────
+        ctrl = QFrame()
+        ctrl.setFixedHeight(36)
+        ctrl.setStyleSheet(
+            f"background:{BG0}; border-bottom:1px solid {BORDER};"
+        )
+        ctl = QHBoxLayout(ctrl)
+        ctl.setContentsMargins(8, 0, 8, 0)
+        ctl.setSpacing(8)
+
+        # Interval
+        ctl.addWidget(QLabel("Interval:"))
+        self.interval_combo = QComboBox()
+        self.interval_combo.setFixedWidth(70)
+        for iv in ["1m","3m","5m","15m","30m","1h","4h","1d","1w"]:
+            self.interval_combo.addItem(iv)
+        self.interval_combo.setCurrentText("1h")
+        self.interval_combo.currentTextChanged.connect(self._on_interval_changed)
+        ctl.addWidget(self.interval_combo)
+
+        ctl.addWidget(_vsep())
+
+        # Overlay pulldown
+        ctl.addWidget(QLabel("Overlays:"))
+        self.overlay_btn = QPushButton("EMA20, EMA50, Volume ▾")
+        self.overlay_btn.setFixedWidth(180)
+        self.overlay_btn.setFixedHeight(26)
+        self.overlay_btn.setStyleSheet(f"""
+            QPushButton {{
+                background:{BG4}; color:{FG1}; border:1px solid {BORDER2};
+                border-radius:4px; font-size:11px; padding:0 8px; text-align:left;
+            }}
+            QPushButton:hover {{ color:{ACCENT}; border-color:{ACCENT}; }}
+        """)
+        self.overlay_btn.clicked.connect(self._show_overlay_menu)
+        ctl.addWidget(self.overlay_btn)
+
+        ctl.addWidget(_vsep())
+
+        # Add tab button
+        add_btn = QPushButton()
+        add_btn.setIcon(svg_icon("scan", ACCENT, 13))
+        add_btn.setIconSize(QSize(13, 13))
+        add_btn.setFixedSize(28, 28)
+        add_btn.setToolTip("Add chart tab  (Ctrl++)")
+        add_btn.setStyleSheet(
+            f"background:{BG4}; border:1px solid {BORDER}; border-radius:4px;"
+        )
+        add_btn.clicked.connect(self._prompt_add_tab)
+        ctl.addWidget(add_btn)
+
+        ctl.addStretch()
+
+        # Current symbol label
+        self.sym_lbl = QLabel("BTCUSDT")
+        self.sym_lbl.setStyleSheet(
+            f"color:{ACCENT}; font-weight:700; font-size:13px; "
+            f"font-family:monospace; padding-right:8px;"
+        )
+        ctl.addWidget(self.sym_lbl)
+
+        layout.addWidget(ctrl)
+
+        # ── Chart tabs ────────────────────────────────────────────────
+        self.chart_tabs = QTabWidget()
+        self.chart_tabs.setTabsClosable(True)
+        self.chart_tabs.setMovable(True)
+        self.chart_tabs.tabCloseRequested.connect(self._close_tab)
+        self.chart_tabs.currentChanged.connect(self._on_tab_changed)
+        layout.addWidget(self.chart_tabs, 1)
+
+        # Load first 4 default symbols
+        for sym in self._default_symbols[:4]:
+            self._add_chart_tab(sym)
+
+    def _add_chart_tab(self, symbol: str) -> None:
+        # Switch to existing tab if already open
+        for i in range(self.chart_tabs.count()):
+            if self.chart_tabs.tabText(i) == symbol:
+                self.chart_tabs.setCurrentIndex(i)
+                return
+
+        try:
+            from ui.chart_widget import ChartWidget
+            cw = ChartWidget()
+            cw.set_symbol(symbol)
+            if hasattr(cw, "set_overlays"):
+                cw.set_overlays(list(self._active_overlays))
+        except Exception:
+            cw = QLabel(f"\n\n  {symbol}  chart\n")
+            cw.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cw.setStyleSheet(f"color:{FG2}; font-size:18px;")
+
+        self._chart_widgets[symbol] = cw
+        idx = self.chart_tabs.addTab(cw, symbol)
+        self.chart_tabs.setCurrentIndex(idx)
+
+    def _prompt_add_tab(self) -> None:
+        sym, ok = QInputDialog.getText(
+            self, "Add Chart", "Symbol (e.g. ETHUSDT):"
+        )
+        if ok and sym.strip():
+            self._add_chart_tab(sym.strip().upper())
+
+    def _close_tab(self, index: int) -> None:
+        if self.chart_tabs.count() <= 1:
+            return
+        sym = self.chart_tabs.tabText(index)
+        self._chart_widgets.pop(sym, None)
+        self.chart_tabs.removeTab(index)
+
+    def _on_tab_changed(self, index: int) -> None:
+        if index < 0:
+            return
+        sym = self.chart_tabs.tabText(index)
+        self.sym_lbl.setText(sym)
+        self.symbol_changed.emit(sym)
+
+    def _on_interval_changed(self, interval: str) -> None:
+        for cw in self._chart_widgets.values():
+            if hasattr(cw, "set_interval"):
+                cw.set_interval(interval)
+
+    def _show_overlay_menu(self) -> None:
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background:{BG3}; border:1px solid {BORDER2};
+                border-radius:8px; padding:6px;
+            }}
+            QMenu::item {{
+                padding:6px 20px; border-radius:4px; margin:1px;
+                font-size:11px; color:{FG0};
+            }}
+            QMenu::item:selected {{ background:{GLOW}; color:{ACCENT}; }}
+        """)
+        for overlay in self._OVERLAYS:
+            act = menu.addAction(overlay)
+            act.setCheckable(True)
+            act.setChecked(overlay in self._active_overlays)
+            act.triggered.connect(
+                lambda checked, o=overlay: self._toggle_overlay(o, checked)
+            )
+        menu.addSeparator()
+        menu.addAction("Clear All").triggered.connect(self._clear_overlays)
+
+        menu.exec(self.overlay_btn.mapToGlobal(
+            QPoint(0, self.overlay_btn.height())
+        ))
+        self._update_overlay_label()
+
+    def _toggle_overlay(self, overlay: str, checked: bool) -> None:
+        if checked:
+            self._active_overlays.add(overlay)
+        else:
+            self._active_overlays.discard(overlay)
+        self._push_overlays()
+
+    def _clear_overlays(self) -> None:
+        self._active_overlays.clear()
+        self._push_overlays()
+        self._update_overlay_label()
+
+    def _push_overlays(self) -> None:
+        for cw in self._chart_widgets.values():
+            if hasattr(cw, "set_overlays"):
+                cw.set_overlays(list(self._active_overlays))
+
+    def _update_overlay_label(self) -> None:
+        n = len(self._active_overlays)
+        if n == 0:
+            self.overlay_btn.setText("No Overlays ▾")
+        elif n <= 2:
+            self.overlay_btn.setText(", ".join(sorted(self._active_overlays)) + " ▾")
+        else:
+            self.overlay_btn.setText(f"{n} Overlays Active ▾")
+
+    def current_symbol(self) -> str:
+        idx = self.chart_tabs.currentIndex()
+        if idx >= 0:
+            return self.chart_tabs.tabText(idx)
+        return self._default_symbols[0] if self._default_symbols else "BTCUSDT"
+
+    def set_symbol(self, symbol: str) -> None:
+        self._add_chart_tab(symbol)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TRADING PAGE
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TradingPage(QWidget):
+    order_submitted  = pyqtSignal(dict)
+    cancel_requested = pyqtSignal(str, str)
+    symbol_changed   = pyqtSignal(str)
+
+    def __init__(self, default_symbols: list[str], parent=None) -> None:
+        super().__init__(parent)
+        self._default_symbols = default_symbols
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        outer = QSplitter(Qt.Orientation.Horizontal)
+
+        # Left: multi-chart
+        self.chart_panel = MultiChartPanel(self._default_symbols)
+        self.chart_panel.symbol_changed.connect(self.symbol_changed)
+        outer.addWidget(self.chart_panel)
+
+        # Right: order book + trading panel
+        right_split = QSplitter(Qt.Orientation.Vertical)
+
+        from ui.orderbook_widget import OrderBookWidget
+        self.orderbook = OrderBookWidget(self._default_symbols[0])
+        right_split.addWidget(self.orderbook)
+
+        from ui.trading_panel import TradingPanel
+        self.trading_panel = TradingPanel()
+        self.trading_panel.order_submitted.connect(self.order_submitted)
+        self.trading_panel.cancel_requested.connect(self.cancel_requested)
+        right_split.addWidget(self.trading_panel)
+        right_split.setSizes([300, 420])
+
+        outer.addWidget(right_split)
+        outer.setSizes([1000, 420])
+        layout.addWidget(outer)
+
+        self.symbol_changed.connect(self.orderbook.set_symbol)
+
+    def update_pnl(self, metrics: dict) -> None:
+        self.trading_panel.update_pnl(metrics)
+
+    def update_active_orders(self, orders: list) -> None:
+        self.trading_panel.update_active_orders(orders)
+
+    def set_current_price(self, price: float) -> None:
+        self.trading_panel.set_current_price(price)
+
+    def current_symbol(self) -> str:
+        return self.chart_panel.current_symbol()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STATUS BAR
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TradingStatusBar(QStatusBar):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setFixedHeight(26)
+
+        def lbl(text: str, col: str = FG2) -> QLabel:
+            l = QLabel(text)
+            l.setStyleSheet(
+                f"color:{col}; font-size:10px; padding:0 8px; font-family:monospace;"
+            )
+            return l
+
+        self.mode_lbl     = lbl("MODE: MANUAL", YELLOW)
+        self.at_lbl       = lbl("AT: IDLE")
+        self.trades_lbl   = lbl("TRADES: 0")
+        self.pnl_lbl      = lbl("P&L: $0.00")
+        self.api_lbl      = lbl("● API")
+        self.db_lbl       = lbl("● DB")
+        self.redis_lbl    = lbl("● RDS")
+
+        for w in [self.mode_lbl, _vsep(), self.at_lbl, _vsep(),
+                  self.trades_lbl, _vsep(), self.pnl_lbl, _vsep(),
+                  self.api_lbl, _vsep(), self.db_lbl, _vsep(),
+                  self.redis_lbl, _vsep()]:
+            self.addWidget(w)
+
+        self.cpu_lbl  = lbl("CPU: —")
+        self.mem_lbl  = lbl("MEM: —")
+        self.time_lbl = lbl(time.strftime("%H:%M  %d %b %Y"), ACCENT)
+        for w in [self.cpu_lbl, self.mem_lbl, self.time_lbl]:
+            self.addPermanentWidget(w)
+
+        QTimer(self, interval=1000,
+               timeout=lambda: self.time_lbl.setText(
+                   time.strftime("%H:%M:%S  %d %b %Y")
+               )).start()
+
+    def set_mode(self, mode: str) -> None:
+        col = {"AUTO": GREEN, "MANUAL": YELLOW, "HYBRID": ACCENT,
+               "PAPER": ACCENT2, "PAUSED": RED}.get(mode.upper(), FG1)
+        self.mode_lbl.setText(f"MODE: {mode.upper()}")
+        self.mode_lbl.setStyleSheet(
+            f"color:{col}; font-size:10px; padding:0 8px; font-family:monospace;"
+        )
+
+    def set_at_state(self, state: str) -> None:
+        col = {"idle": FG2, "scanning": ACCENT, "aiming": YELLOW,
+               "entering": GREEN, "monitoring": GREEN,
+               "exiting": YELLOW, "cooldown": RED}.get(state, FG2)
+        self.at_lbl.setText(f"AT: {state.upper()}")
+        self.at_lbl.setStyleSheet(
+            f"color:{col}; font-size:10px; padding:0 8px; font-family:monospace;"
+        )
+
+    def set_service(self, name: str, ok: bool) -> None:
+        mapping = {"api": self.api_lbl, "db": self.db_lbl, "redis": self.redis_lbl}
+        lbl = mapping.get(name)
+        if lbl:
+            col = GREEN if ok else RED
+            tag = {"api": "API", "db": "DB", "redis": "RDS"}.get(name, name.upper())
+            lbl.setText(f"● {tag}")
+            lbl.setStyleSheet(
+                f"color:{col}; font-size:10px; padding:0 8px; font-family:monospace;"
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN WINDOW
+# ══════════════════════════════════════════════════════════════════════════════
 
 class MainWindow(QMainWindow):
-    """BinanceML Pro – main application window."""
+    """BinanceML Pro – Futuristic AI Trading Desk."""
 
     def __init__(
         self,
@@ -115,292 +717,146 @@ class MainWindow(QMainWindow):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self._engine = engine
-        self._portfolio = portfolio
-        self._predictor = predictor
-        self._order_manager = order_manager
-        self._trainer = trainer
-        self._tax_calc = tax_calc
-        self._cl = continuous_learner
-        self._whale_watcher = whale_watcher
-        self._token_ml = token_ml
-        self._sentiment = sentiment
-        self._port_opt = port_opt
-        self._backtester = backtester
-        self._voice = voice
-        self._telegram = telegram
+
+        self._engine          = engine
+        self._portfolio       = portfolio
+        self._predictor       = predictor
+        self._order_manager   = order_manager
+        self._trainer         = trainer
+        self._tax_calc        = tax_calc
+        self._cl              = continuous_learner
+        self._whale_watcher   = whale_watcher
+        self._token_ml        = token_ml
+        self._sentiment       = sentiment
+        self._port_opt        = port_opt
+        self._backtester      = backtester
+        self._voice           = voice
+        self._telegram        = telegram
         self._new_token_watcher = new_token_watcher
         self._regime_detector = regime_detector
-        self._ensemble = ensemble
-        self._dynamic_risk = dynamic_risk
-        self._monte_carlo = monte_carlo
-        self._walk_forward = walk_forward
-        self._trade_journal = trade_journal
-        self._market_scanner = market_scanner
-        self._auto_trader = auto_trader
-        self._settings = get_settings()
-        self._intel = get_intel_logger()
+        self._ensemble        = ensemble
+        self._dynamic_risk    = dynamic_risk
+        self._monte_carlo     = monte_carlo
+        self._walk_forward    = walk_forward
+        self._trade_journal   = trade_journal
+        self._market_scanner  = market_scanner
+        self._auto_trader     = auto_trader
 
-        self._current_symbol = "BTCUSDT"
+        self._settings       = get_settings()
+        self._intel          = get_intel_logger()
         self._active_symbols = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT"]
+        self._current_symbol = self._active_symbols[0]
 
-        self.setWindowTitle("BinanceML Pro  ·  Professional AI Trading Platform")
-        self.setMinimumSize(1400, 900)
-        self._setup_menu()
-        self._setup_toolbar()
-        self._setup_central()
-        self._setup_statusbar()
+        self.setWindowTitle("BinanceML Pro  ·  Professional AI Trading Desk")
+        self.setMinimumSize(1440, 900)
+
+        self._build_ui()
+        self._build_menu()
+        self._build_shortcuts()
         self._connect_signals()
         self._start_timers()
-        self._intel.system("MainWindow", "Application started successfully.")
 
-    # ── Menu bar ───────────────────────────────────────────────────────
-    def _setup_menu(self) -> None:
-        menubar = self.menuBar()
+        self.nav.set_active(0)
+        self._intel.system("MainWindow", "BinanceML Pro trading desk ready.")
 
-        # File
-        file_menu = menubar.addMenu("&File")
-        file_menu.addAction(self._action("Settings", self._open_settings, "Ctrl+,"))
-        file_menu.addSeparator()
-        file_menu.addAction(self._action("Exit", self.close, "Ctrl+Q"))
+    # ──────────────────────────────────────────────────────────────────
+    # UI
+    # ──────────────────────────────────────────────────────────────────
 
-        # Trading
-        trade_menu = menubar.addMenu("&Trading")
-        trade_menu.addAction(self._action("Manual Mode",
-            lambda: self._set_engine_mode("manual")))
-        trade_menu.addAction(self._action("Auto Mode",
-            lambda: self._set_engine_mode("auto")))
-        trade_menu.addAction(self._action("Hybrid Mode",
-            lambda: self._set_engine_mode("hybrid")))
-        trade_menu.addAction(self._action("Paper Trading (Simulated)",
-            lambda: self._set_engine_mode("paper")))
-        trade_menu.addSeparator()
-        trade_menu.addAction(self._action("Pause Engine",
-            lambda: self._set_engine_mode("paused")))
-        trade_menu.addSeparator()
-        trade_menu.addAction(self._action("Cancel All Orders",
-            self._cancel_all_orders))
-
-        # AutoTrader sub-menu
-        trade_menu.addSeparator()
-        at_menu = trade_menu.addMenu("🤖 AutoTrader")
-        at_menu.addAction(self._action("Semi-Auto Mode",
-            lambda: self._set_autotrader_mode("semi_auto")))
-        at_menu.addAction(self._action("Full-Auto Mode",
-            lambda: self._set_autotrader_mode("full_auto")))
-        at_menu.addSeparator()
-        at_menu.addAction(self._action("🎯 Take Aim (approve trade)", self._at_take_aim))
-        at_menu.addAction(self._action("🛑 Manual Exit (close position)", self._at_manual_exit))
-        at_menu.addSeparator()
-        at_menu.addAction(self._action("🔭 Scan Now", self._at_scan_now))
-
-        # ML
-        ml_menu = menubar.addMenu("&Machine Learning")
-        ml_menu.addAction(self._action("Start 48h Training", self._start_training))
-        ml_menu.addAction(self._action("Stop Training", self._stop_training))
-        ml_menu.addSeparator()
-        ml_menu.addAction(self._action("Run Data Integrity Check", self._run_integrity_check))
-        ml_menu.addAction(self._action("Reload Model", self._reload_model))
-
-        # Tax
-        tax_menu = menubar.addMenu("&Tax")
-        tax_menu.addAction(self._action("Generate Monthly Report", self._generate_tax_report))
-        tax_menu.addAction(self._action("Annual CGT Summary", self._generate_annual_tax))
-        tax_menu.addAction(self._action("Send Tax Email Now", self._send_tax_email))
-
-        # API
-        api_menu = menubar.addMenu("&API")
-        api_menu.addAction(self._action("Start REST API Server", self._start_api_server))
-        api_menu.addAction(self._action("View API Docs", self._show_api_docs))
-        api_menu.addSeparator()
-        api_menu.addAction(self._action("Manage Webhooks", self._show_webhooks))
-
-        # View
-        view_menu = menubar.addMenu("&View")
-        view_menu.addAction(self._action("Toggle Intel Log", self._toggle_intel_log, "Ctrl+L"))
-        view_menu.addAction(self._action("Toggle Order Book", self._toggle_order_book))
-        view_menu.addAction(self._action("Toggle ML Panel", self._toggle_ml_panel))
-
-        # Help
-        help_menu = menubar.addMenu("&Help")
-        help_menu.addAction(self._action("About", self._show_about))
-        help_menu.addAction(self._action("Check for Updates", lambda: None))
-
-    @staticmethod
-    def _action(label: str, fn, shortcut: str | None = None) -> QAction:
-        act = QAction(label)
-        act.triggered.connect(fn)
-        if shortcut:
-            act.setShortcut(QKeySequence(shortcut))
-        return act
-
-    # ── Toolbar ────────────────────────────────────────────────────────
-    def _setup_toolbar(self) -> None:
-        tb = QToolBar("Main Toolbar")
-        tb.setMovable(False)
-        tb.setStyleSheet(f"background:{BG0}; border-bottom:1px solid {BORDER}; spacing:6px;")
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, tb)
-
-        # Symbol selector
-        self.sym_combo = QComboBox()
-        self.sym_combo.setFixedWidth(130)
-        for s in self._active_symbols:
-            self.sym_combo.addItem(s)
-        self.sym_combo.currentTextChanged.connect(self._on_symbol_changed)
-        tb.addWidget(QLabel("  Symbol: "))
-        tb.addWidget(self.sym_combo)
-        tb.addSeparator()
-
-        # Engine mode indicator
-        self.mode_indicator = QLabel("⬤ MANUAL")
-        self.mode_indicator.setStyleSheet(f"color:{YELLOW}; font-weight:700; font-size:12px;")
-        tb.addWidget(self.mode_indicator)
-        tb.addSeparator()
-
-        # Quick mode buttons
-        for label, mode, colour in [
-            ("AUTO", "auto", GREEN),
-            ("MANUAL", "manual", YELLOW),
-            ("HYBRID", "hybrid", ACCENT),
-        ]:
-            btn = QPushButton(label)
-            btn.setFixedHeight(28)
-            btn.setFixedWidth(70)
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background:{BG3}; color:{colour};
-                    border:1px solid {colour}55; border-radius:4px; font-weight:600;
-                }}
-                QPushButton:hover {{ background:{colour}22; }}
-            """)
-            btn.clicked.connect(lambda _, m=mode: self._set_engine_mode(m))
-            tb.addWidget(btn)
-
-        tb.addSeparator()
-
-        # System stats
-        self.cpu_lbl = QLabel("CPU: —")
-        self.cpu_lbl.setStyleSheet(f"color:{FG1}; font-size:11px;")
-        tb.addWidget(self.cpu_lbl)
-        self.mem_lbl = QLabel("MEM: —")
-        self.mem_lbl.setStyleSheet(f"color:{FG1}; font-size:11px;")
-        tb.addWidget(self.mem_lbl)
-
-        # Ticker strip (second toolbar)
-        ticker_tb = QToolBar("Ticker")
-        ticker_tb.setMovable(False)
-        ticker_tb.setStyleSheet(f"background:{BG0}; border-bottom:1px solid {BORDER};")
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, ticker_tb)
-        self.insertToolBarBreak(ticker_tb)
-        self.ticker_strip = TickerStrip(self._active_symbols)
-        ticker_tb.addWidget(self.ticker_strip)
-
-    # ── Central widget ─────────────────────────────────────────────────
-    def _setup_central(self) -> None:
+    def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # Main horizontal splitter (chart+trading | orderbook+ml)
-        self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._main_splitter.setChildrenCollapsible(False)
-        main_layout.addWidget(self._main_splitter, 1)
+        # Header
+        self.header = HeaderBar(self._active_symbols)
+        self.header.symbol_changed.connect(self._on_symbol_changed)
+        root.addWidget(self.header)
 
-        # ── Left pane: chart + trading ──────────────────────────────────
-        left_splitter = QSplitter(Qt.Orientation.Vertical)
-        left_splitter.setChildrenCollapsible(False)
+        # Body
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
 
-        self.chart_widget = ChartWidget()
-        self.chart_widget.symbol_changed.connect(self._on_symbol_changed)
-        left_splitter.addWidget(self.chart_widget)
+        self.nav = NavSidebar()
+        self.nav.page_requested.connect(self._navigate_to)
+        body.addWidget(self.nav)
 
-        self.trading_panel = TradingPanel()
-        self.trading_panel.order_submitted.connect(self._on_order_submitted)
-        self.trading_panel.cancel_requested.connect(self._on_cancel_requested)
-        left_splitter.addWidget(self.trading_panel)
-        left_splitter.setSizes([600, 350])
-        self._main_splitter.addWidget(left_splitter)
+        self.stack = QStackedWidget()
+        body.addWidget(self.stack, 1)
+        root.addLayout(body, 1)
 
-        # ── Right pane: order book + tabs (ML / signals / etc) ────────────
-        right_splitter = QSplitter(Qt.Orientation.Vertical)
+        # Status bar
+        self.status_bar = TradingStatusBar()
+        self.setStatusBar(self.status_bar)
 
-        self.orderbook_widget = OrderBookWidget(self._current_symbol)
-        right_splitter.addWidget(self.orderbook_widget)
+        # Pages
+        self._build_trading_page()      # 0
+        self._build_autotrader_page()   # 1
+        self._build_ml_page()           # 2
+        self._build_risk_page()         # 3
+        self._build_connections_page()  # 4
+        self._build_settings_page()     # 5
+        self._build_help_page()         # 6
 
-        right_tabs = QTabWidget()
-        right_tabs.setStyleSheet(
-            f"QTabBar::tab {{ color:{FG1}; background:{BG2}; padding:4px 10px; }}"
-            f"QTabBar::tab:selected {{ background:{BG3}; color:{ACCENT}; }}"
+        # Intel Log dock
+        from ui.intel_log_widget import IntelLogWidget
+        self.intel_log  = IntelLogWidget()
+        self.intel_dock = QDockWidget("Intel Log", self)
+        self.intel_dock.setAllowedAreas(
+            Qt.DockWidgetArea.BottomDockWidgetArea |
+            Qt.DockWidgetArea.TopDockWidgetArea
         )
-        self.ml_widget = MLTrainingWidget(trainer=self._trainer)
-        right_tabs.addTab(self.ml_widget, "🤖 ML Training")
+        self.intel_dock.setWidget(self.intel_log)
+        self.intel_dock.setMinimumHeight(160)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.intel_dock)
 
-        # Data Integrity tab
-        self.integrity_widget = self._build_integrity_widget()
-        right_tabs.addTab(self.integrity_widget, "🔍 Data Integrity")
+    def _build_trading_page(self) -> None:
+        self.trading_page = TradingPage(self._active_symbols)
+        self.trading_page.order_submitted.connect(self._on_order_submitted)
+        self.trading_page.cancel_requested.connect(self._on_cancel_requested)
+        self.trading_page.symbol_changed.connect(self._on_symbol_changed)
+        self.stack.addWidget(self.trading_page)
 
-        # Backtest tab
+    def _build_autotrader_page(self) -> None:
         try:
-            from ui.backtest_widget import BacktestWidget
-            self.backtest_widget = BacktestWidget(backtester=self._backtester)
-            right_tabs.addTab(self.backtest_widget, "📊 Backtest")
-        except Exception:
-            self.backtest_widget = None
-
-        # Strategy builder tab
-        try:
-            from ui.strategy_builder import StrategyBuilderWidget
-            self.strategy_widget = StrategyBuilderWidget(backtester=self._backtester)
-            self.strategy_widget.backtest_requested.connect(
-                lambda d: self._intel.ml("StrategyBuilder", f"Backtest requested: {d.get('name')}")
+            from ui.auto_trader_widget import AutoTraderWidget
+            self.at_page = AutoTraderWidget(
+                auto_trader=self._auto_trader,
+                market_scanner=self._market_scanner,
             )
-            right_tabs.addTab(self.strategy_widget, "⚙️ Strategies")
         except Exception:
-            self.strategy_widget = None
+            self.at_page = _placeholder("AutoTrader", "Not available")
+        self.stack.addWidget(self.at_page)
 
-        right_splitter.addWidget(right_tabs)
-        right_splitter.setSizes([420, 430])
-        self._main_splitter.addWidget(right_splitter)
-        self._main_splitter.setSizes([1000, 400])
+    def _build_ml_page(self) -> None:
+        try:
+            from ui.ml_training_widget import MLTrainingWidget
+            self.ml_page = MLTrainingWidget(trainer=self._trainer)
+            if self._whale_watcher:
+                try:
+                    self._whale_watcher.on_event(
+                        lambda ev: self.ml_page.add_whale_event(ev)
+                    )
+                except Exception:
+                    pass
+            if self._token_ml:
+                try:
+                    self._token_ml.on_signal(
+                        lambda sig: self.ml_page.add_signal({**sig, "source": "TokenML"})
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            self.ml_page = _placeholder("ML Training", "Not available")
+        self.stack.addWidget(self.ml_page)
 
-        # Wire whale events → ML widget
-        if self._whale_watcher:
-            try:
-                self._whale_watcher.on_event(
-                    lambda ev: self.ml_widget.add_whale_event(ev)
-                )
-            except Exception:
-                pass
-
-        # Wire token ML signals → ML widget
-        if self._token_ml:
-            try:
-                self._token_ml.on_signal(
-                    lambda sig: self.ml_widget.add_signal({**sig, "source": "TokenML"})
-                )
-            except Exception:
-                pass
-
-        # Wire new token launch signals → intel log + voice
-        if self._new_token_watcher:
-            try:
-                def _on_launch_signal(sig):
-                    self._intel.ml("NewTokenWatcher",
-                        f"🚀 {sig.symbol} bar {sig.bar_num}: {sig.action} ({sig.confidence:.0%}) – {sig.reason}")
-                    if self._voice and sig.action in ("ENTER_LONG", "EXIT_LONG"):
-                        self._voice.speak_alert(
-                            f"Launch signal: {sig.action.replace('_',' ')} {sig.symbol}"
-                        )
-                self._new_token_watcher.on_signal(_on_launch_signal)
-            except Exception:
-                pass
-
-        # Risk Dashboard tab
+    def _build_risk_page(self) -> None:
         try:
             from ui.risk_dashboard import RiskDashboard
-            self.risk_dashboard = RiskDashboard(
+            self.risk_page = RiskDashboard(
                 dynamic_risk=self._dynamic_risk,
                 regime_detector=self._regime_detector,
                 ensemble=self._ensemble,
@@ -409,210 +865,299 @@ class MainWindow(QMainWindow):
                 walk_forward=self._walk_forward,
                 engine=self._engine,
             )
-            right_tabs.addTab(self.risk_dashboard, "⚡ Risk")
         except Exception:
-            self.risk_dashboard = None
+            self.risk_page = _placeholder("Risk Dashboard", "Not available")
+        self.stack.addWidget(self.risk_page)
 
-        # AutoTrader / Market Scanner tab
-        try:
-            from ui.auto_trader_widget import AutoTraderWidget
-            self.auto_trader_widget = AutoTraderWidget(
-                auto_trader=self._auto_trader,
-                market_scanner=self._market_scanner,
-            )
-            right_tabs.addTab(self.auto_trader_widget, "🤖 AutoTrader")
-        except Exception:
-            self.auto_trader_widget = None
-
-        # ── Intel Log (bottom dock) ──────────────────────────────────────
-        self.intel_dock = QDockWidget("Intel Log", self)
-        self.intel_dock.setAllowedAreas(
-            Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.TopDockWidgetArea
+    def _build_connections_page(self) -> None:
+        from ui.connections_widget import ConnectionsWidget
+        binance_client = None
+        if self._engine and hasattr(self._engine, "_client"):
+            binance_client = self._engine._client
+        self.connections_page = ConnectionsWidget(
+            binance_client=binance_client,
+            engine=self._engine,
         )
-        self.intel_log = IntelLogWidget()
-        self.intel_dock.setWidget(self.intel_log)
-        self.intel_dock.setMinimumHeight(180)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.intel_dock)
+        self.stack.addWidget(self.connections_page)
 
-    def _build_integrity_widget(self) -> QWidget:
-        """Simple integrity check status display."""
-        w = QWidget()
-        layout = QVBoxLayout(w)
-        layout.setSpacing(8)
-
-        header = QLabel("🔍 ML Data Integrity Monitor")
-        header.setStyleSheet(f"color:{ACCENT}; font-size:12px; font-weight:700;")
-        layout.addWidget(header)
-
-        info = QLabel(
-            f"Automatic integrity checks run every 25 minutes.\n"
-            f"Checks: Row count • OHLC validity • NULL columns\n"
-            f"        Timestamp gaps • Volume validity"
+    def _build_settings_page(self) -> None:
+        from ui.system_settings_widget import SystemSettingsWidget
+        self.settings_page = SystemSettingsWidget()
+        self.settings_page.settings_saved.connect(
+            lambda: self._intel.system("Settings", "Configuration saved.")
         )
-        info.setStyleSheet(f"color:{FG1}; font-size:11px;")
-        layout.addWidget(info)
+        self.stack.addWidget(self.settings_page)
 
-        btn_row = QHBoxLayout()
-        run_btn = QPushButton("▶ Run Check Now")
-        run_btn.setObjectName("btn_primary")
-        run_btn.clicked.connect(self._run_integrity_check)
-        btn_row.addWidget(run_btn)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
+    def _build_help_page(self) -> None:
+        from ui.help_widget import HelpWidget
+        self.help_page = HelpWidget()
+        self.stack.addWidget(self.help_page)
 
-        self.integrity_status_lbl = QLabel("Last check: Not run yet")
-        self.integrity_status_lbl.setStyleSheet(f"color:{FG2}; font-size:11px;")
-        layout.addWidget(self.integrity_status_lbl)
+    # ──────────────────────────────────────────────────────────────────
+    # Menu
+    # ──────────────────────────────────────────────────────────────────
 
-        from PyQt6.QtWidgets import QTextEdit
-        self.integrity_log = QTextEdit()
-        self.integrity_log.setReadOnly(True)
-        self.integrity_log.setStyleSheet(f"""
-            QTextEdit {{
-                background:{BG2}; color:{FG0}; font-size:11px;
-                font-family: monospace; border:none;
-            }}
-        """)
-        layout.addWidget(self.integrity_log, 1)
-        return w
+    def _build_menu(self) -> None:
+        mb = self.menuBar()
 
-    # ── Status bar ─────────────────────────────────────────────────────
-    def _setup_statusbar(self) -> None:
-        sb = self.statusBar()
-        self.sb_mode_lbl   = QLabel("Mode: MANUAL")
-        self.sb_trades_lbl = QLabel("Trades today: 0")
-        self.sb_pnl_lbl    = QLabel("P&L: $0.00")
-        self.sb_api_lbl    = QLabel("API: ⬤ Connected")
-        self.sb_api_lbl.setStyleSheet(f"color:{GREEN};")
-        self.sb_time_lbl   = QLabel("")
-        for w in [self.sb_mode_lbl, self.sb_trades_lbl, self.sb_pnl_lbl, self.sb_api_lbl]:
-            sb.addWidget(w)
-            sep = QFrame()
-            sep.setFrameShape(QFrame.Shape.VLine)
-            sep.setStyleSheet(f"color:{BORDER};")
-            sb.addWidget(sep)
-        sb.addPermanentWidget(self.sb_time_lbl)
+        # File
+        fm = mb.addMenu("&File")
+        fm.addAction(self._act("Settings", lambda: self._navigate_to(5), "Ctrl+,"))
+        fm.addSeparator()
+        fm.addAction(self._act("Exit", self.close, "Ctrl+Q"))
 
-    # ── Signal connections ──────────────────────────────────────────────
+        # View
+        vm = mb.addMenu("&View")
+        labels = ["Trading","AutoTrader","ML","Risk","Connections","Settings","Help"]
+        for i, lbl in enumerate(labels):
+            vm.addAction(self._act(lbl, lambda _, idx=i: self._navigate_to(idx),
+                                   f"Ctrl+{i+1}"))
+        vm.addSeparator()
+        vm.addAction(self._act("Toggle Intel Log",   self._toggle_intel_log,   "Ctrl+L"))
+        vm.addAction(self._act("Toggle Order Book",  self._toggle_order_book,  "Ctrl+B"))
+        vm.addAction(self._act("Add Chart Tab",      self._add_chart_tab,      "Ctrl++"))
+        vm.addAction(self._act("Toggle Fullscreen",  self._toggle_fullscreen,  "F11"))
+
+        # Trading
+        tm = mb.addMenu("&Trading")
+        for mode in ["Manual","Auto","Hybrid","Paper","Paused"]:
+            tm.addAction(self._act(f"{mode} Mode",
+                lambda _, m=mode: self._set_engine_mode(m.lower())))
+        tm.addSeparator()
+        tm.addAction(self._act("Cancel All Orders", self._cancel_all_orders, "Ctrl+Shift+X"))
+        tm.addSeparator()
+
+        at_menu = tm.addMenu("🤖 AutoTrader")
+        at_menu.addAction(self._act("Semi-Auto Mode",    lambda: self._set_at_mode("semi_auto")))
+        at_menu.addAction(self._act("Full-Auto Mode",    lambda: self._set_at_mode("full_auto")))
+        at_menu.addSeparator()
+        at_menu.addAction(self._act("🎯 Take Aim",       self._at_take_aim,    "Ctrl+Shift+A"))
+        at_menu.addAction(self._act("🛑 Exit Trade",     self._at_manual_exit, "Ctrl+Shift+E"))
+        at_menu.addAction(self._act("🔭 Scan Now",       self._at_scan_now,    "Ctrl+Shift+N"))
+
+        # ML
+        mlm = mb.addMenu("&ML")
+        mlm.addAction(self._act("Start Training",       self._start_training,       "Ctrl+T"))
+        mlm.addAction(self._act("Stop Training",        self._stop_training,        "Ctrl+Shift+T"))
+        mlm.addSeparator()
+        mlm.addAction(self._act("Reload Model",         self._reload_model,         "Ctrl+R"))
+        mlm.addAction(self._act("Data Integrity Check", self._run_integrity_check,  "Ctrl+I"))
+
+        # Tax
+        taxm = mb.addMenu("&Tax")
+        taxm.addAction(self._act("Monthly Report",      self._generate_tax_report))
+        taxm.addAction(self._act("Annual CGT Summary",  self._generate_annual_tax))
+        taxm.addAction(self._act("Send Email Now",      self._send_tax_email))
+
+        # Network
+        netm = mb.addMenu("&Network")
+        netm.addAction(self._act("Check All Connections", self._check_connections, "Ctrl+Shift+C"))
+        netm.addAction(self._act("Start REST API Server", self._start_api_server))
+        netm.addAction(self._act("View API Endpoints",    self._show_api_docs))
+
+        # Help
+        hm = mb.addMenu("&Help")
+        hm.addAction(self._act("Help Panel", lambda: self._navigate_to(6), "F1"))
+        hm.addAction(self._act("About",      self._show_about))
+
+    @staticmethod
+    def _act(label: str, fn, shortcut: str = "") -> QAction:
+        act = QAction(label)
+        act.triggered.connect(fn)
+        if shortcut:
+            act.setShortcut(QKeySequence(shortcut))
+        return act
+
+    # ──────────────────────────────────────────────────────────────────
+    # Keyboard shortcuts
+    # ──────────────────────────────────────────────────────────────────
+
+    def _build_shortcuts(self) -> None:
+        pairs = [
+            ("Ctrl+1", lambda: self._navigate_to(0)),
+            ("Ctrl+2", lambda: self._navigate_to(1)),
+            ("Ctrl+3", lambda: self._navigate_to(2)),
+            ("Ctrl+4", lambda: self._navigate_to(3)),
+            ("Ctrl+5", lambda: self._navigate_to(4)),
+            ("Ctrl+6", lambda: self._navigate_to(5)),
+            ("Ctrl+7", lambda: self._navigate_to(6)),
+            ("F11",    self._toggle_fullscreen),
+            ("F1",     lambda: self._navigate_to(6)),
+        ]
+        for key, fn in pairs:
+            sc = QShortcut(QKeySequence(key), self)
+            sc.activated.connect(fn)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Signal connections
+    # ──────────────────────────────────────────────────────────────────
+
     def _connect_signals(self) -> None:
         if self._engine:
-            self._engine.on("heartbeat", self._on_heartbeat)
-            self._engine.on("trade", self._on_trade_event)
-            self._engine.on("signal", self._on_signal_event)
+            self._engine.on("heartbeat",   self._on_heartbeat)
+            self._engine.on("trade",       self._on_trade_event)
+            self._engine.on("signal",      self._on_signal_event)
             self._engine.on("mode_change", self._on_mode_change)
         if self._predictor:
             self._predictor.on_signal(self._on_ml_signal)
+        if self._auto_trader:
+            self._auto_trader.on_state_change(
+                lambda state: QTimer.singleShot(
+                    0, lambda s=state: self.status_bar.set_at_state(s.value)
+                )
+            )
+        if self._new_token_watcher:
+            try:
+                def _on_launch(sig):
+                    self._intel.ml("NewTokenWatcher",
+                        f"🚀 {sig.symbol} bar {sig.bar_num}: "
+                        f"{sig.action} ({sig.confidence:.0%}) – {sig.reason}")
+                    if self._voice and sig.action in ("ENTER_LONG","EXIT_LONG"):
+                        self._voice.speak_alert(
+                            f"Launch {sig.action.replace('_',' ')} {sig.symbol}"
+                        )
+                self._new_token_watcher.on_signal(_on_launch)
+            except Exception:
+                pass
 
-    # ── Timers ─────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────────
+    # Timers
+    # ──────────────────────────────────────────────────────────────────
+
     def _start_timers(self) -> None:
-        # Clock
-        clock_timer = QTimer(self)
-        clock_timer.timeout.connect(self._update_clock)
-        clock_timer.start(1000)
+        QTimer(self, interval=3000, timeout=self._refresh_orders).start()
+        QTimer(self, interval=5000, timeout=self._update_stats).start()
 
-        # System stats
-        stats_timer = QTimer(self)
-        stats_timer.timeout.connect(self._update_stats)
-        stats_timer.start(5000)
+    # ──────────────────────────────────────────────────────────────────
+    # Navigation
+    # ──────────────────────────────────────────────────────────────────
 
-        # Orders refresh
-        orders_timer = QTimer(self)
-        orders_timer.timeout.connect(self._refresh_orders)
-        orders_timer.start(3000)
+    def _navigate_to(self, index: int) -> None:
+        self.stack.setCurrentIndex(index)
+        self.nav.set_active(index)
 
-    # ── Event handlers ─────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────────
+    # Event handlers
+    # ──────────────────────────────────────────────────────────────────
+
     def _on_heartbeat(self, data: dict) -> None:
         metrics = data.get("metrics", {})
-        self.trading_panel.update_pnl(metrics)
-        self.sb_trades_lbl.setText(f"Trades today: {metrics.get('trades_today',0)}")
+        self.trading_page.update_pnl(metrics)
+        n   = metrics.get("trades_today", 0)
         pnl = metrics.get("pnl_today", 0)
-        colour = GREEN if pnl >= 0 else RED
-        self.sb_pnl_lbl.setStyleSheet(f"color:{colour};")
-        self.sb_pnl_lbl.setText(f"P&L: ${pnl:+,.2f}")
+        col = GREEN if pnl >= 0 else RED
+        self.status_bar.trades_lbl.setText(f"TRADES: {n}")
+        self.status_bar.pnl_lbl.setText(f"P&L: ${pnl:+,.2f}")
+        self.status_bar.pnl_lbl.setStyleSheet(
+            f"color:{col}; font-size:10px; padding:0 8px; font-family:monospace;"
+        )
 
     def _on_trade_event(self, trade: dict) -> None:
         self._intel.trade("TradingEngine",
-            f"{trade.get('side')} {trade.get('quantity')} {trade.get('symbol')} @ {trade.get('price')}", trade)
-        from api.webhooks import get_webhook_manager
-        get_webhook_manager().emit_trade(trade)
+            f"{trade.get('side')} {trade.get('quantity')} "
+            f"{trade.get('symbol')} @ {trade.get('price')}", trade)
+        try:
+            from api.webhooks import get_webhook_manager
+            get_webhook_manager().emit_trade(trade)
+        except Exception:
+            pass
 
     def _on_signal_event(self, signal: dict) -> None:
-        pass  # Handled via predictor callback
+        pass
 
     def _on_mode_change(self, data: dict) -> None:
-        mode = str(data.get("new","")).upper()
-        colour = {
-            "AUTO": GREEN, "MANUAL": YELLOW,
-            "HYBRID": ACCENT, "PAUSED": RED
-        }.get(mode, FG1)
-        self.mode_indicator.setText(f"⬤ {mode}")
-        self.mode_indicator.setStyleSheet(f"color:{colour}; font-weight:700; font-size:12px;")
-        self.sb_mode_lbl.setText(f"Mode: {mode}")
-        self._intel.system("TradingEngine", f"Engine mode changed to {mode}")
+        mode = str(data.get("new", "")).upper()
+        self.status_bar.set_mode(mode)
+        self._intel.system("TradingEngine", f"Engine mode → {mode}")
 
     def _on_ml_signal(self, signal: dict) -> None:
-        self.ml_widget.add_signal(signal)
-        action = signal.get("action","")
-        conf = signal.get("confidence", 0)
-        sym = signal.get("symbol","")
-        colour = GREEN if action == "BUY" else RED if action == "SELL" else YELLOW
+        if hasattr(self.ml_page, "add_signal"):
+            self.ml_page.add_signal(signal)
+        action = signal.get("action", "")
+        conf   = signal.get("confidence", 0)
+        sym    = signal.get("symbol", "")
         self._intel.signal("MLPredictor",
-            f"{action} signal for {sym} | Confidence: {conf:.1%} | Price: {signal.get('price',0):,.4f}", signal)
-        from api.webhooks import get_webhook_manager
-        get_webhook_manager().emit_signal(signal)
+            f"{action} {sym}  conf={conf:.1%}  "
+            f"price={signal.get('price',0):,.4f}", signal)
+        try:
+            from api.webhooks import get_webhook_manager
+            get_webhook_manager().emit_signal(signal)
+        except Exception:
+            pass
 
     def _on_symbol_changed(self, symbol: str) -> None:
         self._current_symbol = symbol
-        self.orderbook_widget.set_symbol(symbol)
-        self.chart_widget.set_symbol(symbol)
         if self._predictor:
             self._predictor.add_symbol(symbol)
         if self._engine:
             self._engine.add_symbol(symbol)
 
     def _on_order_submitted(self, order: dict) -> None:
-        if not self._order_manager:
-            self._intel.warning("MainWindow", "Order manager not available – demo mode")
+        if not self._engine:
+            self._intel.warning("MainWindow", "Engine not available – demo mode")
             return
+        from decimal import Decimal
         side = order["side"]
         if side == "BUY":
             result = self._engine.manual_buy(
                 order["symbol"],
                 Decimal(str(order["quantity"])),
                 Decimal(str(order["price"])),
-            ) if self._engine else None
+            )
         else:
             result = self._engine.manual_sell(
                 order["symbol"],
                 Decimal(str(order["quantity"])),
                 Decimal(str(order["price"])),
-            ) if self._engine else None
+            )
         if result:
             self._intel.trade("MainWindow",
-                f"Manual order submitted: {side} {order['quantity']} {order['symbol']}", order)
+                f"{side} {order['quantity']} {order['symbol']}", order)
 
     def _on_cancel_requested(self, symbol: str, order_id: str) -> None:
         if self._engine:
             ok = self._engine.manual_cancel(symbol, order_id)
             self._intel.trade("MainWindow",
-                f"Order {'cancelled' if ok else 'cancel failed'}: {order_id}")
+                f"Order {'cancelled' if ok else 'cancel FAILED'}: {order_id}")
 
-    # ── Toolbar actions ────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────────
+    # Refresh
+    # ──────────────────────────────────────────────────────────────────
+
+    def _refresh_orders(self) -> None:
+        if self._order_manager:
+            orders = self._order_manager.get_open_orders()
+            self.trading_page.update_active_orders(orders)
+
+    def _update_stats(self) -> None:
+        try:
+            from utils.threading_manager import get_thread_manager
+            s = get_thread_manager().system_stats()
+            self.status_bar.cpu_lbl.setText(f"CPU: {s['cpu_pct']:.0f}%")
+            self.status_bar.mem_lbl.setText(f"MEM: {s['mem_pct']:.0f}%")
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────────────────────────
+    # Action helpers
+    # ──────────────────────────────────────────────────────────────────
+
     def _set_engine_mode(self, mode: str) -> None:
         if self._engine:
             from core.trading_engine import EngineMode
             self._engine.set_mode(EngineMode(mode))
 
-    def _set_autotrader_mode(self, mode: str) -> None:
+    def _set_at_mode(self, mode: str) -> None:
         if self._auto_trader:
             from core.auto_trader import AutoTraderMode
             self._auto_trader.set_mode(AutoTraderMode(mode))
-            self._intel.ml("MainWindow", f"AutoTrader mode set to {mode}")
+            self._intel.ml("MainWindow", f"AutoTrader → {mode}")
 
     def _at_take_aim(self) -> None:
         if self._auto_trader:
             ok = self._auto_trader.take_aim()
-            self._intel.ml("MainWindow", "Take Aim" + (" approved" if ok else " – nothing to aim at"))
+            self._intel.ml("MainWindow",
+                "Take Aim" + (" approved" if ok else " – nothing pending"))
 
     def _at_manual_exit(self) -> None:
         if self._auto_trader:
@@ -621,170 +1166,183 @@ class MainWindow(QMainWindow):
 
     def _at_scan_now(self) -> None:
         if self._market_scanner:
-            import threading
             threading.Thread(
-                target=self._market_scanner.scan_now, daemon=True, name="menu-scan"
+                target=self._market_scanner.scan_now, daemon=True
             ).start()
             self._intel.ml("MainWindow", "Manual scan triggered")
 
     def _cancel_all_orders(self) -> None:
         reply = QMessageBox.question(
-            self, "Cancel All Orders",
-            "Cancel ALL open orders for all symbols?",
+            self, "Cancel All Orders", "Cancel ALL open orders?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
             if self._order_manager:
                 self._order_manager.cancel_all(self._current_symbol)
-                self._intel.trade("MainWindow", "All orders cancelled by user")
+                self._intel.trade("MainWindow", "All orders cancelled")
 
     def _start_training(self) -> None:
-        self.ml_widget._start_training()
+        if hasattr(self.ml_page, "_start_training"):
+            self.ml_page._start_training()
 
     def _stop_training(self) -> None:
-        self.ml_widget._stop_training()
+        if hasattr(self.ml_page, "_stop_training"):
+            self.ml_page._stop_training()
+
+    def _reload_model(self) -> None:
+        if self._predictor:
+            ok = self._predictor.reload_model()
+            self._intel.ml("MainWindow",
+                f"Model reload {'succeeded' if ok else 'failed – no active model'}")
 
     def _run_integrity_check(self) -> None:
         def _run():
             if self._cl:
                 results = self._cl.integrity_checker.run_check(
-                    ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT"],
-                    intervals=["1h","4h"],
+                    self._active_symbols, intervals=["1h","4h"],
                 )
-                QTimer.singleShot(0, lambda: self._show_integrity_results(results))
-            else:
-                self._intel.warning("MainWindow", "Continuous learner not available")
+                self._intel.ml("MainWindow",
+                    f"Integrity: {results.get('passed',0)} OK  "
+                    f"| {results.get('warnings',0)} warn  "
+                    f"| {results.get('errors',0)} errors")
         threading.Thread(target=_run, daemon=True).start()
-
-    def _show_integrity_results(self, results: dict) -> None:
-        self.integrity_status_lbl.setText(
-            f"Last check: {results.get('timestamp','')[:19]} | "
-            f"{results.get('passed',0)} OK | {results.get('warnings',0)} warnings | {results.get('errors',0)} errors"
-        )
-        lines = []
-        for d in results.get("details", []):
-            status = d.get("status","")
-            icon = "✅" if status == "OK" else "⚠️" if status == "WARNING" else "❌"
-            lines.append(f"{icon} {d.get('symbol')}/{d.get('interval')} – {d.get('row_count')} rows – {', '.join(d.get('issues',[]) or ['OK'])}")
-        self.integrity_log.setPlainText("\n".join(lines))
-
-    def _reload_model(self) -> None:
-        if self._predictor:
-            ok = self._predictor.reload_model()
-            self._intel.ml("MainWindow", f"Model reload {'succeeded' if ok else 'failed – no active model'}")
 
     def _generate_tax_report(self) -> None:
         if not self._tax_calc:
             return
-        now = time.localtime()
-        from tax.email_report import TaxEmailReporter
-        reporter = TaxEmailReporter()
-        path = reporter._generate_pdf(now.tm_year, now.tm_mon, self._tax_calc.monthly_summary(now.tm_year, now.tm_mon))
-        self._intel.tax("MainWindow", f"Monthly tax report generated: {path}")
+        t = time.localtime()
+        try:
+            from tax.email_report import TaxEmailReporter
+            path = TaxEmailReporter()._generate_pdf(
+                t.tm_year, t.tm_mon,
+                self._tax_calc.monthly_summary(t.tm_year, t.tm_mon)
+            )
+            self._intel.tax("MainWindow", f"Monthly report: {path}")
+        except Exception as e:
+            self._intel.error("MainWindow", f"Tax report error: {e}")
 
     def _generate_annual_tax(self) -> None:
         if not self._tax_calc:
             return
-        from tax.uk_tax import UKTaxCalculator
-        tax_year = UKTaxCalculator.current_tax_year()
-        from tax.email_report import TaxEmailReporter
-        path = TaxEmailReporter().generate_annual_report(tax_year)
-        self._intel.tax("MainWindow", f"Annual CGT report generated: {path}")
+        try:
+            from tax.uk_tax import UKTaxCalculator
+            from tax.email_report import TaxEmailReporter
+            path = TaxEmailReporter().generate_annual_report(
+                UKTaxCalculator.current_tax_year()
+            )
+            self._intel.tax("MainWindow", f"Annual CGT report: {path}")
+        except Exception as e:
+            self._intel.error("MainWindow", f"Annual tax error: {e}")
 
     def _send_tax_email(self) -> None:
-        self._intel.tax("MainWindow", "Sending monthly tax email…")
-        now = time.localtime()
-        from tax.email_report import TaxEmailReporter
-        ok = TaxEmailReporter().generate_and_send_monthly(now.tm_year, now.tm_mon)
-        self._intel.tax("MainWindow", f"Tax email {'sent' if ok else 'failed'}")
+        t = time.localtime()
+        try:
+            from tax.email_report import TaxEmailReporter
+            ok = TaxEmailReporter().generate_and_send_monthly(t.tm_year, t.tm_mon)
+            self._intel.tax("MainWindow", f"Tax email {'sent' if ok else 'failed'}")
+        except Exception as e:
+            self._intel.error("MainWindow", f"Tax email error: {e}")
+
+    def _check_connections(self) -> None:
+        self._navigate_to(4)
+        QTimer.singleShot(200, self.connections_page._check_all)
 
     def _start_api_server(self) -> None:
-        from api.server import get_api_server
-        srv = get_api_server()
-        srv.start(
-            engine=self._engine, portfolio=self._portfolio,
-            predictor=self._predictor, order_manager=self._order_manager,
-            tax_calc=self._tax_calc,
-        )
-        self._intel.api("MainWindow", f"REST API server started at {srv.base_url}")
-        QMessageBox.information(self, "API Server", f"REST API running at:\n{srv.base_url}\n\nBrowse /health to verify.")
+        try:
+            from api.server import get_api_server
+            srv = get_api_server()
+            srv.start(
+                engine=self._engine, portfolio=self._portfolio,
+                predictor=self._predictor, order_manager=self._order_manager,
+                tax_calc=self._tax_calc,
+            )
+            self._intel.api("MainWindow", f"REST API at {srv.base_url}")
+            QMessageBox.information(self, "API Server",
+                f"REST API running at:\n{srv.base_url}")
+        except Exception as e:
+            self._intel.error("MainWindow", f"API server error: {e}")
 
     def _show_api_docs(self) -> None:
-        from api.server import get_api_server
-        url = get_api_server().base_url + "/api/v1/status"
-        self._intel.api("MainWindow", f"API docs: {url}")
-        QMessageBox.information(self, "API Docs",
-            f"Base URL: {get_api_server().base_url}\n\nKey Endpoints:\n"
-            "  GET  /api/v1/status\n  GET  /api/v1/portfolio\n"
-            "  GET  /api/v1/signals?symbol=BTCUSDT\n"
-            "  POST /api/v1/order\n  GET  /api/v1/log\n"
-            "  POST /api/v1/webhook/register\n\n"
-            "Auth: Bearer <first 16 chars of Binance API key>")
+        try:
+            from api.server import get_api_server
+            base = get_api_server().base_url
+        except Exception:
+            base = "http://localhost:8080"
+        QMessageBox.information(self, "API Endpoints",
+            f"Base: {base}\n\n"
+            "GET  /api/v1/status\n"
+            "GET  /api/v1/portfolio\n"
+            "GET  /api/v1/signals?symbol=BTCUSDT\n"
+            "POST /api/v1/order\n"
+            "GET  /api/v1/log\n"
+            "POST /api/v1/webhook/register\n\n"
+            "Auth: Bearer <first 16 chars of API key>")
 
-    def _show_webhooks(self) -> None:
-        from api.webhooks import get_webhook_manager
-        hooks = get_webhook_manager().list_webhooks()
-        msg = "Registered webhooks:\n\n" + ("\n".join(f"• {h['url']} [{','.join(h['events'])}]" for h in hooks) or "None")
-        QMessageBox.information(self, "Webhooks", msg)
+    def _show_about(self) -> None:
+        self._navigate_to(6)
 
-    def _open_settings(self) -> None:
-        self._intel.system("MainWindow", "Settings panel opened")
+    def _add_chart_tab(self) -> None:
+        self.trading_page.chart_panel._prompt_add_tab()
+
+    # ──────────────────────────────────────────────────────────────────
+    # View toggles
+    # ──────────────────────────────────────────────────────────────────
 
     def _toggle_intel_log(self) -> None:
         self.intel_dock.setVisible(not self.intel_dock.isVisible())
 
     def _toggle_order_book(self) -> None:
-        self.orderbook_widget.setVisible(not self.orderbook_widget.isVisible())
+        ob = self.trading_page.orderbook
+        ob.setVisible(not ob.isVisible())
 
-    def _toggle_ml_panel(self) -> None:
-        self.ml_widget.setVisible(not self.ml_widget.isVisible())
+    def _toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showMaximized()
+        else:
+            self.showFullScreen()
 
-    def _show_about(self) -> None:
-        QMessageBox.about(self, "About BinanceML Pro",
-            "<b>BinanceML Pro</b><br/>"
-            "Version 1.0.0<br/><br/>"
-            "Professional AI-powered crypto trading platform.<br/>"
-            "• LSTM + Transformer ML models<br/>"
-            "• UK HMRC CGT tax reporting<br/>"
-            "• Continuous learning engine<br/>"
-            "• REST API & webhooks<br/>"
-            "• Data integrity checks every 25 minutes<br/><br/>"
-            "Optimised for Apple Silicon (Mac Mini M4).")
+    # ──────────────────────────────────────────────────────────────────
+    # Close
+    # ──────────────────────────────────────────────────────────────────
 
-    # ── Background refresh ─────────────────────────────────────────────
-    def _refresh_orders(self) -> None:
-        if self._order_manager:
-            orders = self._order_manager.get_open_orders()
-            self.trading_panel.update_active_orders(orders)
-
-    def _update_clock(self) -> None:
-        self.sb_time_lbl.setText(time.strftime("  %H:%M:%S  %Z  |  %d %b %Y"))
-
-    def _update_stats(self) -> None:
-        from utils.threading_manager import get_thread_manager
-        stats = get_thread_manager().system_stats()
-        self.cpu_lbl.setText(f"  CPU: {stats['cpu_pct']:.0f}%")
-        self.mem_lbl.setText(f"  MEM: {stats['mem_pct']:.0f}%  ({stats['mem_used_gb']:.1f}/{stats['mem_total_gb']:.0f}GB)")
-
-    # ── Close event ────────────────────────────────────────────────────
     def closeEvent(self, event) -> None:
         reply = QMessageBox.question(
-            self, "Exit",
-            "Stop trading engine and exit?",
+            self, "Exit BinanceML Pro",
+            "Stop all services and exit?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            if self._auto_trader:
-                self._auto_trader.stop()
-            if self._market_scanner:
-                self._market_scanner.stop()
-            if self._engine:
-                self._engine.stop()
-            if self._predictor:
-                self._predictor.stop()
-            if self._cl:
-                self._cl.stop()
-            self._intel.system("MainWindow", "Application closed.")
+            for svc in (self._auto_trader, self._market_scanner,
+                        self._engine, self._predictor, self._cl):
+                try:
+                    if svc:
+                        svc.stop()
+                except Exception:
+                    pass
+            self._intel.system("MainWindow", "Shutdown complete.")
             event.accept()
         else:
             event.ignore()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Module-level helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _vsep() -> QFrame:
+    f = QFrame()
+    f.setFrameShape(QFrame.Shape.VLine)
+    f.setFixedWidth(1)
+    f.setStyleSheet(f"background:{BORDER};")
+    return f
+
+
+def _placeholder(title: str, msg: str) -> QWidget:
+    w = QWidget()
+    layout = QVBoxLayout(w)
+    layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    lbl = QLabel(f"{title}\n\n{msg}")
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    lbl.setStyleSheet(f"color:{FG2}; font-size:16px;")
+    layout.addWidget(lbl)
+    return w
