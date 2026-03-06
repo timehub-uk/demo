@@ -257,6 +257,23 @@ def build_services(settings):
         binance_client=binance,
     )
 
+    intel.system("Startup", "Initialising arbitrage detector…")
+    from core.arbitrage_detector import ArbitrageDetector
+    arb_detector = ArbitrageDetector(
+        binance_client=binance,
+        trade_journal=trade_journal,
+    )
+
+    intel.system("Startup", "Initialising arbitrage auto-trader…")
+    from core.arbitrage_auto_trader import ArbitrageAutoTrader
+    arb_trader = ArbitrageAutoTrader(
+        detector=arb_detector,
+        engine=engine,
+        trade_journal=trade_journal,
+        budget_usdt=100.0,
+        paper=True,    # paper mode by default; user can toggle in UI
+    )
+
     intel.system("Startup", "Initialising auto-trader…")
     from core.auto_trader import AutoTrader
     auto_trader = AutoTrader(
@@ -321,6 +338,8 @@ def build_services(settings):
         "data_collector": data_collector,
         "ping_pong": ping_pong,
         "strategy_manager": strategy_manager,
+        "arb_detector": arb_detector,
+        "arb_trader": arb_trader,
     }
 
 
@@ -412,6 +431,12 @@ def start_background_services(services: dict, settings) -> None:
     if strat_mgr:
         strat_mgr.start()
         intel.system("Startup", "Strategy manager started (ML auto-selection active)")
+
+    # Arbitrage detector (scanner only — auto-trader starts on demand via UI)
+    arb_det = services.get("arb_detector")
+    if arb_det:
+        arb_det.start()
+        intel.system("Startup", "Arbitrage detector started")
 
     # Market pulse broad monitor
     market_pulse = services.get("market_pulse")
@@ -603,6 +628,8 @@ def main() -> int:
         data_collector=services.get("data_collector"),
         ping_pong=services.get("ping_pong"),
         strategy_manager=services.get("strategy_manager"),
+        arb_detector=services.get("arb_detector"),
+        arb_trader=services.get("arb_trader"),
     )
     splash.finish(window)
     window.showMaximized()

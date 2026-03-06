@@ -304,6 +304,105 @@ class SignalMarker(pg.ScatterPlotItem):
         super().__init__(spots=spots)
 
 
+# ── Trade marker helpers ────────────────────────────────────────────────────────
+
+_BINANCE_FEE_PCT = 0.001   # 0.1% per leg
+_UK_CGT_RATE     = 0.20    # 20% capital gains tax
+_TRADE_MARKER_COLOR = "#FFD700"   # gold
+
+
+def _iso_to_ts(iso: str) -> float:
+    """Convert ISO timestamp string to Unix timestamp float."""
+    if not iso:
+        return 0.0
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.timestamp()
+    except Exception:
+        return 0.0
+
+
+class TradeMarkerLayer:
+    """
+    Draws trade entry/exit markers (yellow squares) and dotted pair connectors
+    on a pyqtgraph PlotWidget.  Call draw() to refresh; clear() to remove.
+    """
+
+    MARKER_SIZE = 12
+
+    def __init__(self, price_plot: "pg.PlotWidget") -> None:
+        self._plot  = price_plot
+        self._items: list = []
+
+    def clear(self) -> None:
+        for item in self._items:
+            try:
+                self._plot.removeItem(item)
+            except Exception:
+                pass
+        self._items.clear()
+
+    def draw(self, trades: list) -> list[dict]:
+        """
+        Draw markers for all trades.  Returns a list of hit-test dicts:
+          {"ts": float, "price": float, "trade": TradeEntry, "is_entry": bool}
+        """
+        self.clear()
+        markers: list[dict] = []
+
+        for trade in trades:
+            entry_ts = _iso_to_ts(trade.entry_time)
+            if entry_ts == 0.0:
+                continue
+            ep = float(trade.entry_price)
+            is_closed = (
+                not trade.is_open
+                and trade.exit_time
+                and float(trade.exit_price or 0) > 0
+            )
+            exit_ts = _iso_to_ts(trade.exit_time) if is_closed else 0.0
+            xp = float(trade.exit_price) if is_closed else 0.0
+
+            # Entry square — yellow border, semi-transparent fill
+            e_scatter = pg.ScatterPlotItem(
+                x=[entry_ts], y=[ep],
+                symbol="s", size=self.MARKER_SIZE,
+                pen=pg.mkPen(_TRADE_MARKER_COLOR, width=2),
+                brush=QBrush(QColor(_TRADE_MARKER_COLOR + "66")),
+            )
+            self._plot.addItem(e_scatter)
+            self._items.append(e_scatter)
+            markers.append({"ts": entry_ts, "price": ep,
+                             "trade": trade, "is_entry": True})
+
+            if is_closed:
+                pnl_col = GREEN if trade.pnl >= 0 else RED
+
+                # Exit square — profit/loss tinted border
+                x_scatter = pg.ScatterPlotItem(
+                    x=[exit_ts], y=[xp],
+                    symbol="s", size=self.MARKER_SIZE,
+                    pen=pg.mkPen(pnl_col, width=2),
+                    brush=QBrush(QColor(_TRADE_MARKER_COLOR + "66")),
+                )
+                self._plot.addItem(x_scatter)
+                self._items.append(x_scatter)
+                markers.append({"ts": exit_ts, "price": xp,
+                                 "trade": trade, "is_entry": False})
+
+                # Dotted connector line
+                connector = pg.PlotDataItem(
+                    x=[entry_ts, exit_ts], y=[ep, xp],
+                    pen=pg.mkPen(_TRADE_MARKER_COLOR + "99", width=1.5,
+                                 style=Qt.PenStyle.DotLine),
+                )
+                self._plot.addItem(connector)
+                self._items.append(connector)
+
+        return markers
+
+
 # ── Panel title text item ──────────────────────────────────────────────────────
 
 def _panel_label(text: str, color: str = FG1) -> pg.TextItem:
@@ -499,6 +598,17 @@ class ChartWidget(QWidget):
 
         self._ts: Optional[np.ndarray] = None   # timestamps for cursor lookup
 
+        # Trade overlay
+        self._trades: list = []
+        self._show_trades: bool = True
+        self._trade_markers: list[dict] = []   # [{ts, price, trade, is_entry}, ...]
+        self._trade_layer: Optional[TradeMarkerLayer] = None
+        self._trade_hover: Optional[pg.TextItem] = None
+
+        # Chart navigation
+        self._auto_scale:  bool = True
+        self._auto_follow: bool = True
+
         self._setup_ui()
         self._setup_timer()
 
@@ -511,6 +621,7 @@ class ChartWidget(QWidget):
 
         main.addWidget(self._build_toolbar_row1())
         main.addWidget(self._build_toolbar_row2())
+        main.addWidget(self._build_toolbar_row3())
 
         # Splitter: price + sub-panels
         self._splitter = QSplitter(Qt.Orientation.Vertical)
@@ -642,8 +753,121 @@ class ChartWidget(QWidget):
             pill.toggled.connect(lambda checked, k=key: self._toggle(k, checked))
             lay.addWidget(pill)
 
+        lay.addWidget(_vsep())
+        trades_pill = IndicatorPill("TRADES", _TRADE_MARKER_COLOR, checked=True)
+        trades_pill.toggled.connect(self._on_trades_toggled)
+        lay.addWidget(trades_pill)
+
         lay.addStretch()
         return row
+
+    def _build_toolbar_row3(self) -> QWidget:
+        """Row 3: chart navigation controls (zoom, pan, auto-scale, auto-follow)."""
+        from PyQt6.QtWidgets import QSpinBox
+        row = QWidget()
+        row.setFixedHeight(28)
+        row.setStyleSheet(f"background:{BG4}; border-bottom:1px solid {BORDER};")
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(10, 2, 10, 2)
+        lay.setSpacing(4)
+
+        btn_style = (
+            f"QPushButton {{ background:{BG3}; color:{FG1}; border:1px solid {BORDER}; "
+            f"border-radius:3px; padding:1px 8px; font-size:11px; font-weight:600; }}"
+            f"QPushButton:hover {{ background:{BG4}; color:{FG0}; }}"
+        )
+
+        def _nav_btn(label: str, slot) -> QPushButton:
+            b = QPushButton(label)
+            b.setFixedHeight(22)
+            b.setStyleSheet(btn_style)
+            b.clicked.connect(slot)
+            return b
+
+        lay.addWidget(_lbl("NAVIGATE"))
+        lay.addWidget(_nav_btn("◀◀", self._pan_far_left))
+        lay.addWidget(_nav_btn("◀",  self._pan_left))
+        lay.addWidget(_nav_btn("▶",  self._pan_right))
+        lay.addWidget(_nav_btn("▶▶", self._pan_far_right))
+        lay.addWidget(_vsep())
+        lay.addWidget(_nav_btn("− Zoom", self._zoom_out))
+        lay.addWidget(_nav_btn("+ Zoom", self._zoom_in))
+        lay.addWidget(_nav_btn("Fit",    self._fit_view))
+        lay.addWidget(_vsep())
+
+        # Auto-scale toggle
+        self._autoscale_btn = QPushButton("Auto-Scale ✓")
+        self._autoscale_btn.setFixedHeight(22)
+        self._autoscale_btn.setCheckable(True)
+        self._autoscale_btn.setChecked(True)
+        self._autoscale_btn.setStyleSheet(
+            f"QPushButton {{ background:{BG3}; color:{GREEN}; border:1px solid {BORDER}; "
+            f"border-radius:3px; padding:1px 8px; font-size:11px; font-weight:600; }}"
+            f"QPushButton:checked {{ color:{GREEN}; }}"
+            f"QPushButton:!checked {{ color:{FG2}; }}"
+        )
+        self._autoscale_btn.toggled.connect(self._on_autoscale_toggled)
+        lay.addWidget(self._autoscale_btn)
+
+        # Auto-follow toggle
+        self._autofollow_btn = QPushButton("Auto-Follow ✓")
+        self._autofollow_btn.setFixedHeight(22)
+        self._autofollow_btn.setCheckable(True)
+        self._autofollow_btn.setChecked(True)
+        self._autofollow_btn.setStyleSheet(
+            f"QPushButton {{ background:{BG3}; color:{GREEN}; border:1px solid {BORDER}; "
+            f"border-radius:3px; padding:1px 8px; font-size:11px; font-weight:600; }}"
+            f"QPushButton:checked {{ color:{GREEN}; }}"
+            f"QPushButton:!checked {{ color:{FG2}; }}"
+        )
+        self._autofollow_btn.toggled.connect(self._on_autofollow_toggled)
+        lay.addWidget(self._autofollow_btn)
+
+        lay.addStretch()
+        return row
+
+    # ── Chart navigation helpers ────────────────────────────────────────
+
+    def _pan_step(self, fraction: float) -> None:
+        """Pan the price plot by fraction of the visible range."""
+        vr = self._price_plot.viewRange()
+        span = vr[0][1] - vr[0][0]
+        delta = span * fraction
+        self._price_plot.setXRange(vr[0][0] + delta, vr[0][1] + delta, padding=0)
+
+    def _pan_left(self)     -> None: self._pan_step(-0.2)
+    def _pan_right(self)    -> None: self._pan_step(+0.2)
+    def _pan_far_left(self) -> None: self._pan_step(-0.8)
+    def _pan_far_right(self)-> None: self._pan_step(+0.8)
+
+    def _zoom_in(self) -> None:
+        vr = self._price_plot.viewRange()
+        cx = (vr[0][0] + vr[0][1]) / 2
+        half = (vr[0][1] - vr[0][0]) * 0.35
+        self._price_plot.setXRange(cx - half, cx + half, padding=0)
+
+    def _zoom_out(self) -> None:
+        vr = self._price_plot.viewRange()
+        cx = (vr[0][0] + vr[0][1]) / 2
+        half = (vr[0][1] - vr[0][0]) * 0.7
+        self._price_plot.setXRange(cx - half, cx + half, padding=0)
+
+    def _fit_view(self) -> None:
+        self._price_plot.enableAutoRange()
+
+    def _on_autoscale_toggled(self, checked: bool) -> None:
+        self._auto_scale = checked
+        label = "Auto-Scale ✓" if checked else "Auto-Scale ✗"
+        self._autoscale_btn.setText(label)
+        if checked:
+            self._price_plot.enableAutoRange(axis="y")
+        else:
+            self._price_plot.disableAutoRange(axis="y")
+
+    def _on_autofollow_toggled(self, checked: bool) -> None:
+        self._auto_follow = checked
+        label = "Auto-Follow ✓" if checked else "Auto-Follow ✗"
+        self._autofollow_btn.setText(label)
 
     def _build_price_plot(self) -> None:
         self._price_plot = pg.PlotWidget()
@@ -670,6 +894,21 @@ class ChartWidget(QWidget):
         self._price_plot.addItem(self._vline, ignoreBounds=True)
         self._price_plot.addItem(self._hline, ignoreBounds=True)
         self._price_plot.scene().sigMouseMoved.connect(self._on_mouse_move)
+
+        # Trade marker layer
+        self._trade_layer = TradeMarkerLayer(self._price_plot)
+
+        # Hover tooltip for trade squares (hidden until cursor is near a marker)
+        self._trade_hover = pg.TextItem(
+            text="", color=FG0, anchor=(0, 1),
+            border=pg.mkPen(BORDER, width=1),
+            fill=pg.mkBrush(BG3 + "EE"),
+        )
+        font = QFont("monospace", 10)
+        self._trade_hover.setFont(font)
+        self._trade_hover.setVisible(False)
+        self._trade_hover.setZValue(100)
+        self._price_plot.addItem(self._trade_hover, ignoreBounds=True)
 
     def _build_sub_panels(self) -> None:
         # Each sub-panel: (internal_key, title_text, title_colour, y_range, reference_lines)
@@ -780,6 +1019,13 @@ class ChartWidget(QWidget):
         if self._signals:
             self._price_plot.addItem(SignalMarker(self._signals))
 
+        # Trade entry/exit markers
+        self._draw_trade_markers()
+        # Re-add hover tooltip on top after clear
+        if self._trade_hover:
+            self._price_plot.addItem(self._trade_hover, ignoreBounds=True)
+            self._trade_hover.setVisible(False)
+
         # AI forecast projection
         self._draw_forecast(ts, cls, his, los)
 
@@ -802,6 +1048,13 @@ class ChartWidget(QWidget):
         self._draw_adx_panel(ts, his, los, cls)
 
         self._update_panel_visibility()
+
+        # Auto-follow: scroll to show the latest N candles
+        if self._auto_follow and len(ts) >= 2:
+            span = (ts[-1] - ts[-2]) * 120   # show ~120 candles
+            self._price_plot.setXRange(ts[-1] - span, ts[-1] + (ts[-1] - ts[-2]) * 2, padding=0)
+        if self._auto_scale:
+            self._price_plot.enableAutoRange(axis="y")
 
     def _draw_price_series(self, data, ts, cls, ops, his, los, vols) -> None:
         if self._style == self.STYLE_CANDLE:
@@ -1020,6 +1273,8 @@ class ChartWidget(QWidget):
 
     def _on_mouse_move(self, pos) -> None:
         if not self._price_plot.sceneBoundingRect().contains(pos):
+            if self._trade_hover:
+                self._trade_hover.setVisible(False)
             return
         mp = self._price_plot.plotItem.vb.mapSceneToView(pos)
         x, y = mp.x(), mp.y()
@@ -1028,6 +1283,7 @@ class ChartWidget(QWidget):
         for vl in self._sub_vlines.values():
             vl.setPos(x)
         self._update_ohlcv_label(x)
+        self._check_trade_hover(x, y)
 
     def _on_sub_mouse_move(self, pos, plot: pg.PlotWidget) -> None:
         if not plot.sceneBoundingRect().contains(pos):
@@ -1055,6 +1311,41 @@ class ChartWidget(QWidget):
             f"V:<b>{float(d.get('v',0)):,.0f}</b>"
         )
         self.lbl_ohlcv.setTextFormat(Qt.TextFormat.RichText)
+
+    def _check_trade_hover(self, x: float, y: float) -> None:
+        """Show trade tooltip when cursor is within 1% price & 2 bars of a marker."""
+        if not self._trade_hover or not self._trade_markers:
+            if self._trade_hover:
+                self._trade_hover.setVisible(False)
+            return
+
+        # Determine thresholds in view coordinates
+        price_range = self._price_plot.viewRange()[1]
+        price_span = max(1e-9, price_range[1] - price_range[0])
+        price_tol  = price_span * 0.02
+
+        time_range = self._price_plot.viewRange()[0]
+        time_span  = max(1.0, time_range[1] - time_range[0])
+        time_tol   = time_span * 0.015
+
+        best = None
+        best_dist = float("inf")
+        for m in self._trade_markers:
+            dt = abs(m["ts"] - x) / time_span
+            dp = abs(m["price"] - y) / price_span
+            dist = (dt ** 2 + dp ** 2) ** 0.5
+            if abs(m["ts"] - x) < time_tol and abs(m["price"] - y) < price_tol:
+                if dist < best_dist:
+                    best_dist = dist
+                    best = m
+
+        if best:
+            tooltip = self._trade_tooltip(best["trade"], best["is_entry"])
+            self._trade_hover.setText(tooltip)
+            self._trade_hover.setPos(best["ts"], best["price"])
+            self._trade_hover.setVisible(True)
+        else:
+            self._trade_hover.setVisible(False)
 
     def _on_symbol_changed(self, symbol: str) -> None:
         self._symbol = symbol
@@ -1098,6 +1389,90 @@ class ChartWidget(QWidget):
     def set_forecast_tracker(self, tracker) -> None:
         """Attach a ForecastTracker to record and score predictions."""
         self._forecast_tracker = tracker
+
+    def set_trades(self, trades: list) -> None:
+        """
+        Provide a list of TradeEntry objects (open or closed) to overlay on the chart.
+        Call this whenever the trade journal refreshes.
+        """
+        self._trades = trades or []
+        if self._data:
+            self._draw_trade_markers()
+
+    def _on_trades_toggled(self, checked: bool) -> None:
+        self._show_trades = checked
+        if self._data:
+            self._draw_trade_markers()
+
+    def _draw_trade_markers(self) -> None:
+        """Render/refresh all trade squares and connecting lines on the price plot."""
+        if not self._trade_layer:
+            return
+        if not self._show_trades or not self._trades:
+            self._trade_layer.clear()
+            self._trade_markers = []
+            return
+        self._trade_markers = self._trade_layer.draw(self._trades)
+
+    @staticmethod
+    def _trade_tooltip(trade, is_entry: bool) -> str:
+        """Build the rich hover tooltip text for a trade marker."""
+        ep = float(trade.entry_price)
+        qty = float(trade.quantity)
+        entry_dt = ""
+        try:
+            from datetime import datetime, timezone
+            dt = datetime.fromisoformat(trade.entry_time.replace("Z", "+00:00"))
+            entry_dt = dt.strftime("%Y-%m-%d %H:%M UTC")
+        except Exception:
+            entry_dt = trade.entry_time
+
+        label = "ENTRY" if is_entry else "EXIT"
+        lines = [
+            f"  {label}  ─  {trade.trade_id[:8]}",
+            f"  Side:    {trade.side}",
+            f"  Entry:   {ep:.4f}  @  {entry_dt}",
+            f"  Qty:     {qty:.6f} {trade.symbol.replace('USDT','')}",
+        ]
+
+        if not trade.is_open and trade.exit_price and float(trade.exit_price) > 0:
+            xp = float(trade.exit_price)
+            xdt = ""
+            try:
+                from datetime import datetime
+                dt2 = datetime.fromisoformat(trade.exit_time.replace("Z", "+00:00"))
+                xdt = dt2.strftime("%Y-%m-%d %H:%M UTC")
+            except Exception:
+                xdt = trade.exit_time
+
+            # Financials
+            entry_val = ep * qty
+            exit_val  = xp * qty
+            gross_pnl = exit_val - entry_val if trade.side == "BUY" else entry_val - exit_val
+            fee_entry = entry_val * _BINANCE_FEE_PCT
+            fee_exit  = exit_val  * _BINANCE_FEE_PCT
+            total_fees = fee_entry + fee_exit
+            net_pnl    = gross_pnl - total_fees
+            tax = max(0.0, net_pnl * _UK_CGT_RATE)
+            after_tax  = net_pnl - tax
+            pct        = gross_pnl / entry_val * 100.0
+            mins       = float(trade.duration_minutes or 0)
+            held_str   = (f"{int(mins // 60)}h {int(mins % 60)}m"
+                         if mins >= 60 else f"{int(mins)}m")
+
+            sign = "+" if net_pnl >= 0 else ""
+            lines += [
+                f"  Exit:    {xp:.4f}  @  {xdt}",
+                f"  Held:    {held_str}",
+                f"  Gross:   {sign}${gross_pnl:,.4f}  ({sign}{pct:.2f}%)",
+                f"  Fees:    -${total_fees:.4f}  (2 × 0.1%)",
+                f"  Tax:     -${tax:.4f}  (UK CGT 20%)",
+                f"  Net:     {sign}${after_tax:,.4f}",
+            ]
+        else:
+            lines.append("  Status:  OPEN")
+
+        return "\n".join(lines)
 
     # ── AI Forecast overlay ────────────────────────────────────────────
 

@@ -830,6 +830,8 @@ class MainWindow(QMainWindow):
         data_collector=None,
         ping_pong=None,
         strategy_manager=None,
+        arb_detector=None,
+        arb_trader=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -865,6 +867,8 @@ class MainWindow(QMainWindow):
         self._data_collector     = data_collector
         self._ping_pong          = ping_pong
         self._strategy_manager   = strategy_manager
+        self._arb_detector       = arb_detector
+        self._arb_trader         = arb_trader
 
         self._settings       = get_settings()
         self._intel          = get_intel_logger()
@@ -1031,6 +1035,17 @@ class MainWindow(QMainWindow):
                     strategy_manager=self._strategy_manager
                 )
                 tabs.addTab(self.strat_widget, "🧠  Strategies")
+            except Exception:
+                pass
+
+            # Arbitrage Detector / Auto-Trader tab
+            try:
+                from ui.arbitrage_widget import ArbitrageWidget
+                self.arb_widget = ArbitrageWidget(
+                    arbitrage_detector=self._arb_detector,
+                    arbitrage_trader=self._arb_trader,
+                )
+                tabs.addTab(self.arb_widget, "⚡  Arbitrage")
             except Exception:
                 pass
 
