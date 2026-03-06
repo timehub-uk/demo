@@ -462,15 +462,17 @@ class ChartWidget(QWidget):
     STYLE_LINE   = "Line"
     STYLE_AREA   = "Area"
 
-    def __init__(self, parent=None, predictor=None) -> None:
+    def __init__(self, parent=None, predictor=None, forecast_tracker=None) -> None:
         super().__init__(parent)
         self._data: list[dict] = []
         self._signals: list[dict] = []
         self._symbol   = "BTCUSDT"
         self._interval = "1h"
         self._style    = self.STYLE_CANDLE
-        self._predictor = predictor      # optional MLPredictor for forecast
+        self._predictor = predictor
+        self._forecast_tracker = forecast_tracker
         self._forecast_enabled = False
+        self._forecast_horizon = 20   # bars ahead
 
         # Overlay indicators
         self._overlays: dict[str, bool] = {
@@ -574,10 +576,30 @@ class ChartWidget(QWidget):
 
         lay.addWidget(_vsep())
 
-        # AI Forecast toggle
+        # AI Forecast toggle + horizon selector + accuracy badge
         self._forecast_pill = IndicatorPill("AI FORECAST", "#FF6D00", checked=False)
         self._forecast_pill.toggled.connect(self._on_forecast_toggled)
         lay.addWidget(self._forecast_pill)
+
+        self._horizon_combo = QComboBox()
+        self._horizon_combo.setFixedWidth(58)
+        self._horizon_combo.setFixedHeight(22)
+        self._horizon_combo.setStyleSheet(
+            f"QComboBox {{ background:{BG4}; color:{FG1}; border:1px solid {BORDER}; "
+            f"border-radius:3px; font-size:11px; padding:1px 4px; }}"
+        )
+        for h in ["5", "10", "20", "50", "100"]:
+            self._horizon_combo.addItem(f"{h}b")
+        self._horizon_combo.setCurrentText("20b")
+        self._horizon_combo.currentTextChanged.connect(self._on_horizon_changed)
+        lay.addWidget(self._horizon_combo)
+
+        # Accuracy badge: e.g. "ACC 68% (34/50)"
+        self._acc_label = QLabel("")
+        self._acc_label.setStyleSheet(
+            f"font-size:11px; font-weight:700; font-family:monospace; padding:0 4px;"
+        )
+        lay.addWidget(self._acc_label)
 
         lay.addStretch()
 
@@ -1058,69 +1080,84 @@ class ChartWidget(QWidget):
 
     def _on_forecast_toggled(self, checked: bool) -> None:
         self._forecast_enabled = checked
+        if not checked:
+            self._acc_label.setText("")
+        self._render()
+
+    def _on_horizon_changed(self, text: str) -> None:
+        try:
+            self._forecast_horizon = int(text.rstrip("b"))
+        except ValueError:
+            pass
         self._render()
 
     def set_predictor(self, predictor) -> None:
         """Attach an MLPredictor so the forecast panel can query live signals."""
         self._predictor = predictor
 
+    def set_forecast_tracker(self, tracker) -> None:
+        """Attach a ForecastTracker to record and score predictions."""
+        self._forecast_tracker = tracker
+
     # ── AI Forecast overlay ────────────────────────────────────────────
 
     def _draw_forecast(self, ts: np.ndarray, cls: np.ndarray, his: np.ndarray,
                         los: np.ndarray) -> None:
         """
-        Draw a 20-bar AI price projection on the price chart.
+        Draw an AI price projection for self._forecast_horizon bars ahead.
 
-        Sources (tried in order):
-          1. Redis ml_signal:{symbol} cache
-          2. self._predictor.predict(symbol) if set
-          3. Skip silently if neither is available
+        Cone width reflects both ATR volatility and horizon-based uncertainty
+        decay: the longer the horizon, the wider the cone relative to ATR.
 
-        Renders:
-          - Central dashed forecast line
-          - Shaded ±1 ATR confidence cone (uncertainty widens over time)
-          - Label at the end showing direction + confidence
+        After drawing, the forecast is recorded in ForecastTracker (throttled
+        to once per MIN_RECORD_INTERVAL) and the accuracy badge is refreshed.
         """
         if not self._forecast_enabled or len(cls) < 15:
             return
 
         signal, confidence = self._fetch_ml_signal()
         if signal == "HOLD" or confidence < 0.45:
+            self._acc_label.setText("")
             return
 
-        n_forward = 20
-        last_t    = float(ts[-1])
-        spacing   = float(ts[-1] - ts[-2]) if len(ts) >= 2 else 3600.0
+        n_forward  = self._forecast_horizon
+        last_t     = float(ts[-1])
+        spacing    = float(ts[-1] - ts[-2]) if len(ts) >= 2 else 3600.0
+        last_close = float(cls[-1])
 
         # ATR for cone width
-        atr_vals  = _atr(his, los, cls, 14)
-        atr_now   = float(atr_vals[-1]) if len(atr_vals) > 0 else float(cls[-1]) * 0.01
+        atr_vals = _atr(his, los, cls, 14)
+        atr_now  = float(atr_vals[-1]) if len(atr_vals) > 0 else last_close * 0.01
 
-        # Projected price path: curved toward target, then flattening
-        last_close = float(cls[-1])
-        direction  = 1.0 if signal == "BUY" else -1.0
-        target     = last_close + direction * confidence * atr_now * 3.0
+        # Target: confidence × ATR × horizon_factor (longer = bigger expected move)
+        horizon_factor = 1.0 + np.log1p(n_forward / 5.0)
+        direction = 1.0 if signal == "BUY" else -1.0
+        target    = last_close + direction * confidence * atr_now * 2.5 * horizon_factor
 
+        # Projected path: asymptotic curve toward target
         future_t   = np.array([last_t + (i + 1) * spacing for i in range(n_forward)])
-        weights    = 1 - np.exp(-np.linspace(0, 2, n_forward))   # asymptotic curve
+        weights    = 1 - np.exp(-np.linspace(0, 2.5, n_forward))
         future_cls = last_close + (target - last_close) * weights
 
-        # Cone half-width: starts at 0, grows to ±2 ATR
-        cone_width = atr_now * np.linspace(0.2, 2.0, n_forward)
+        # Cone: uncertainty widens faster for longer horizons
+        # At the final bar: ±(1.5 + horizon/30) × ATR
+        max_half = atr_now * (1.5 + n_forward / 30.0)
+        cone_w   = np.linspace(atr_now * 0.1, max_half, n_forward)
 
-        # Join last real close to first forecast point
         all_t   = np.concatenate([[last_t], future_t])
         all_mid = np.concatenate([[last_close], future_cls])
-        all_up  = np.concatenate([[last_close], future_cls + cone_width])
-        all_lo  = np.concatenate([[last_close], future_cls - cone_width])
+        all_up  = np.concatenate([[last_close], future_cls + cone_w])
+        all_lo  = np.concatenate([[last_close], future_cls - cone_w])
 
-        col = "#FF6D00"
+        # Colour: green-tinted for BUY, red-tinted for SELL
+        col = "#00C853" if signal == "BUY" else "#FF1744"
+
         mid_item = pg.PlotDataItem(all_t, all_mid,
             pen=pg.mkPen(col, width=2, style=Qt.PenStyle.DashLine))
         up_item  = pg.PlotDataItem(all_t, all_up,
-            pen=pg.mkPen(col + "55", width=1, style=Qt.PenStyle.DotLine))
+            pen=pg.mkPen(col + "44", width=1, style=Qt.PenStyle.DotLine))
         lo_item  = pg.PlotDataItem(all_t, all_lo,
-            pen=pg.mkPen(col + "55", width=1, style=Qt.PenStyle.DotLine))
+            pen=pg.mkPen(col + "44", width=1, style=Qt.PenStyle.DotLine))
 
         self._price_plot.addItem(mid_item)
         self._price_plot.addItem(up_item)
@@ -1129,14 +1166,88 @@ class ChartWidget(QWidget):
             pg.FillBetweenItem(up_item, lo_item, brush=QBrush(QColor(col + "18")))
         )
 
-        # End label
-        emoji  = "▲" if signal == "BUY" else "▼"
-        label  = pg.TextItem(
-            f" {emoji} {signal} {confidence:.0%}",
+        # End-of-forecast label with direction, confidence, and target
+        pct_move = abs(target - last_close) / last_close * 100
+        arrow = "▲" if signal == "BUY" else "▼"
+        end_label = pg.TextItem(
+            f" {arrow} {signal}  conf:{confidence:.0%}  "
+            f"tgt:{target:.4f} ({pct_move:+.2f}%)",
             color=col, anchor=(0, 0.5),
         )
-        label.setPos(future_t[-1], float(future_cls[-1]))
-        self._price_plot.addItem(label, ignoreBounds=True)
+        end_label.setPos(future_t[-1], float(future_cls[-1]))
+        self._price_plot.addItem(end_label, ignoreBounds=True)
+
+        # Horizon label at top-left of price plot
+        from ml.forecast_tracker import HORIZON_RELIABILITY, _expected_rate
+        exp_rate = _expected_rate(n_forward)
+        hl = pg.TextItem(
+            f"  {n_forward}-bar forecast  |  model ceiling: {exp_rate:.0%}",
+            color=FG2, anchor=(0, 0),
+        )
+        hl.setPos(last_t - spacing * 5, float(np.max(all_up)))
+        self._price_plot.addItem(hl, ignoreBounds=True)
+
+        # ── Record this forecast ───────────────────────────────────────
+        if self._forecast_tracker:
+            try:
+                self._forecast_tracker.record_forecast(
+                    symbol=self._symbol,
+                    interval=self._interval,
+                    direction=signal,
+                    confidence=confidence,
+                    entry_price=last_close,
+                    target_price=float(target),
+                    horizon_bars=n_forward,
+                )
+            except Exception:
+                pass
+
+        # ── Refresh accuracy badge ─────────────────────────────────────
+        self._refresh_accuracy_badge(n_forward)
+
+    def _refresh_accuracy_badge(self, horizon_bars: int) -> None:
+        """Update the ACC label with live forecast accuracy from the tracker."""
+        if not self._forecast_tracker:
+            self._acc_label.setText("")
+            return
+        try:
+            stats = self._forecast_tracker.get_accuracy(
+                symbol=self._symbol,
+                interval=self._interval,
+                horizon_bars=horizon_bars,
+                last_n=50,
+            )
+            total = stats["total"]
+            if total < 3:
+                self._acc_label.setText(
+                    f"<span style='color:{FG2};'>ACC: — (need {3 - total} more)</span>"
+                )
+            else:
+                rate = stats["rate"]
+                exp  = stats["expected_rate"]
+                pct  = rate * 100
+                # Green if at or above expectation, amber if within 5%, red below
+                if rate >= exp:
+                    col = GREEN
+                elif rate >= exp - 0.05:
+                    col = YELLOW
+                else:
+                    col = RED
+                calib_txt = ""
+                c = stats["calibration"]
+                if c > 1.15:
+                    calib_txt = " ↑calibrated"
+                elif c < 0.85:
+                    calib_txt = " ↓over-conf"
+                self._acc_label.setText(
+                    f"<span style='color:{col};font-weight:700;'>"
+                    f"ACC {pct:.0f}% ({stats['correct']}/{total})"
+                    f"</span><span style='color:{FG2};font-size:10px;'>"
+                    f"  expect:{exp:.0%}{calib_txt}</span>"
+                )
+            self._acc_label.setTextFormat(Qt.TextFormat.RichText)
+        except Exception:
+            self._acc_label.setText("")
 
     def _fetch_ml_signal(self) -> tuple[str, float]:
         """Return (signal, confidence) from Redis cache or live predictor."""
