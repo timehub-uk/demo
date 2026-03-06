@@ -38,8 +38,11 @@ Usage:
 
 from __future__ import annotations
 
+import json
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -47,6 +50,16 @@ import numpy as np
 from loguru import logger
 from utils.logger import get_intel_logger
 
+COUNCIL_WEIGHTS_FILE = Path(__file__).parent.parent / "data" / "council_weights.json"
+COUNCIL_WEIGHTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+# Per-regime source confidence multiplier bounds and learning rate
+COUNCIL_LR     = 0.05    # Same as ensemble learning rate
+COUNCIL_W_MIN  = 0.50    # Floor: a source can lose at most half its influence
+COUNCIL_W_MAX  = 2.00    # Ceiling: a source can at most double its influence
+
+# Known regimes — the weights file may contain others, these are the defaults
+_KNOWN_REGIMES = ("TRENDING_UP", "TRENDING_DOWN", "RANGING", "VOLATILE", "UNKNOWN")
 
 # ── Correlation groups (models within a group share data → dampen) ────────────
 
@@ -117,10 +130,13 @@ class SignalCouncil:
     """
     Multi-round deliberation engine.
     Each model adjusts its confidence based on peers before final vote.
+    Per-regime source weights adapt after every trade via record_outcome().
     """
 
     def __init__(self) -> None:
         self._intel = get_intel_logger()
+        self._lock = threading.Lock()
+        self._regime_weights: dict[str, dict[str, float]] = self._load_council_weights()
 
     def deliberate(
         self,
@@ -134,16 +150,21 @@ class SignalCouncil:
         if not signals:
             return self._empty_decision(symbol)
 
-        # Initialise members
-        members = [
-            CouncilMember(
+        # Load per-regime source multipliers for this regime
+        regime_mults = self._regime_weights.get(regime, {})
+
+        # Initialise members, applying any learned per-regime confidence multiplier
+        members = []
+        for src, d in signals.items():
+            raw_conf = max(MIN_CONF, min(MAX_CONF, float(d.get("confidence", 0.5))))
+            mult = regime_mults.get(src, 1.0)
+            adj_conf = max(MIN_CONF, min(MAX_CONF, raw_conf * mult))
+            members.append(CouncilMember(
                 name=src,
                 signal=d.get("signal") or d.get("action", "HOLD"),
-                confidence=max(MIN_CONF, min(MAX_CONF, float(d.get("confidence", 0.5)))),
-                final_confidence=max(MIN_CONF, min(MAX_CONF, float(d.get("confidence", 0.5)))),
-            )
-            for src, d in signals.items()
-        ]
+                confidence=raw_conf,
+                final_confidence=adj_conf,
+            ))
 
         # ── Check for vetoes first ────────────────────────────────────
         veto_by = self._check_veto(members, regime)
@@ -316,6 +337,56 @@ class SignalCouncil:
             rounds=MAX_ROUNDS,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
+
+    # ── Outcome feedback ───────────────────────────────────────────────
+
+    def record_outcome(
+        self,
+        regime: str,
+        correct_sources: list[str],
+        wrong_sources: list[str],
+    ) -> None:
+        """
+        Update per-regime source confidence multipliers after a trade closes.
+        Sources that were correct get a 5% boost; sources that were wrong get a 5% cut.
+        Multipliers are clamped to [COUNCIL_W_MIN, COUNCIL_W_MAX] and saved to disk.
+        """
+        if not correct_sources and not wrong_sources:
+            return
+        regime_key = regime or "UNKNOWN"
+        with self._lock:
+            mults = self._regime_weights.setdefault(regime_key, {})
+            for src in correct_sources:
+                old = mults.get(src, 1.0)
+                mults[src] = min(COUNCIL_W_MAX, old * (1 + COUNCIL_LR))
+            for src in wrong_sources:
+                old = mults.get(src, 1.0)
+                mults[src] = max(COUNCIL_W_MIN, old * (1 - COUNCIL_LR))
+            self._save_council_weights()
+
+        self._intel.ml("SignalCouncil",
+            f"⚖️  Per-regime weights updated [{regime_key}] "
+            f"correct={correct_sources} wrong={wrong_sources} "
+            + " ".join(
+                f"{s}={self._regime_weights.get(regime_key, {}).get(s, 1.0):.2f}"
+                for s in correct_sources + wrong_sources
+            ))
+
+    # ── Weight persistence ─────────────────────────────────────────────
+
+    def _load_council_weights(self) -> dict[str, dict[str, float]]:
+        try:
+            if COUNCIL_WEIGHTS_FILE.exists():
+                return json.loads(COUNCIL_WEIGHTS_FILE.read_text())
+        except Exception:
+            pass
+        return {}
+
+    def _save_council_weights(self) -> None:
+        try:
+            COUNCIL_WEIGHTS_FILE.write_text(json.dumps(self._regime_weights, indent=2))
+        except Exception:
+            pass
 
     def _empty_decision(self, symbol: str) -> CouncilDecision:
         return CouncilDecision(

@@ -85,9 +85,10 @@ class TradeJournal:
     Thread-safe; writes to both SQLite and JSON.
     """
 
-    def __init__(self, ensemble=None, dynamic_risk=None) -> None:
-        self._ensemble     = ensemble
-        self._dynamic_risk = dynamic_risk
+    def __init__(self, ensemble=None, dynamic_risk=None, signal_council=None) -> None:
+        self._ensemble      = ensemble
+        self._dynamic_risk  = dynamic_risk
+        self._signal_council = signal_council
         self._intel = get_intel_logger()
         self._lock  = threading.Lock()
         self._open_trades: dict[str, TradeEntry] = {}  # trade_id → entry
@@ -194,6 +195,11 @@ class TradeJournal:
             self._ensemble.record_outcome(entry.symbol, win)
         if self._dynamic_risk:
             self._dynamic_risk.record_outcome(win, entry.pnl)
+        # Feed per-regime source attribution back to signal council
+        if self._signal_council:
+            self._signal_council.record_outcome(
+                entry.regime, entry.correct_sources, entry.wrong_sources
+            )
 
         with self._lock:
             self._db_update(entry)

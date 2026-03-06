@@ -153,6 +153,7 @@ class MarketScanner:
         token_ml=None,
         dynamic_risk=None,
         predictor=None,
+        trade_journal=None,
     ) -> None:
         self._client   = binance_client
         self._regime   = regime_detector
@@ -162,6 +163,7 @@ class MarketScanner:
         self._token_ml = token_ml
         self._drm      = dynamic_risk
         self._predictor = predictor
+        self._journal  = trade_journal
         self._intel    = get_intel_logger()
 
         self._callbacks: list[Callable[[ScanSummary], None]] = []
@@ -383,17 +385,21 @@ class MarketScanner:
         score.ensemble_signal     = action
         score.ensemble_confidence = confidence
 
-        # ── Historical win rate (from TokenML profile) ─────────────────
+        # ── Historical win rate: blend live journal edge + TokenML profile ─
+        profile_wr = 0.5
         if self._token_ml:
             try:
                 task = self._token_ml.get_task(symbol)
                 if task:
-                    profile = task.profile
-                    score.historical_win_rate = getattr(profile, "live_win_rate", 0.5) or 0.5
+                    profile_wr = getattr(task.profile, "live_win_rate", 0.5) or 0.5
             except Exception:
-                score.historical_win_rate = 0.5
+                pass
+        live_wr = self._get_symbol_edge(symbol)
+        # 70% weight to actual trade outcomes, 30% to model profile when journal has data
+        if live_wr is not None:
+            score.historical_win_rate = 0.70 * live_wr + 0.30 * profile_wr
         else:
-            score.historical_win_rate = 0.5
+            score.historical_win_rate = profile_wr
 
         # ── R:R ratio from ATR ─────────────────────────────────────────
         if score.atr_pct > 0:
@@ -516,6 +522,23 @@ class MarketScanner:
             except Exception:
                 pass
         return {"signal": "HOLD", "confidence": 0.5}
+
+    def _get_symbol_edge(self, symbol: str) -> Optional[float]:
+        """
+        Compute actual win rate for this symbol from the last 30 closed trades
+        in the trade journal. Returns None if fewer than 5 trades exist (not enough data).
+        """
+        if not self._journal:
+            return None
+        try:
+            closed = self._journal.get_closed_trades(limit=500)
+            sym_trades = [t for t in closed if t.get("symbol") == symbol][-30:]
+            if len(sym_trades) < 5:
+                return None
+            wins = sum(1 for t in sym_trades if (t.get("pnl") or 0) > 0)
+            return wins / len(sym_trades)
+        except Exception:
+            return None
 
     def _compute_momentum(self, df) -> float:
         """Return normalised momentum score 0-1."""
