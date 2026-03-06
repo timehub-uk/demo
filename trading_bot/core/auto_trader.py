@@ -76,6 +76,10 @@ class ActiveTrade:
     paper: bool = False
     expected_rr: float = 2.0
     source_scan_score: float = 0.0
+    estimated_profit_usdt: float = 0.0   # expected $ gain if TP hit
+    estimated_profit_pct: float = 0.0   # expected % gain if TP hit
+    estimated_loss_usdt: float = 0.0    # expected $ loss if SL hit
+    estimated_loss_pct: float = 0.0     # expected % loss if SL hit
 
 
 @dataclass
@@ -110,9 +114,10 @@ class AutoTrader:
     DEFAULT_AUTO_THRESHOLD   = 0.72    # Min confidence for FULL_AUTO
     MONITOR_INTERVAL_SEC     = 2       # Price check frequency
     SCAN_INTERVAL_SEC        = 300     # Re-scan every 5 minutes
-    COOLDOWN_AFTER_LOSS_SEC  = 900     # 15 min cool-off after stop hit
+    RECOVERY_SCAN_DELAY_SEC  = 10      # Seconds to wait then rescan after a SL hit
     TIMEOUT_TRADE_SEC        = 4 * 3600  # Close after 4 hours regardless
     MAX_SIMULTANEOUS         = 1       # Max concurrent scanner-initiated positions
+    RECOVERY_MIN_CONFIDENCE  = 0.68    # Recovery trades must beat this bar
 
     def __init__(
         self,
@@ -144,8 +149,10 @@ class AutoTrader:
         self._state_callbacks:  list[Callable] = []
         self._rec_callbacks:    list[Callable] = []
         self._result_callbacks: list[Callable] = []
+        self._chart_callbacks:  list[Callable] = []   # on_chart_follow(symbol)
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
+        self._recovery_mode: bool = False   # True right after a SL hit
 
     # ── Properties ─────────────────────────────────────────────────────
 
@@ -173,6 +180,10 @@ class AutoTrader:
 
     def on_cycle_result(self, cb: Callable[[CycleResult], None]) -> None:
         self._result_callbacks.append(cb)
+
+    def on_chart_follow(self, cb: "Callable[[str], None]") -> None:
+        """Called with the symbol string whenever chart should auto-follow."""
+        self._chart_callbacks.append(cb)
 
     # ── Control ────────────────────────────────────────────────────────
 
@@ -260,14 +271,6 @@ class AutoTrader:
             time.sleep(5)
             return
 
-        # Cool-off period
-        if time.time() < self._cooldown_until:
-            remaining = int(self._cooldown_until - time.time())
-            self._set_state(CycleState.COOLDOWN)
-            self._intel.ml("AutoTrader", f"⏳ Cool-off: {remaining}s remaining")
-            time.sleep(min(30, remaining))
-            return
-
         # Check circuit breaker
         if self._drm and self._drm.circuit_broken:
             self._intel.ml("AutoTrader",
@@ -276,14 +279,20 @@ class AutoTrader:
             time.sleep(60)
             return
 
-        # Scan
+        # Scan – immediate if in recovery mode, otherwise respect interval
         since_last = time.time() - self._last_scan_time
-        if since_last < self.SCAN_INTERVAL_SEC and self._last_scan_time > 0:
+        in_recovery = self._recovery_mode
+        if not in_recovery and since_last < self.SCAN_INTERVAL_SEC and self._last_scan_time > 0:
             time.sleep(5)
             return
 
+        if in_recovery:
+            self._intel.ml("AutoTrader",
+                "🔄 Recovery mode: immediate rescan to find a winning trade…")
+
         self._set_state(CycleState.SCANNING)
         self._last_scan_time = time.time()
+        self._recovery_mode = False   # Reset – one immediate recovery scan only
 
         if self._scanner:
             summary = self._scanner.scan_now()
@@ -298,7 +307,7 @@ class AutoTrader:
             time.sleep(30)
             return
 
-        # Emit recommendation to UI
+        # Emit recommendation to UI and update chart
         with self._lock:
             self._pending_recommendation = rec
         for cb in self._rec_callbacks:
@@ -306,18 +315,30 @@ class AutoTrader:
                 cb(rec, summary)
             except Exception:
                 pass
+        for cb in self._chart_callbacks:
+            try:
+                cb(rec.symbol)
+            except Exception:
+                pass
+
+        # In recovery mode lower the bar slightly so we can get back in fast
+        effective_threshold = (
+            self.RECOVERY_MIN_CONFIDENCE if in_recovery else self._auto_threshold
+        )
 
         # Decide whether to act
         if self._mode == AutoTraderMode.FULL_AUTO:
-            if rec.ensemble_confidence >= self._auto_threshold:
+            if rec.ensemble_confidence >= effective_threshold:
+                tag = " [RECOVERY]" if in_recovery else ""
                 self._intel.ml("AutoTrader",
-                    f"🤖 FULL_AUTO: auto-firing on {rec.symbol} conf={rec.ensemble_confidence:.0%}")
+                    f"🤖 FULL_AUTO{tag}: auto-firing on {rec.symbol} "
+                    f"conf={rec.ensemble_confidence:.0%}")
                 self._set_state(CycleState.ENTERING)
                 self._enter_trade(rec)
             else:
                 self._intel.ml("AutoTrader",
                     f"🔕 Confidence {rec.ensemble_confidence:.0%} < threshold "
-                    f"{self._auto_threshold:.0%} – waiting for next scan")
+                    f"{effective_threshold:.0%} – waiting for next scan")
                 self._set_state(CycleState.IDLE)
                 time.sleep(self.SCAN_INTERVAL_SEC)
         else:
@@ -398,6 +419,17 @@ class AutoTrader:
                 from core.trading_engine import EngineMode
                 is_paper = self._engine.mode == EngineMode.PAPER
 
+            # Estimate profit / loss in $ and %
+            if rec.ensemble_signal == "BUY":
+                est_profit_usdt = (tp_price - price) * quantity
+                est_loss_usdt   = (price - sl_price) * quantity
+            else:
+                est_profit_usdt = (price - tp_price) * quantity
+                est_loss_usdt   = (sl_price - price) * quantity
+            cost_basis       = price * quantity + 1e-9
+            est_profit_pct   = est_profit_usdt / cost_basis * 100
+            est_loss_pct     = est_loss_usdt   / cost_basis * 100
+
             trade = ActiveTrade(
                 symbol=rec.symbol,
                 side=rec.ensemble_signal,
@@ -410,6 +442,15 @@ class AutoTrader:
                 paper=is_paper,
                 expected_rr=rec.rr_ratio,
                 source_scan_score=rec.combined_score,
+                estimated_profit_usdt=est_profit_usdt,
+                estimated_profit_pct=est_profit_pct,
+                estimated_loss_usdt=est_loss_usdt,
+                estimated_loss_pct=est_loss_pct,
+            )
+
+            self._intel.ml("AutoTrader",
+                f"📊 Estimated: profit={est_profit_usdt:+.4f} USDT ({est_profit_pct:+.2f}%) | "
+                f"risk={est_loss_usdt:.4f} USDT ({est_loss_pct:.2f}%)"
             )
 
             # Log in journal
@@ -559,11 +600,13 @@ class AutoTrader:
         if self._drm:
             self._drm.record_outcome(pnl >= 0, pnl)
 
-        # Cool-off after stop hit
+        # After SL: skip cooldown, immediately rescan for a recovery trade
         if reason == "SL":
-            self._cooldown_until = time.time() + self.COOLDOWN_AFTER_LOSS_SEC
+            self._recovery_mode = True
+            self._last_scan_time = 0.0   # Force immediate rescan
             self._intel.ml("AutoTrader",
-                f"⏳ SL hit – cool-off for {self.COOLDOWN_AFTER_LOSS_SEC//60} minutes")
+                f"🔄 SL hit – entering recovery mode, rescanning in {self.RECOVERY_SCAN_DELAY_SEC}s")
+            time.sleep(self.RECOVERY_SCAN_DELAY_SEC)
 
         # Clear scanner exclusion
         if self._scanner:

@@ -20,7 +20,15 @@ FEATURE_COLUMNS = [
     "pct_change","hl_range","bb_width","macd_hist",
     "vol_sma_ratio","price_ema20_ratio","price_ema50_ratio",
     "rsi_norm","adx_norm",
+    # Timeframe encoding (normalised 0-1: 1m=0.0 … 1w=1.0)
+    "timeframe_id",
 ]
+
+# Mapping from interval string to normalised 0-1 timeframe id
+TIMEFRAME_IDS: dict[str, float] = {
+    "1m": 0.0, "3m": 0.10, "5m": 0.20, "15m": 0.30, "30m": 0.40,
+    "1h": 0.55, "2h": 0.65, "4h": 0.75, "1d": 0.90, "1w": 1.0,
+}
 
 
 class FeatureEngineer:
@@ -37,7 +45,7 @@ class FeatureEngineer:
 
     # ── Feature creation ───────────────────────────────────────────────
     @staticmethod
-    def add_derived_features(df: pd.DataFrame) -> pd.DataFrame:
+    def add_derived_features(df: pd.DataFrame, interval: str = "") -> pd.DataFrame:
         df = df.copy()
         df["pct_change"] = df["close"].pct_change()
         df["hl_range"] = (df["high"] - df["low"]) / df["close"]
@@ -59,6 +67,9 @@ class FeatureEngineer:
             df["rsi_norm"] = df["rsi"] / 100.0
         if "adx" in df.columns:
             df["adx_norm"] = df["adx"] / 100.0
+        # Timeframe identity – constant column so the model knows which TF it's on
+        tf_id = TIMEFRAME_IDS.get(interval, 0.55)   # default to 1h if unknown
+        df["timeframe_id"] = tf_id
         return df
 
     # ── Label generation ───────────────────────────────────────────────
@@ -81,13 +92,14 @@ class FeatureEngineer:
         self,
         df: pd.DataFrame,
         fit_scaler: bool = True,
+        interval: str = "",
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Return (X, y) tensors with shape:
           X: (N, lookback, features)
           y: (N,) int64 class labels
         """
-        df = self.add_derived_features(df)
+        df = self.add_derived_features(df, interval=interval)
         labels = self.generate_labels(df, self.horizon)
 
         available = [c for c in FEATURE_COLUMNS if c in df.columns]
@@ -112,9 +124,9 @@ class FeatureEngineer:
         y_t = torch.tensor(np.array(y), dtype=torch.long)
         return X_t, y_t
 
-    def transform_live(self, df: pd.DataFrame) -> torch.Tensor:
+    def transform_live(self, df: pd.DataFrame, interval: str = "") -> torch.Tensor:
         """Transform the latest lookback window for inference."""
-        df = self.add_derived_features(df)
+        df = self.add_derived_features(df, interval=interval)
         available = [c for c in FEATURE_COLUMNS if c in df.columns]
         data = df[available].tail(self.lookback).ffill().bfill().values
         if len(data) < self.lookback:

@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.styles import (
-    ACCENT, GREEN, RED, YELLOW, BG2, BG3, BG4, BORDER, FG0, FG1, FG2,
+    ACCENT, GREEN, RED, YELLOW, BG2, BG3, BG4, BORDER, FG0, FG1, FG2, PURPLE,
 )
 
 # ── State colour map ───────────────────────────────────────────────────────────
@@ -58,6 +58,94 @@ _STATE_ICONS = {
     "exiting":    "⏏ EXITING",
     "cooldown":   "⏳ COOLDOWN",
 }
+
+
+# ── P&L Summary Panel ─────────────────────────────────────────────────────────
+
+class PnLSummaryPanel(QFrame):
+    """
+    Prominent strip showing the last closed trade:
+      Last BUY @ price  |  Last SELL @ price  |  P&L  |  % change
+    Updates every time a CycleResult arrives.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setStyleSheet(
+            f"background:{BG3}; border:1px solid {BORDER}; border-radius:5px;"
+        )
+        self.setFixedHeight(54)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(20)
+
+        def _kv(key: str, default: str = "—", key_col: str = FG2) -> tuple[QLabel, QLabel]:
+            k = QLabel(key)
+            k.setStyleSheet(f"color:{key_col}; font-size:10px;")
+            v = QLabel(default)
+            v.setStyleSheet(f"color:{FG0}; font-size:13px; font-weight:700; font-family:monospace;")
+            vlay = QVBoxLayout()
+            vlay.setSpacing(1)
+            vlay.addWidget(k)
+            vlay.addWidget(v)
+            return vlay, v
+
+        title = QLabel("LAST TRADE")
+        title.setStyleSheet(
+            f"color:{ACCENT}; font-size:9px; font-weight:700; letter-spacing:1px;"
+        )
+
+        l1, self.lbl_symbol   = _kv("Symbol")
+        l2, self.lbl_side     = _kv("Side")
+        l3, self.lbl_buy      = _kv("Entry Price")
+        l4, self.lbl_sell     = _kv("Exit Price")
+        l5, self.lbl_pnl      = _kv("P&L (USDT)")
+        l6, self.lbl_pct      = _kv("P&L %")
+
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet(f"color:{BORDER};")
+
+        layout.addWidget(title)
+        layout.addWidget(sep)
+        for l in (l1, l2, l3, l4, l5, l6):
+            layout.addLayout(l)
+        layout.addStretch()
+
+    def update_result(self, result) -> None:
+        """Called with a CycleResult (or dict) when a trade closes."""
+        if result is None:
+            return
+        # Support both CycleResult dataclass and dict rows from DB
+        def _get(attr, default=0):
+            if hasattr(result, attr):
+                return getattr(result, attr)
+            if isinstance(result, dict):
+                return result.get(attr, default)
+            return default
+
+        symbol    = _get("symbol", "—")
+        side      = _get("side", "—")
+        entry     = _get("entry_price", 0.0)
+        exit_p    = _get("exit_price", 0.0)
+        pnl       = _get("pnl", 0.0)
+        pnl_pct   = _get("pnl_pct", 0.0)
+        reason    = _get("exit_reason", "")
+
+        win        = pnl >= 0
+        pnl_col    = GREEN if win else RED
+        side_col   = GREEN if side == "BUY" else RED
+        pct_prefix = "+" if pnl_pct >= 0 else ""
+
+        self.lbl_symbol.setText(symbol)
+        self.lbl_side.setText(f"{side} → {reason}")
+        self.lbl_side.setStyleSheet(f"color:{side_col}; font-size:13px; font-weight:700; font-family:monospace;")
+        self.lbl_buy.setText(f"{entry:.6f}")
+        self.lbl_sell.setText(f"{exit_p:.6f}")
+        self.lbl_pnl.setText(f"{pnl:+.4f}")
+        self.lbl_pnl.setStyleSheet(f"color:{pnl_col}; font-size:13px; font-weight:700; font-family:monospace;")
+        self.lbl_pct.setText(f"{pct_prefix}{pnl_pct:.2f}%")
+        self.lbl_pct.setStyleSheet(f"color:{pnl_col}; font-size:13px; font-weight:700; font-family:monospace;")
 
 
 # ── Small reusable table ───────────────────────────────────────────────────────
@@ -116,20 +204,23 @@ class _ActiveTradePanel(QGroupBox):
             hl.addStretch()
             return hl, lbl_val
 
-        r1, self.lbl_symbol   = _row("Symbol:")
-        r2, self.lbl_side     = _row("Side:")
-        r3, self.lbl_entry    = _row("Entry:")
-        r4, self.lbl_sl_tp    = _row("SL / TP:")
-        r5, self.lbl_pnl      = _row("Live P&L:")
-        r6, self.lbl_conf     = _row("Confidence:")
-        for r in (r1, r2, r3, r4, r5, r6):
+        r1, self.lbl_symbol     = _row("Symbol:")
+        r2, self.lbl_side       = _row("Side:")
+        r3, self.lbl_entry      = _row("Entry:")
+        r4, self.lbl_sl_tp      = _row("SL / TP:")
+        r5, self.lbl_pnl        = _row("Live P&L:")
+        r6, self.lbl_conf       = _row("Confidence:")
+        r7, self.lbl_est_profit = _row("Est. Profit:")
+        r8, self.lbl_est_risk   = _row("Est. Risk:")
+        for r in (r1, r2, r3, r4, r5, r6, r7, r8):
             layout.addLayout(r)
         layout.addStretch()
 
     def update_trade(self, trade) -> None:
         if trade is None:
             for lbl in (self.lbl_symbol, self.lbl_side, self.lbl_entry,
-                        self.lbl_sl_tp, self.lbl_pnl, self.lbl_conf):
+                        self.lbl_sl_tp, self.lbl_pnl, self.lbl_conf,
+                        self.lbl_est_profit, self.lbl_est_risk):
                 lbl.setText("—")
                 lbl.setStyleSheet(f"color:{FG0}; font-size:11px; font-family:monospace;")
             return
@@ -141,6 +232,16 @@ class _ActiveTradePanel(QGroupBox):
         self.lbl_entry.setText(f"{trade.entry_price:.6f}")
         self.lbl_sl_tp.setText(f"{trade.stop_loss:.6f}  /  {trade.take_profit:.6f}")
         self.lbl_conf.setText(f"{trade.confidence:.0%}")
+
+        # Estimated profit / risk
+        ep = getattr(trade, "estimated_profit_usdt", 0.0)
+        ep_pct = getattr(trade, "estimated_profit_pct", 0.0)
+        er = getattr(trade, "estimated_loss_usdt", 0.0)
+        er_pct = getattr(trade, "estimated_loss_pct", 0.0)
+        self.lbl_est_profit.setText(f"+{ep:.4f} USDT  ({ep_pct:+.2f}%)")
+        self.lbl_est_profit.setStyleSheet(f"color:{GREEN}; font-size:11px; font-family:monospace;")
+        self.lbl_est_risk.setText(f"-{er:.4f} USDT  (-{er_pct:.2f}%)")
+        self.lbl_est_risk.setStyleSheet(f"color:{RED}; font-size:11px; font-family:monospace;")
 
     def update_live_pnl(self, pnl: float) -> None:
         colour = GREEN if pnl >= 0 else RED
@@ -221,11 +322,13 @@ class AutoTraderWidget(QWidget):
         self,
         auto_trader=None,
         market_scanner=None,
+        chart_widget=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self._at  = auto_trader
-        self._ms  = market_scanner
+        self._at    = auto_trader
+        self._ms    = market_scanner
+        self._chart = chart_widget   # ChartWidget instance (or None)
         self._last_summary = None
 
         self._setup_ui()
@@ -391,6 +494,10 @@ class AutoTraderWidget(QWidget):
         mid_splitter.setSizes([320, 680])
         root.addWidget(mid_splitter, 2)
 
+        # ── P&L Summary strip ────────────────────────────────────────────
+        self.pnl_panel = PnLSummaryPanel()
+        root.addWidget(self.pnl_panel)
+
         # ── Cycle results table ──────────────────────────────────────────
         results_grp = QGroupBox("Cycle Results")
         rr_layout = QVBoxLayout(results_grp)
@@ -419,6 +526,11 @@ class AutoTraderWidget(QWidget):
             self._at.on_cycle_result(
                 lambda result: self._result_received.emit(result)
             )
+            # Wire chart auto-follow: chart follows active symbol
+            if self._chart:
+                self._at.on_chart_follow(
+                    lambda sym: self._chart.set_symbol(sym)
+                )
 
         if self._ms:
             self._ms.on_scan_complete(
@@ -449,10 +561,17 @@ class AutoTraderWidget(QWidget):
     def _on_rec_update(self, rec, summary) -> None:
         self.rec_card.update_rec(rec)
         self._on_scan_update(summary)
+        # Auto-follow the recommended symbol in the chart
+        if rec and self._chart:
+            try:
+                self._chart.set_symbol(rec.symbol)
+            except Exception:
+                pass
 
     def _on_result_update(self, result) -> None:
         self._append_cycle_result(result)
         self.trade_panel.update_trade(None)
+        self.pnl_panel.update_result(result)   # Update prominent P&L strip
         if self._at:
             self._refresh_stats()
 

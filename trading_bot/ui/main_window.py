@@ -914,12 +914,47 @@ class MainWindow(QMainWindow):
     def _build_autotrader_page(self) -> None:
         try:
             from ui.auto_trader_widget import AutoTraderWidget
-            self.at_page = AutoTraderWidget(
+            from ui.alert_panel import AlertPanel
+            from core.alert_manager import get_alert_manager
+
+            self._alert_mgr = get_alert_manager()
+
+            # Wire AutoTrader cycle results → AlertManager
+            if self._auto_trader:
+                try:
+                    self._auto_trader.on_cycle_result(self._alert_mgr.on_cycle_result)
+                except Exception:
+                    pass
+
+            # Build AutoTrader widget (pass chart widget if trading page has one)
+            chart_ref = None
+            try:
+                chart_ref = list(self._chart_widgets.values())[0] if self._chart_widgets else None
+            except Exception:
+                pass
+
+            self.at_widget = AutoTraderWidget(
                 auto_trader=self._auto_trader,
                 market_scanner=self._market_scanner,
+                chart_widget=chart_ref,
             )
-        except Exception:
-            self.at_page = _placeholder("AutoTrader", "Not available")
+
+            # Build alert panel
+            self.alert_widget = AlertPanel(alert_manager=self._alert_mgr)
+
+            # Combine both in a tab widget
+            from PyQt6.QtWidgets import QTabWidget
+            tabs = QTabWidget()
+            tabs.setStyleSheet(f"""
+                QTabBar::tab {{ padding:5px 14px; font-size:11px; }}
+                QTabBar::tab:selected {{ font-weight:700; }}
+            """)
+            tabs.addTab(self.at_widget,    "🤖  AutoTrader")
+            tabs.addTab(self.alert_widget, "🔔  Alerts")
+            self.at_page = tabs
+
+        except Exception as exc:
+            self.at_page = _placeholder("AutoTrader", f"Not available: {exc}")
         self.stack.addWidget(self.at_page)
 
     def _build_ml_page(self) -> None:

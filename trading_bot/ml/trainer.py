@@ -169,31 +169,43 @@ class MLTrainer:
         return session_id
 
     # ── Universal model training ────────────────────────────────────────
+
+    # Intervals the universal model is trained on (from fastest to slowest)
+    TRAIN_INTERVALS = ["1m", "5m", "15m", "1h", "4h"]
+
     def _train_universal(self, symbols: list[str], session_id: str | None) -> Path:
         ml_cfg = self._settings.ml
         n_features = None
         all_X, all_y = [], []
 
-        for i, sym in enumerate(symbols[:20]):   # Use top 20 for universal model
+        top_syms = symbols[:20]   # Use top 20 for universal model
+        total_steps = len(top_syms) * len(self.TRAIN_INTERVALS)
+        step = 0
+
+        for sym in top_syms:
             if self._stop_event.is_set():
                 break
-            try:
-                df = DataCollector.load_dataframe(sym, "1h", limit=5000)
-                if len(df) < 200:
-                    continue
-                fe = FeatureEngineer(ml_cfg.lookback_window, ml_cfg.prediction_horizon)
-                X, y = fe.build_sequences(df)
-                if len(X) == 0:
-                    continue
-                all_X.append(X)
-                all_y.append(y)
-                if n_features is None:
-                    n_features = X.shape[-1]
-            except Exception as exc:
-                logger.warning(f"Feature engineering failed [{sym}]: {exc}")
+            for interval in self.TRAIN_INTERVALS:
+                if self._stop_event.is_set():
+                    break
+                step += 1
+                try:
+                    df = DataCollector.load_dataframe(sym, interval, limit=5000)
+                    if len(df) < 200:
+                        continue
+                    fe = FeatureEngineer(ml_cfg.lookback_window, ml_cfg.prediction_horizon)
+                    X, y = fe.build_sequences(df, interval=interval)
+                    if len(X) == 0:
+                        continue
+                    all_X.append(X)
+                    all_y.append(y)
+                    if n_features is None:
+                        n_features = X.shape[-1]
+                except Exception as exc:
+                    logger.warning(f"Feature engineering failed [{sym}/{interval}]: {exc}")
 
-            pct = 40 + (i / len(symbols[:20])) * 30
-            self._emit("stage", f"Building features: {sym}", pct)
+                pct = 40 + (step / total_steps) * 30
+                self._emit("stage", f"Building features: {sym}/{interval}", pct)
 
         if not all_X:
             logger.warning("No training data available – using synthetic.")
@@ -315,8 +327,9 @@ class MLTrainer:
         ml_cfg = self._settings.ml
         all_preds, all_true = [], []
         try:
+            from ml.feature_engineering import FEATURE_COLUMNS
             model = LSTMModel(
-                n_features=len(__import__("ml.feature_engineering", fromlist=["FEATURE_COLUMNS"]).FEATURE_COLUMNS),
+                n_features=len(FEATURE_COLUMNS),
                 hidden_size=ml_cfg.lstm_hidden_size,
             ).to(self._device)
             model.load_state_dict(torch.load(model_path, map_location=self._device))
@@ -327,7 +340,7 @@ class MLTrainer:
                 if len(df) < 100:
                     continue
                 fe = FeatureEngineer(ml_cfg.lookback_window, ml_cfg.prediction_horizon)
-                X, y = fe.build_sequences(df)
+                X, y = fe.build_sequences(df, interval="1h")
                 if len(X) == 0:
                     continue
                 with torch.no_grad():
