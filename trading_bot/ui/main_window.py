@@ -74,21 +74,42 @@ _PANEL_HELP: dict[int, tuple[str, str]] = {
         "• Regime detector: Bull / Bear / Ranging / Volatile\n"
         "• Monte Carlo projection of future portfolio paths\n"
         "• Walk-forward validation of ML model performance"),
-    4: ("Connections",
+    4: ("Backtesting Engine",
+        "Historical strategy backtesting with full performance analysis.\n\n"
+        "• Select symbol, interval, date range and initial capital\n"
+        "• Run ML model or custom rule-based strategies\n"
+        "• Equity curve chart with drawdown overlay\n"
+        "• Full trade log with entry/exit prices and P&L\n"
+        "• PDF export of backtest results"),
+    5: ("Trade Journal",
+        "Audit trail and performance analysis of all trades.\n\n"
+        "• Full history of every trade with context and reasoning\n"
+        "• Win rate, average R:R, expectancy statistics\n"
+        "• P&L breakdown by symbol, strategy and time period\n"
+        "• Signal accuracy scores for each ML source\n"
+        "• Export journal to CSV for external analysis"),
+    6: ("Strategy Builder",
+        "Visual rule-based strategy editor with integrated backtesting.\n\n"
+        "• Drag-and-drop entry and exit condition builder\n"
+        "• Supported indicators: RSI, MACD, EMA, BB, ATR, ML signals\n"
+        "• Configure position sizing and SL/TP rules\n"
+        "• Run backtest directly from the builder\n"
+        "• Save and load named strategy profiles"),
+    7: ("Connections",
         "Live health monitoring for all external services.\n\n"
         "• Binance REST API + WebSocket stream\n"
         "• PostgreSQL with connection latency\n"
         "• Redis cache ping latency\n"
         "• Telegram bot and REST API server\n"
         "• Auto-checks every 30 s, manual Check All button"),
-    5: ("Settings",
+    8: ("Settings",
         "Full system configuration.\n\n"
         "• Binance API keys, testnet toggle\n"
         "• ML hyperparameters: LSTM layers, learning rate, etc.\n"
         "• Trading risk limits and execution mode\n"
         "• UK CGT tax settings and email reports\n"
         "• UI theme, font size, accent colour"),
-    6: ("Help",
+    9: ("Help",
         "Documentation and keyboard shortcuts.\n\n"
         "• Complete keyboard shortcut reference table\n"
         "• Architecture overview and data flow\n"
@@ -289,13 +310,16 @@ class HeaderBar(QFrame):
 # ══════════════════════════════════════════════════════════════════════════════
 
 _NAV_ITEMS = [
-    (0, "trading",     "TRADE"),
-    (1, "autotrader",  "AUTO"),
-    (2, "ml",          "ML"),
-    (3, "risk",        "RISK"),
-    (4, "connections", "NET"),
-    (5, "settings",    "CFG"),
-    (6, "help",        "HELP"),
+    (0, "trading",      "TRADE"),
+    (1, "autotrader",   "AUTO"),
+    (2, "ml",           "ML"),
+    (3, "risk",         "RISK"),
+    (4, "backtest",     "BT"),
+    (5, "journal",      "JNL"),
+    (6, "strategy",     "STRAT"),
+    (7, "connections",  "NET"),
+    (8, "settings",     "CFG"),
+    (9, "help",         "HELP"),
 ]
 
 
@@ -791,6 +815,8 @@ class MainWindow(QMainWindow):
         telegram=None,
         new_token_watcher=None,
         regime_detector=None,
+        mtf_filter=None,
+        signal_council=None,
         ensemble=None,
         dynamic_risk=None,
         monte_carlo=None,
@@ -798,33 +824,47 @@ class MainWindow(QMainWindow):
         trade_journal=None,
         market_scanner=None,
         auto_trader=None,
+        market_pulse=None,
+        forecast_tracker=None,
+        archive_downloader=None,
+        data_collector=None,
+        ping_pong=None,
+        strategy_manager=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
 
-        self._engine          = engine
-        self._portfolio       = portfolio
-        self._predictor       = predictor
-        self._order_manager   = order_manager
-        self._trainer         = trainer
-        self._tax_calc        = tax_calc
-        self._cl              = continuous_learner
-        self._whale_watcher   = whale_watcher
-        self._token_ml        = token_ml
-        self._sentiment       = sentiment
-        self._port_opt        = port_opt
-        self._backtester      = backtester
-        self._voice           = voice
-        self._telegram        = telegram
-        self._new_token_watcher = new_token_watcher
-        self._regime_detector = regime_detector
-        self._ensemble        = ensemble
-        self._dynamic_risk    = dynamic_risk
-        self._monte_carlo     = monte_carlo
-        self._walk_forward    = walk_forward
-        self._trade_journal   = trade_journal
-        self._market_scanner  = market_scanner
-        self._auto_trader     = auto_trader
+        self._engine             = engine
+        self._portfolio          = portfolio
+        self._predictor          = predictor
+        self._order_manager      = order_manager
+        self._trainer            = trainer
+        self._tax_calc           = tax_calc
+        self._cl                 = continuous_learner
+        self._whale_watcher      = whale_watcher
+        self._token_ml           = token_ml
+        self._sentiment          = sentiment
+        self._port_opt           = port_opt
+        self._backtester         = backtester
+        self._voice              = voice
+        self._telegram           = telegram
+        self._new_token_watcher  = new_token_watcher
+        self._regime_detector    = regime_detector
+        self._mtf_filter         = mtf_filter
+        self._signal_council     = signal_council
+        self._ensemble           = ensemble
+        self._dynamic_risk       = dynamic_risk
+        self._monte_carlo        = monte_carlo
+        self._walk_forward       = walk_forward
+        self._trade_journal      = trade_journal
+        self._market_scanner     = market_scanner
+        self._auto_trader        = auto_trader
+        self._market_pulse       = market_pulse
+        self._forecast_tracker   = forecast_tracker
+        self._archive_downloader = archive_downloader
+        self._data_collector     = data_collector
+        self._ping_pong          = ping_pong
+        self._strategy_manager   = strategy_manager
 
         self._settings       = get_settings()
         self._intel          = get_intel_logger()
@@ -881,13 +921,16 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
 
         # Pages
-        self._build_trading_page()      # 0
-        self._build_autotrader_page()   # 1
-        self._build_ml_page()           # 2
-        self._build_risk_page()         # 3
-        self._build_connections_page()  # 4
-        self._build_settings_page()     # 5
-        self._build_help_page()         # 6
+        self._build_trading_page()       # 0
+        self._build_autotrader_page()    # 1
+        self._build_ml_page()            # 2
+        self._build_risk_page()          # 3
+        self._build_backtest_page()      # 4
+        self._build_trade_journal_page() # 5
+        self._build_strategy_page()      # 6
+        self._build_connections_page()   # 7
+        self._build_settings_page()      # 8
+        self._build_help_page()          # 9
 
         # Toast notification overlay (floats over the window)
         self._toast = ToastOverlay(central)
@@ -926,18 +969,12 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
 
-            # Start MarketPulse broad watcher and wire to AlertManager
-            try:
-                from ml.market_pulse import MarketPulse
-                from db.redis_client import RedisClient
-                self._market_pulse = MarketPulse(
-                    redis_client=RedisClient(),
-                    binance_client=getattr(self._engine, "_client", None),
-                )
-                self._market_pulse.on_alert(self._alert_mgr.on_pulse_alert)
-                self._market_pulse.start()
-            except Exception:
-                self._market_pulse = None
+            # Wire pre-built MarketPulse service to AlertManager
+            if self._market_pulse:
+                try:
+                    self._market_pulse.on_alert(self._alert_mgr.on_pulse_alert)
+                except Exception:
+                    pass
 
             # Wire new-token watcher → AlertManager
             if self._new_token_watcher:
@@ -954,7 +991,9 @@ class MainWindow(QMainWindow):
             # Build AutoTrader widget (pass chart widget if trading page has one)
             chart_ref = None
             try:
-                chart_ref = list(self._chart_widgets.values())[0] if self._chart_widgets else None
+                chart_panel = getattr(self.trading_page, "chart_panel", None)
+                cw = getattr(chart_panel, "_chart_widgets", None)
+                chart_ref = list(cw.values())[0] if cw else None
             except Exception:
                 pass
 
@@ -967,15 +1006,34 @@ class MainWindow(QMainWindow):
             # Build alert panel
             self.alert_widget = AlertPanel(alert_manager=self._alert_mgr)
 
-            # Combine both in a tab widget
+            # Combine in a tab widget
             from PyQt6.QtWidgets import QTabWidget
             tabs = QTabWidget()
-            tabs.setStyleSheet(f"""
-                QTabBar::tab {{ padding:5px 14px; font-size:11px; }}
-                QTabBar::tab:selected {{ font-weight:700; }}
+            tabs.setStyleSheet("""
+                QTabBar::tab { padding:5px 14px; font-size:11px; }
+                QTabBar::tab:selected { font-weight:700; }
             """)
             tabs.addTab(self.at_widget,    "🤖  AutoTrader")
             tabs.addTab(self.alert_widget, "🔔  Alerts")
+
+            # Ping-Pong range trader tab
+            try:
+                from ui.ping_pong_widget import PingPongWidget
+                self.pp_widget = PingPongWidget(ping_pong_trader=self._ping_pong)
+                tabs.addTab(self.pp_widget, "⚡  Ping-Pong")
+            except Exception:
+                pass
+
+            # ML Strategy Manager tab
+            try:
+                from ui.strategy_manager_widget import StrategyManagerWidget
+                self.strat_widget = StrategyManagerWidget(
+                    strategy_manager=self._strategy_manager
+                )
+                tabs.addTab(self.strat_widget, "🧠  Strategies")
+            except Exception:
+                pass
+
             self.at_page = tabs
 
         except Exception as exc:
@@ -1020,6 +1078,30 @@ class MainWindow(QMainWindow):
             self.risk_page = _placeholder("Risk Dashboard", "Not available")
         self.stack.addWidget(self.risk_page)
 
+    def _build_backtest_page(self) -> None:
+        try:
+            from ui.backtest_widget import BacktestWidget
+            self.backtest_page = BacktestWidget(backtester=self._backtester)
+        except Exception as exc:
+            self.backtest_page = _placeholder("Backtesting Engine", f"Not available: {exc}")
+        self.stack.addWidget(self.backtest_page)
+
+    def _build_trade_journal_page(self) -> None:
+        try:
+            from ui.trade_journal_widget import TradeJournalWidget
+            self.journal_page = TradeJournalWidget(trade_journal=self._trade_journal)
+        except Exception as exc:
+            self.journal_page = _placeholder("Trade Journal", f"Not available: {exc}")
+        self.stack.addWidget(self.journal_page)
+
+    def _build_strategy_page(self) -> None:
+        try:
+            from ui.strategy_builder import StrategyBuilderWidget
+            self.strategy_page = StrategyBuilderWidget(backtester=self._backtester)
+        except Exception as exc:
+            self.strategy_page = _placeholder("Strategy Builder", f"Not available: {exc}")
+        self.stack.addWidget(self.strategy_page)
+
     def _build_connections_page(self) -> None:
         from ui.connections_widget import ConnectionsWidget
         binance_client = None
@@ -1053,16 +1135,20 @@ class MainWindow(QMainWindow):
 
         # File
         fm = mb.addMenu("&File")
-        fm.addAction(self._act("Settings", lambda: self._navigate_to(5), "Ctrl+,"))
+        fm.addAction(self._act("Settings", lambda: self._navigate_to(8), "Ctrl+,"))
         fm.addSeparator()
         fm.addAction(self._act("Exit", self.close, "Ctrl+Q"))
 
         # View
         vm = mb.addMenu("&View")
-        labels = ["Trading","AutoTrader","ML","Risk","Connections","Settings","Help"]
+        labels = [
+            "Trading", "AutoTrader", "ML", "Risk",
+            "Backtest", "Trade Journal", "Strategy Builder",
+            "Connections", "Settings", "Help",
+        ]
         for i, lbl in enumerate(labels):
-            vm.addAction(self._act(lbl, lambda _, idx=i: self._navigate_to(idx),
-                                   f"Ctrl+{i+1}"))
+            sc = f"Ctrl+{i+1}" if i < 9 else ""
+            vm.addAction(self._act(lbl, lambda _, idx=i: self._navigate_to(idx), sc))
         vm.addSeparator()
         vm.addAction(self._act("Toggle Intel Log",   self._toggle_intel_log,   "Ctrl+L"))
         vm.addAction(self._act("Toggle Order Book",  self._toggle_order_book,  "Ctrl+B"))
@@ -1108,7 +1194,7 @@ class MainWindow(QMainWindow):
 
         # Help
         hm = mb.addMenu("&Help")
-        hm.addAction(self._act("Help Panel", lambda: self._navigate_to(6), "F1"))
+        hm.addAction(self._act("Help Panel", lambda: self._navigate_to(9), "F1"))
         hm.addAction(self._act("About",      self._show_about))
 
     @staticmethod
@@ -1132,8 +1218,10 @@ class MainWindow(QMainWindow):
             ("Ctrl+5", lambda: self._navigate_to(4)),
             ("Ctrl+6", lambda: self._navigate_to(5)),
             ("Ctrl+7", lambda: self._navigate_to(6)),
+            ("Ctrl+8", lambda: self._navigate_to(7)),
+            ("Ctrl+9", lambda: self._navigate_to(8)),
             ("F11",    self._toggle_fullscreen),
-            ("F1",     lambda: self._navigate_to(6)),
+            ("F1",     lambda: self._navigate_to(9)),
         ]
         for key, fn in pairs:
             sc = QShortcut(QKeySequence(key), self)
@@ -1181,6 +1269,51 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        # Wire RegimeDetector regime changes → intel log
+        if self._regime_detector:
+            try:
+                def _on_regime(snap):
+                    self._intel.system("RegimeDetector",
+                        f"Regime → {snap.regime}  "
+                        f"conf={snap.confidence:.0%}  "
+                        f"bull_prob={snap.bull_probability:.0%}  "
+                        f"pos_mult={snap.position_multiplier:.2f}x")
+                    QTimer.singleShot(0, lambda s=snap: self._on_regime_changed(s))
+                self._regime_detector.on_regime_change(_on_regime)
+            except Exception:
+                pass
+
+        # Wire MTFConfluenceFilter → intel log
+        if self._mtf_filter:
+            try:
+                def _on_confluence(sig):
+                    self._intel.signal("MTFConfluence",
+                        f"{sig.symbol}  {sig.direction}  "
+                        f"score={sig.confluence_pct:.0%}  "
+                        f"passes={sig.passes_filter}")
+                self._mtf_filter.on_confluence(_on_confluence)
+            except Exception:
+                pass
+
+        # Wire EnsembleAggregator → intel log + ML page
+        if self._ensemble:
+            try:
+                def _on_ensemble(sig):
+                    self._intel.signal("Ensemble",
+                        f"{sig.symbol}  {sig.final_signal}  "
+                        f"conf={sig.final_confidence:.0%}  "
+                        f"buy={sig.buy_score:.2f} sell={sig.sell_score:.2f}")
+                    if hasattr(self.ml_page, "add_signal"):
+                        self.ml_page.add_signal({
+                            "symbol": sig.symbol,
+                            "action": sig.final_signal,
+                            "confidence": sig.final_confidence,
+                            "source": "Ensemble",
+                        })
+                self._ensemble.on_signal(_on_ensemble)
+            except Exception:
+                pass
+
     # ──────────────────────────────────────────────────────────────────
     # Timers
     # ──────────────────────────────────────────────────────────────────
@@ -1224,7 +1357,28 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_signal_event(self, signal: dict) -> None:
-        pass
+        action = signal.get("action", signal.get("signal", ""))
+        sym    = signal.get("symbol", "")
+        conf   = signal.get("confidence", 0)
+        price  = signal.get("price", 0)
+        src    = signal.get("source", "TradingEngine")
+        self._intel.signal(src,
+            f"{action} {sym}  conf={conf:.1%}  price={price:,.4f}" if price else
+            f"{action} {sym}  conf={conf:.1%}",
+            signal)
+        try:
+            from api.webhooks import get_webhook_manager
+            get_webhook_manager().emit_signal(signal)
+        except Exception:
+            pass
+
+    def _on_regime_changed(self, snap) -> None:
+        """Update risk page when market regime changes."""
+        try:
+            if hasattr(self.risk_page, "update_regime"):
+                self.risk_page.update_regime(snap)
+        except Exception:
+            pass
 
     def _on_mode_change(self, data: dict) -> None:
         mode = str(data.get("new", "")).upper()
@@ -1405,7 +1559,7 @@ class MainWindow(QMainWindow):
             self._intel.error("MainWindow", f"Tax email error: {e}")
 
     def _check_connections(self) -> None:
-        self._navigate_to(4)
+        self._navigate_to(7)
         QTimer.singleShot(200, self.connections_page._check_all)
 
     def _start_api_server(self) -> None:
@@ -1440,7 +1594,7 @@ class MainWindow(QMainWindow):
             "Auth: Bearer <first 16 chars of API key>")
 
     def _show_about(self) -> None:
-        self._navigate_to(6)
+        self._navigate_to(9)
 
     def _add_chart_tab(self) -> None:
         self.trading_page.chart_panel._prompt_add_tab()

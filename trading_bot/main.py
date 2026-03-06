@@ -206,6 +206,26 @@ def build_services(settings):
     from core.trade_journal import TradeJournal
     trade_journal = TradeJournal(ensemble=ensemble, dynamic_risk=dynamic_risk)
 
+    intel.system("Startup", "Initialising market pulse monitor…")
+    from ml.market_pulse import MarketPulse
+    from db.redis_client import RedisClient
+    market_pulse = MarketPulse(
+        redis_client=RedisClient(),
+        binance_client=binance,
+    )
+
+    intel.system("Startup", "Initialising forecast tracker…")
+    from ml.forecast_tracker import ForecastTracker
+    forecast_tracker = ForecastTracker()
+
+    intel.system("Startup", "Initialising archive downloader…")
+    from ml.archive_downloader import BinanceArchiveDownloader
+    archive_downloader = BinanceArchiveDownloader()
+
+    intel.system("Startup", "Initialising data collector…")
+    from ml.data_collector import DataCollector
+    data_collector = DataCollector(binance_client=binance)
+
     intel.system("Startup", "Initialising market scanner…")
     from ml.market_scanner import MarketScanner
     market_scanner = MarketScanner(
@@ -217,6 +237,24 @@ def build_services(settings):
         token_ml=token_ml,
         dynamic_risk=dynamic_risk,
         predictor=predictor,
+    )
+
+    intel.system("Startup", "Initialising strategy manager…")
+    from core.strategy_manager import StrategyManager
+    strategy_manager = StrategyManager(
+        regime_detector=regime_detector,
+        ensemble=ensemble,
+        trade_journal=trade_journal,
+    )
+
+    intel.system("Startup", "Initialising ping-pong range trader…")
+    from core.ping_pong_trader import PingPongTrader
+    ping_pong = PingPongTrader(
+        engine=engine,
+        regime_detector=regime_detector,
+        dynamic_risk=dynamic_risk,
+        trade_journal=trade_journal,
+        binance_client=binance,
     )
 
     intel.system("Startup", "Initialising auto-trader…")
@@ -277,6 +315,12 @@ def build_services(settings):
         "trade_journal": trade_journal,
         "market_scanner": market_scanner,
         "auto_trader": auto_trader,
+        "market_pulse": market_pulse,
+        "forecast_tracker": forecast_tracker,
+        "archive_downloader": archive_downloader,
+        "data_collector": data_collector,
+        "ping_pong": ping_pong,
+        "strategy_manager": strategy_manager,
     }
 
 
@@ -362,6 +406,18 @@ def start_background_services(services: dict, settings) -> None:
         except Exception:
             pass
     engine.on("whale", _on_whale)
+
+    # Strategy manager (ML auto-selection)
+    strat_mgr = services.get("strategy_manager")
+    if strat_mgr:
+        strat_mgr.start()
+        intel.system("Startup", "Strategy manager started (ML auto-selection active)")
+
+    # Market pulse broad monitor
+    market_pulse = services.get("market_pulse")
+    if market_pulse:
+        market_pulse.start()
+        intel.system("Startup", "Market pulse monitor started (5-min broad scan)")
 
     # Market scanner (background 5-min cycle)
     market_scanner = services.get("market_scanner")
@@ -532,6 +588,8 @@ def main() -> int:
         telegram=services.get("telegram"),
         new_token_watcher=services.get("new_token_watcher"),
         regime_detector=services.get("regime_detector"),
+        mtf_filter=services.get("mtf_filter"),
+        signal_council=services.get("signal_council"),
         ensemble=services.get("ensemble"),
         dynamic_risk=services.get("dynamic_risk"),
         monte_carlo=services.get("monte_carlo"),
@@ -539,6 +597,12 @@ def main() -> int:
         trade_journal=services.get("trade_journal"),
         market_scanner=services.get("market_scanner"),
         auto_trader=services.get("auto_trader"),
+        market_pulse=services.get("market_pulse"),
+        forecast_tracker=services.get("forecast_tracker"),
+        archive_downloader=services.get("archive_downloader"),
+        data_collector=services.get("data_collector"),
+        ping_pong=services.get("ping_pong"),
+        strategy_manager=services.get("strategy_manager"),
     )
     splash.finish(window)
     window.showMaximized()
