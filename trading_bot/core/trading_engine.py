@@ -264,7 +264,7 @@ class TradingEngine:
 
     # ── Advanced intelligence pipeline ────────────────────────────────
     def _on_regime_change(self, snapshot) -> None:
-        regime = snapshot.regime.value if hasattr(snapshot.regime, "value") else str(snapshot.regime)
+        regime = snapshot.regime.value
         self._intel_log(f"Regime changed → {regime} (conf {snapshot.confidence:.0%})")
         self._emit("signal", {"type": "regime_change", "regime": regime,
                                "confidence": snapshot.confidence})
@@ -419,7 +419,7 @@ class TradingEngine:
                 regime = ""
                 if self._regime_detector:
                     snap = self._regime_detector.current
-                    regime = snap.regime.value if hasattr(snap.regime, "value") else str(snap.regime)
+                    regime = snap.regime.value
                 mtf_score = getattr(signal.get("_mtf"), "confluence_pct", 0.0)
                 trade_id = self._trade_journal.open_trade(
                     symbol=symbol, side=side,

@@ -33,6 +33,7 @@ from PyQt6.QtWidgets import (
     QSplitter, QFrame, QComboBox, QSlider, QSizePolicy,
 )
 
+from core.auto_trader import CycleState
 from ui.styles import (
     ACCENT, GREEN, RED, YELLOW, BG2, BG3, BG4, BORDER, FG0, FG1, FG2,
 )
@@ -571,7 +572,7 @@ class AutoTraderWidget(QWidget):
             self._at.set_auto_threshold(value / 100.0)
 
     def _on_start(self) -> None:
-        if self._at and not self._at._running:
+        if self._at and self._at.state == CycleState.IDLE:
             self._at.start()
 
     def _on_stop(self) -> None:

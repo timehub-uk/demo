@@ -38,7 +38,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
+
+if TYPE_CHECKING:
+    from ml.market_scanner import PairScore, ScanSummary
 
 from loguru import logger
 from utils.logger import get_intel_logger
@@ -155,10 +158,10 @@ class AutoTrader:
 
     # ── Callbacks ──────────────────────────────────────────────────────
 
-    def on_state_change(self, cb: Callable) -> None:
+    def on_state_change(self, cb: Callable[[str], None]) -> None:
         self._state_callbacks.append(cb)
 
-    def on_recommendation(self, cb: Callable) -> None:
+    def on_recommendation(self, cb: "Callable[[PairScore, ScanSummary], None]") -> None:
         """Called when a scan produces a recommendation – pass to UI."""
         self._rec_callbacks.append(cb)
 
@@ -262,7 +265,7 @@ class AutoTrader:
         # Check circuit breaker
         if self._drm and self._drm.circuit_broken:
             self._intel.ml("AutoTrader",
-                f"⛔ Circuit breaker active: {self._drm._circuit_reason} – waiting…")
+                f"⛔ Circuit breaker active: {self._drm.status['circuit_reason']} – waiting…")
             self._set_state(CycleState.IDLE)
             time.sleep(60)
             return

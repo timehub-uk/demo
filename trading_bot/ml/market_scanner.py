@@ -364,7 +364,7 @@ class MarketScanner:
                 regime_str = ""
                 if self._regime:
                     snap = self._regime.current
-                    regime_str = snap.regime.value if hasattr(snap.regime, "value") else ""
+                    regime_str = snap.regime.value
 
                 decision = self._council.deliberate(sources, symbol=symbol, regime=regime_str)
                 score.council_disagreement = decision.disagreement_score
