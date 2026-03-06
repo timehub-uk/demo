@@ -206,6 +206,29 @@ def build_services(settings):
     from core.trade_journal import TradeJournal
     trade_journal = TradeJournal(ensemble=ensemble, dynamic_risk=dynamic_risk)
 
+    intel.system("Startup", "Initialising market scanner…")
+    from ml.market_scanner import MarketScanner
+    market_scanner = MarketScanner(
+        binance_client=binance,
+        regime_detector=regime_detector,
+        mtf_filter=mtf_filter,
+        signal_council=signal_council,
+        ensemble=ensemble,
+        token_ml=token_ml,
+        dynamic_risk=dynamic_risk,
+        predictor=predictor,
+    )
+
+    intel.system("Startup", "Initialising auto-trader…")
+    from core.auto_trader import AutoTrader
+    auto_trader = AutoTrader(
+        engine=engine,
+        scanner=market_scanner,
+        dynamic_risk=dynamic_risk,
+        trade_journal=trade_journal,
+        binance_client=binance,
+    )
+
     # Wire whale watcher + token ML into trading engine
     engine.set_whale_watcher(whale_watcher)
     engine.set_token_ml_manager(token_ml)
@@ -252,6 +275,8 @@ def build_services(settings):
         "monte_carlo": monte_carlo,
         "walk_forward": walk_forward,
         "trade_journal": trade_journal,
+        "market_scanner": market_scanner,
+        "auto_trader": auto_trader,
     }
 
 
@@ -337,6 +362,18 @@ def start_background_services(services: dict, settings) -> None:
         except Exception:
             pass
     engine.on("whale", _on_whale)
+
+    # Market scanner (background 5-min cycle)
+    market_scanner = services.get("market_scanner")
+    if market_scanner:
+        market_scanner.start(interval_sec=300)
+        intel.system("Startup", "Market scanner started (every 5 min)")
+
+    # Auto-trader (defaults to SEMI_AUTO – human presses Take Aim to confirm)
+    auto_trader = services.get("auto_trader")
+    if auto_trader:
+        auto_trader.start()
+        intel.system("Startup", "AutoTrader started (SEMI_AUTO mode)")
 
     # New token launch watcher
     ntw = services.get("new_token_watcher")
@@ -500,6 +537,8 @@ def main() -> int:
         monte_carlo=services.get("monte_carlo"),
         walk_forward=services.get("walk_forward"),
         trade_journal=services.get("trade_journal"),
+        market_scanner=services.get("market_scanner"),
+        auto_trader=services.get("auto_trader"),
     )
     splash.finish(window)
     window.showMaximized()

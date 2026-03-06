@@ -110,6 +110,8 @@ class MainWindow(QMainWindow):
         monte_carlo=None,
         walk_forward=None,
         trade_journal=None,
+        market_scanner=None,
+        auto_trader=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -134,6 +136,8 @@ class MainWindow(QMainWindow):
         self._monte_carlo = monte_carlo
         self._walk_forward = walk_forward
         self._trade_journal = trade_journal
+        self._market_scanner = market_scanner
+        self._auto_trader = auto_trader
         self._settings = get_settings()
         self._intel = get_intel_logger()
 
