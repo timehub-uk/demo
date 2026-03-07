@@ -674,8 +674,15 @@ def main() -> int:
     app.setOrganizationName("BinanceMLPro")
 
     # High-DPI support
-    from ui.styles import apply_theme
-    apply_theme(app)
+    from ui.styles import apply_theme, DEFAULT_THEME
+    # Load saved theme preference (falls back to DEFAULT_THEME = bitnfloat)
+    _saved_theme = DEFAULT_THEME
+    try:
+        from config import get_settings as _gs
+        _saved_theme = getattr(_gs(), "ui_theme", DEFAULT_THEME) or DEFAULT_THEME
+    except Exception:
+        pass
+    apply_theme(app, _saved_theme)
 
     # Font
     font = QFont("SF Pro Display", 13)

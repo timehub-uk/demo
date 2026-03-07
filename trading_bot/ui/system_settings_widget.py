@@ -281,6 +281,35 @@ class SystemSettingsWidget(QWidget):
 
     def _build_ui_tab(self) -> None:
         _, form = self._scrollable_tab("Interface", "settings")
+        form.addRow(_section_label("THEME"))
+
+        # Theme selector
+        from ui.styles import THEMES, DEFAULT_THEME
+        self.ui_theme = QComboBox()
+        for theme_key, theme_name in THEMES.items():
+            self.ui_theme.addItem(theme_name, theme_key)
+        # Set default selection
+        try:
+            from config import get_settings as _gs
+            saved = getattr(_gs(), "ui_theme", DEFAULT_THEME) or DEFAULT_THEME
+            for i in range(self.ui_theme.count()):
+                if self.ui_theme.itemData(i) == saved:
+                    self.ui_theme.setCurrentIndex(i)
+                    break
+        except Exception:
+            pass
+        form.addRow("Theme:", self.ui_theme)
+
+        # Apply theme immediately button
+        apply_theme_btn = QPushButton("Apply Theme Now")
+        apply_theme_btn.setStyleSheet(
+            f"QPushButton {{ background:{BG4}; color:{ACCENT}; border:1px solid {ACCENT}; "
+            f"border-radius:4px; padding:4px 12px; }}"
+            f"QPushButton:hover {{ background:{ACCENT}; color:#000; }}"
+        )
+        apply_theme_btn.clicked.connect(self._on_apply_theme)
+        form.addRow("", apply_theme_btn)
+
         form.addRow(_section_label("DISPLAY"))
         self.ui_font_size = QSpinBox(); self.ui_font_size.setRange(9,18); self.ui_font_size.setSuffix(" pt"); form.addRow("Font Size:", self.ui_font_size)
         self.ui_accent    = QLineEdit(); self.ui_accent.setPlaceholderText("#00D4FF"); form.addRow("Accent Color:", self.ui_accent)
@@ -291,6 +320,19 @@ class SystemSettingsWidget(QWidget):
         form.addRow("Default Interval:", self.ui_interval)
         self.ui_notif  = QCheckBox("Show desktop notifications"); form.addRow("Notifications:", self.ui_notif)
         self.ui_sounds = QCheckBox("Sound alerts"); form.addRow("Sounds:", self.ui_sounds)
+
+    def _on_apply_theme(self) -> None:
+        """Apply selected theme immediately to the running application."""
+        try:
+            from PyQt6.QtWidgets import QApplication
+            from ui.styles import apply_theme
+            theme_key = self.ui_theme.currentData()
+            app = QApplication.instance()
+            if app and theme_key:
+                apply_theme(app, theme_key)
+        except Exception as exc:
+            from loguru import logger
+            logger.warning(f"Theme apply failed: {exc!r}")
 
     # ── Load / Save ────────────────────────────────────────────────────
 
