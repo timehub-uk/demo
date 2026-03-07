@@ -832,6 +832,7 @@ class MainWindow(QMainWindow):
         strategy_manager=None,
         arb_detector=None,
         arb_trader=None,
+        trend_scanner=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -869,6 +870,7 @@ class MainWindow(QMainWindow):
         self._strategy_manager   = strategy_manager
         self._arb_detector       = arb_detector
         self._arb_trader         = arb_trader
+        self._trend_scanner      = trend_scanner
 
         self._settings       = get_settings()
         self._intel          = get_intel_logger()
@@ -1046,6 +1048,18 @@ class MainWindow(QMainWindow):
                     arbitrage_trader=self._arb_trader,
                 )
                 tabs.addTab(self.arb_widget, "⚡  Arbitrage")
+            except Exception:
+                pass
+
+            # Multi-timeframe trend scanner tab
+            try:
+                from ui.trend_widget import TrendWidget
+                self.trend_widget = TrendWidget(
+                    trend_scanner=self._trend_scanner,
+                )
+                # Forward double-click → chart follows symbol
+                self.trend_widget.symbol_selected.connect(self._on_symbol_changed)
+                tabs.addTab(self.trend_widget, "📈  Trends")
             except Exception:
                 pass
 

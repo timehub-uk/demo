@@ -274,6 +274,10 @@ def build_services(settings):
         paper=True,    # paper mode by default; user can toggle in UI
     )
 
+    intel.system("Startup", "Initialising multi-timeframe trend scanner…")
+    from ml.trend_scanner import TrendScanner
+    trend_scanner = TrendScanner(binance_client=binance)
+
     intel.system("Startup", "Initialising auto-trader…")
     from core.auto_trader import AutoTrader
     auto_trader = AutoTrader(
@@ -338,8 +342,9 @@ def build_services(settings):
         "data_collector": data_collector,
         "ping_pong": ping_pong,
         "strategy_manager": strategy_manager,
-        "arb_detector": arb_detector,
-        "arb_trader": arb_trader,
+        "arb_detector":   arb_detector,
+        "arb_trader":     arb_trader,
+        "trend_scanner":  trend_scanner,
     }
 
 
@@ -437,6 +442,12 @@ def start_background_services(services: dict, settings) -> None:
     if arb_det:
         arb_det.start()
         intel.system("Startup", "Arbitrage detector started")
+
+    # Multi-timeframe trend scanner
+    trend_scanner = services.get("trend_scanner")
+    if trend_scanner:
+        trend_scanner.start()
+        intel.system("Startup", "Trend scanner started (7 timeframes × all pairs)")
 
     # Market pulse broad monitor
     market_pulse = services.get("market_pulse")
@@ -630,6 +641,7 @@ def main() -> int:
         strategy_manager=services.get("strategy_manager"),
         arb_detector=services.get("arb_detector"),
         arb_trader=services.get("arb_trader"),
+        trend_scanner=services.get("trend_scanner"),
     )
     splash.finish(window)
     window.showMaximized()
