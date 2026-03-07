@@ -21,10 +21,48 @@ from config import get_settings
 from db.redis_client import RedisClient
 
 
-BASE_URL = "https://api.binance.com"
+BASE_URL    = "https://api.binance.com"
 TESTNET_URL = "https://testnet.binance.vision"
-WS_BASE = "wss://stream.binance.com:9443/ws"
-WS_TESTNET = "wss://testnet.binance.vision/ws"
+WS_BASE     = "wss://stream.binance.com:9443/ws"
+WS_TESTNET  = "wss://testnet.binance.vision/ws"
+
+_MAX_RETRIES   = 3     # Max retries on transient network / timeout errors
+_RETRY_BACKOFF = 1.0   # Initial backoff seconds (doubles each retry)
+
+
+class _RateLimiter:
+    """
+    Thread-safe token-bucket rate limiter.
+
+    Binance published limits (spot):
+      - 1 200 weighted request units / minute (general endpoints)
+      - 10 orders / second (signed trade endpoints)
+    """
+
+    def __init__(self, calls: int, period_sec: float) -> None:
+        self._calls  = calls
+        self._period = period_sec
+        self._tokens = float(calls)
+        self._last_refill = time.monotonic()
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        """Block until one token is available."""
+        with self._lock:
+            now     = time.monotonic()
+            elapsed = now - self._last_refill
+            self._tokens = min(
+                float(self._calls),
+                self._tokens + elapsed / self._period * self._calls,
+            )
+            self._last_refill = now
+            if self._tokens < 1:
+                wait = (1.0 - self._tokens) / self._calls * self._period
+            else:
+                wait = 0.0
+            self._tokens -= 1.0
+        if wait > 0:
+            time.sleep(wait)
 
 
 class BinanceClient:
@@ -55,6 +93,10 @@ class BinanceClient:
         self._callbacks: dict[str, list[Callable]] = {}
         self._lock = threading.Lock()
 
+        # Rate limiters — Binance spot: 1200 req/min general, 10 orders/sec
+        self._rl_general = _RateLimiter(calls=1200, period_sec=60)
+        self._rl_orders  = _RateLimiter(calls=10,   period_sec=1)
+
     # ── Authentication ──────────────────────────────────────────────────
     def _sign(self, params: dict) -> dict:
         params["timestamp"] = int(time.time() * 1000)
@@ -65,26 +107,102 @@ class BinanceClient:
         return params
 
     # ── REST requests ───────────────────────────────────────────────────
+    def _request(self, method: str, path: str, params: dict | None) -> Any:
+        """
+        Shared HTTP executor with:
+          - Binance 429 (rate-limit) and 418 (IP ban) back-off
+          - Transient network/timeout retry with exponential back-off
+          - Clean Binance error-code surfacing (code + msg)
+        """
+        url  = f"{self._base}{path}"
+        send = {
+            "GET":    self._session.get,
+            "POST":   self._session.post,
+            "DELETE": self._session.delete,
+        }[method]
+        backoff = _RETRY_BACKOFF
+
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                resp = send(url, params=params, timeout=10)
+            except requests.exceptions.Timeout:
+                logger.warning(
+                    f"Binance {method} {path} timed out (attempt {attempt + 1}/{_MAX_RETRIES + 1})"
+                )
+                if attempt < _MAX_RETRIES:
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                raise
+            except requests.exceptions.ConnectionError as exc:
+                logger.warning(
+                    f"Binance {method} {path} connection error "
+                    f"(attempt {attempt + 1}/{_MAX_RETRIES + 1}): {exc!r}"
+                )
+                if attempt < _MAX_RETRIES:
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                raise
+
+            # Handle Binance-specific HTTP status codes
+            if resp.status_code == 429:
+                wait = float(resp.headers.get("Retry-After", backoff * 2))
+                logger.warning(
+                    f"Binance rate-limit hit (429) on {method} {path} — "
+                    f"backing off {wait:.1f}s"
+                )
+                time.sleep(wait)
+                backoff = min(backoff * 2, 60)
+                continue
+
+            if resp.status_code == 418:
+                logger.error(
+                    f"Binance IP temporarily banned (418) on {method} {path} — "
+                    f"cooling off 60 s"
+                )
+                time.sleep(60)
+                backoff = min(backoff * 4, 120)
+                continue
+
+            # Surface Binance JSON error body before raise_for_status
+            if not resp.ok:
+                try:
+                    err  = resp.json()
+                    code = err.get("code", resp.status_code)
+                    msg  = err.get("msg",  resp.text)
+                    raise requests.exceptions.HTTPError(
+                        f"Binance API error {code}: {msg}",
+                        response=resp,
+                    )
+                except (ValueError, KeyError):
+                    resp.raise_for_status()
+
+            return resp.json()
+
+        raise RuntimeError(
+            f"Binance {method} {path} failed after {_MAX_RETRIES} retries"
+        )
+
     def _get(self, path: str, params: dict | None = None, signed: bool = False) -> Any:
+        self._rl_general.acquire()
         if signed:
             params = self._sign(params or {})
-        resp = self._session.get(f"{self._base}{path}", params=params, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", path, params)
 
     def _post(self, path: str, params: dict | None = None, signed: bool = True) -> Any:
+        self._rl_general.acquire()
+        self._rl_orders.acquire()
         if signed:
             params = self._sign(params or {})
-        resp = self._session.post(f"{self._base}{path}", params=params, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("POST", path, params)
 
     def _delete(self, path: str, params: dict | None = None, signed: bool = True) -> Any:
+        self._rl_general.acquire()
+        self._rl_orders.acquire()
         if signed:
             params = self._sign(params or {})
-        resp = self._session.delete(f"{self._base}{path}", params=params, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("DELETE", path, params)
 
     # ── Market data ─────────────────────────────────────────────────────
     def ping(self) -> bool:

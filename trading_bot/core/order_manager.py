@@ -22,6 +22,10 @@ from db.redis_client import RedisClient
 class OrderManager:
     """Thread-safe order lifecycle manager."""
 
+    # Minimum notional value per order — aligned with £12 GBP floor
+    # 12 GBP × 1.27 GBP/USDT ≈ 15.24 USDT; using 15.0 for a round number
+    MIN_NOTIONAL_USDT: float = 15.0
+
     def __init__(self, binance_client=None, portfolio_manager=None) -> None:
         self._client = binance_client
         self._portfolio = portfolio_manager
@@ -72,6 +76,17 @@ class OrderManager:
                      user_id, price=None, stop_price=None,
                      is_automated=False, ml_signal=None, ml_confidence=0.0) -> Optional[dict]:
         try:
+            # ── Minimum notional check (£12 GBP floor) ──────────────────────────
+            if price is not None:
+                notional = float(quantity) * float(price)
+                if notional < self.MIN_NOTIONAL_USDT:
+                    logger.warning(
+                        f"OrderManager: rejecting {side} {symbol} — notional "
+                        f"{notional:.2f} USDT below minimum {self.MIN_NOTIONAL_USDT:.2f} USDT "
+                        f"(≈ £12 GBP)"
+                    )
+                    return None
+
             result = None
             if self._client:
                 result = self._client.place_order(
@@ -133,7 +148,12 @@ class OrderManager:
             return order_dict
 
         except Exception as exc:
-            logger.error(f"Order placement failed: {exc}")
+            # Surface Binance error codes when available (format: "Binance API error -XXXX: msg")
+            exc_str = str(exc)
+            logger.error(
+                f"OrderManager: order placement failed "
+                f"[{side} {quantity} {symbol} @ {price}]: {exc_str}"
+            )
             return None
 
     # ── Order management ───────────────────────────────────────────────

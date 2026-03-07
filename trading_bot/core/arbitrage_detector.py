@@ -57,6 +57,8 @@ BINANCE_FEE_PCT    = 0.001       # 0.1% per leg (taker)
 MIN_PROFIT_PCT     = 0.0015      # Minimum expected net profit after fees
 MIN_CONFIDENCE     = 0.55        # Minimum ML confidence to emit opportunity
 MIN_TRADES_SCORE   = 5           # Need this many trades before score adapts
+EMIT_COOLDOWN_SEC  = 60          # Don't re-emit the same pair within this window
+PRICE_FETCH_TIMEOUT = 8          # Max seconds for a single price fetch (REST)
 
 # Default monitored pairs (can be extended at runtime)
 DEFAULT_PAIRS: list[tuple[str, str]] = [
@@ -236,6 +238,9 @@ class ArbitrageDetector:
         # Latest opportunities (for UI)
         self._latest_opportunities: list[ArbitrageOpportunity] = []
 
+        # Emit cooldown — prevent flooding callbacks with the same pair signal
+        self._last_emitted: dict[str, float] = {}  # pair_key → last emit timestamp
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def on_opportunity(self, cb: Callable[[ArbitrageOpportunity], None]) -> None:
@@ -339,9 +344,17 @@ class ArbitrageDetector:
         with self._lock:
             self._latest_opportunities = opportunities[:10]
 
-        # 5. Emit callbacks for new high-quality opportunities
+        # 5. Emit callbacks for new high-quality opportunities (rate-limited per pair)
+        now = time.time()
         for opp in opportunities:
             if opp.score >= 0.6 and opp.confidence >= MIN_CONFIDENCE:
+                # Build canonical emit key so BUY/SELL direction doesn't bypass cooldown
+                emit_key = f"{min(opp.leg_buy, opp.leg_sell)}/{max(opp.leg_buy, opp.leg_sell)}"
+                with self._lock:
+                    last = self._last_emitted.get(emit_key, 0.0)
+                    if now - last < EMIT_COOLDOWN_SEC:
+                        continue   # Still in cooldown — skip
+                    self._last_emitted[emit_key] = now
                 self._emit(opp)
 
     # ── Price fetching ─────────────────────────────────────────────────────────
@@ -368,9 +381,12 @@ class ArbitrageDetector:
         if self._client:
             try:
                 ticker = self._client.get_symbol_ticker(symbol=symbol)
-                return float(ticker["price"])
-            except Exception:
-                pass
+                price  = float(ticker["price"])
+                if price <= 0:
+                    raise ValueError(f"Non-positive price {price} for {symbol}")
+                return price
+            except Exception as exc:
+                logger.debug(f"ArbitrageDetector: price fetch failed for {symbol}: {exc!r}")
         # Synthetic random walk for demo / offline use
         buf = self._price_buf.get(symbol, [])
         seed_prices = {

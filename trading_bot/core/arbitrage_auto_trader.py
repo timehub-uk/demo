@@ -51,7 +51,15 @@ Z_STOP_THRESHOLD     = 3.8        # Emergency close if spread keeps widening
 MAX_HOLD_SECONDS     = 3600       # Force-close any position open > 1 hour
 BUDGET_USDT          = 100.0      # Default USDT budget per arb leg
 BINANCE_FEE_PCT      = 0.001      # 0.1% per leg
-MIN_QTY_USDT         = 10.0       # Minimum order value in USDT
+
+# ── Minimum transaction size (UK regulatory / practical floor) ─────────────────
+MIN_TRADE_GBP        = 12.0       # £12 minimum per arb leg (UK floor)
+GBP_USDT_RATE        = 1.27       # Static GBP/USDT fallback rate
+MIN_QTY_USDT         = MIN_TRADE_GBP * GBP_USDT_RATE   # ≈ 15.24 USDT minimum
+
+# ── Cooldown / rate-limit guards ───────────────────────────────────────────────
+PAIR_COOLDOWN_SEC    = 300        # Min gap between positions on the same pair (5 min)
+API_CALL_DELAY_SEC   = 0.25       # Min delay between successive Binance order calls
 
 
 class ArbitrageAutoTrader:
@@ -80,6 +88,10 @@ class ArbitrageAutoTrader:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._callbacks: list[Callable[[dict], None]] = []
+
+        # Cooldown tracking — prevent hammering the same pair repeatedly
+        self._pair_cooldowns: dict[str, float] = {}   # pair_key → last close timestamp
+        self._last_order_time: float = 0.0            # last Binance order call timestamp
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -147,6 +159,17 @@ class ArbitrageAutoTrader:
             if pair_key in self._active:
                 return   # Already have a position for this pair
 
+            # Enforce per-pair cooldown after a recent close
+            last_close = self._pair_cooldowns.get(pair_key, 0.0)
+            elapsed    = time.time() - last_close
+            if elapsed < PAIR_COOLDOWN_SEC:
+                remaining = PAIR_COOLDOWN_SEC - elapsed
+                logger.debug(
+                    f"ArbitrageAutoTrader: {pair_key} in cooldown "
+                    f"({remaining:.0f}s remaining) — skipping"
+                )
+                return
+
         self._open_position(opp, pair_key)
 
     # ── Position lifecycle ─────────────────────────────────────────────────────
@@ -168,9 +191,16 @@ class ArbitrageAutoTrader:
         # Adjust sell qty by hedge ratio so legs are properly balanced
         sell_qty = (self._budget * opp.hedge_ratio) / sell_price
 
-        # Enforce minimum order size
-        if buy_qty * buy_price < MIN_QTY_USDT or sell_qty * sell_price < MIN_QTY_USDT:
-            logger.warning(f"ArbitrageAutoTrader: order too small for {pair_key}")
+        # Enforce minimum order size (£12 GBP floor)
+        buy_notional  = buy_qty  * buy_price
+        sell_notional = sell_qty * sell_price
+        if buy_notional < MIN_QTY_USDT or sell_notional < MIN_QTY_USDT:
+            logger.warning(
+                f"ArbitrageAutoTrader: order below £{MIN_TRADE_GBP:.2f} GBP minimum "
+                f"for {pair_key} "
+                f"(buy={buy_notional:.2f} USDT, sell={sell_notional:.2f} USDT, "
+                f"min={MIN_QTY_USDT:.2f} USDT)"
+            )
             return
 
         buy_order_id  = None
@@ -193,16 +223,28 @@ class ArbitrageAutoTrader:
                 logger.warning("ArbitrageAutoTrader: no engine attached for live trading")
                 return
             try:
+                # Respect minimum inter-order delay to avoid rate-limit spikes
+                gap = time.time() - self._last_order_time
+                if gap < API_CALL_DELAY_SEC:
+                    time.sleep(API_CALL_DELAY_SEC - gap)
+
                 buy_result = self._engine.manual_buy(
                     symbol=buy_sym,
                     quantity=Decimal(str(round(buy_qty, 6))),
                     price=Decimal(str(round(buy_price, 8))),
                 )
+                self._last_order_time = time.time()
+
+                # Small gap between the two legs
+                time.sleep(API_CALL_DELAY_SEC)
+
                 sell_result = self._engine.manual_sell(
                     symbol=sell_sym,
                     quantity=Decimal(str(round(sell_qty, 6))),
                     price=Decimal(str(round(sell_price, 8))),
                 )
+                self._last_order_time = time.time()
+
                 buy_order_id  = (buy_result  or {}).get("orderId", "")
                 sell_order_id = (sell_result or {}).get("orderId", "")
                 self._intel.trade(
@@ -212,7 +254,9 @@ class ArbitrageAutoTrader:
                     f"SELL {sell_qty:.6f} {sell_sym} @ {sell_price:.4f}"
                 )
             except Exception as exc:
-                logger.error(f"ArbitrageAutoTrader: order placement failed: {exc}")
+                logger.error(
+                    f"ArbitrageAutoTrader: order placement failed for {pair_key}: {exc!r}"
+                )
                 return
 
         position = {
@@ -241,6 +285,8 @@ class ArbitrageAutoTrader:
         """Close both legs of an active arbitrage position."""
         with self._lock:
             position = self._active.pop(pair_key, None)
+            # Record close timestamp for cooldown — prevent immediately re-entering
+            self._pair_cooldowns[pair_key] = time.time()
         if not position:
             return
 
@@ -264,16 +310,27 @@ class ArbitrageAutoTrader:
             # Reverse both legs
             if self._engine:
                 try:
+                    gap = time.time() - self._last_order_time
+                    if gap < API_CALL_DELAY_SEC:
+                        time.sleep(API_CALL_DELAY_SEC - gap)
+
                     self._engine.manual_sell(
                         buy_sym, Decimal(str(round(buy_qty, 6))),
                         Decimal(str(round(exit_buy, 8)))
                     )
+                    self._last_order_time = time.time()
+                    time.sleep(API_CALL_DELAY_SEC)
+
                     self._engine.manual_buy(
                         sell_sym, Decimal(str(round(sell_qty, 6))),
                         Decimal(str(round(exit_sell, 8)))
                     )
+                    self._last_order_time = time.time()
                 except Exception as exc:
-                    logger.error(f"ArbitrageAutoTrader: close order failed: {exc}")
+                    logger.error(
+                        f"ArbitrageAutoTrader: close order failed for {pair_key} "
+                        f"[{reason}]: {exc!r}"
+                    )
 
         # P&L calculation
         entry_buy_val  = position["buy_price"]  * buy_qty
