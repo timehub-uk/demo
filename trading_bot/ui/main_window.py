@@ -847,11 +847,27 @@ class MainWindow(QMainWindow):
         liquidity_analyzer=None,
         breakout_detector=None,
         metamask_wallet=None,
+        sim_twin=None,
+        mutation_lab=None,
+        contract_analyzer=None,
+        honeypot_detector=None,
+        liq_lock_analyzer=None,
+        wallet_graph_analyzer=None,
+        rugpull_scorer=None,
+        launch_signal=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
 
         self._metamask_wallet        = metamask_wallet
+        self._sim_twin               = sim_twin
+        self._mutation_lab           = mutation_lab
+        self._contract_analyzer      = contract_analyzer
+        self._honeypot_detector      = honeypot_detector
+        self._liq_lock_analyzer      = liq_lock_analyzer
+        self._wallet_graph_analyzer  = wallet_graph_analyzer
+        self._rugpull_scorer         = rugpull_scorer
+        self._launch_signal          = launch_signal
         self._engine                 = engine
         self._portfolio              = portfolio
         self._predictor              = predictor

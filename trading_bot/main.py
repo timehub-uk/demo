@@ -335,6 +335,52 @@ def build_services(settings):
         binance_client=binance,
     )
 
+    intel.system("Startup", "Initialising safety analysis suite…")
+    from safety.contract_analyzer import ContractAnalyzer
+    from safety.honeypot_detector import HoneypotDetector
+    from safety.liquidity_lock_analyzer import LiquidityLockAnalyzer
+    from safety.wallet_graph_analyzer import WalletGraphAnalyzer
+    from safety.rugpull_scorer import RugPullScorer
+    contract_analyzer = ContractAnalyzer()
+    honeypot_detector = HoneypotDetector()
+    liq_lock_analyzer = LiquidityLockAnalyzer()
+    wallet_graph_analyzer = WalletGraphAnalyzer()
+    rugpull_scorer = RugPullScorer(
+        contract_analyzer=contract_analyzer,
+        honeypot_detector=honeypot_detector,
+        liquidity_analyzer=liq_lock_analyzer,
+        wallet_analyzer=wallet_graph_analyzer,
+    )
+
+    intel.system("Startup", "Initialising token launch signal engine…")
+    from ml.token_launch_signal import TokenLaunchSignalEngine
+    launch_signal = TokenLaunchSignalEngine(
+        contract_analyzer=contract_analyzer,
+        honeypot_detector=honeypot_detector,
+        liquidity_analyzer=liq_lock_analyzer,
+        rugpull_scorer=rugpull_scorer,
+    )
+
+    intel.system("Startup", "Initialising live simulation twin…")
+    from ml.live_simulation_twin import LiveSimulationTwin
+    sim_twin = LiveSimulationTwin()
+
+    intel.system("Startup", "Initialising strategy mutation lab…")
+    from ml.strategy_mutation_lab import StrategyMutationLab, ParameterSpace
+    from core.strategy_registry import StrategyRegistry
+    _param_space = ParameterSpace({
+        "rsi_period":    {"type": "int",   "min": 5,   "max": 30,  "default": 14},
+        "ema_fast":      {"type": "int",   "min": 5,   "max": 50,  "default": 12},
+        "ema_slow":      {"type": "int",   "min": 20,  "max": 200, "default": 26},
+        "atr_multiplier":{"type": "float", "min": 0.5, "max": 4.0, "default": 2.0},
+        "threshold":     {"type": "float", "min": 0.1, "max": 2.0, "default": 0.5},
+        "use_volume":    {"type": "bool",                           "default": True},
+    })
+    mutation_lab = StrategyMutationLab(
+        parameter_space=_param_space,
+        registry=StrategyRegistry(),
+    )
+
     # Wire whale watcher + token ML into trading engine
     engine.set_whale_watcher(whale_watcher)
     engine.set_token_ml_manager(token_ml)
@@ -398,6 +444,14 @@ def build_services(settings):
         "liquidity_analyzer":  liquidity_analyzer,
         "breakout_detector":   breakout_detector,
         "metamask_wallet":     metamask_wallet,
+        "contract_analyzer":   contract_analyzer,
+        "honeypot_detector":   honeypot_detector,
+        "liq_lock_analyzer":   liq_lock_analyzer,
+        "wallet_graph_analyzer": wallet_graph_analyzer,
+        "rugpull_scorer":      rugpull_scorer,
+        "launch_signal":       launch_signal,
+        "sim_twin":            sim_twin,
+        "mutation_lab":        mutation_lab,
     }
 
 
@@ -611,6 +665,16 @@ def start_background_services(services: dict, settings) -> None:
         ntw.start()
         intel.system("Startup", "New token launch watcher started")
 
+    # Live simulation twin
+    sim_twin = services.get("sim_twin")
+    if sim_twin:
+        sim_twin.start()
+        intel.system("Startup", "Live simulation twin started")
+
+    # Token launch signal engine (event-driven, no background thread needed)
+    if services.get("launch_signal"):
+        intel.system("Startup", "Token launch signal engine ready (event-driven)")
+
     # Start REST API server
     try:
         from api.server import get_api_server
@@ -793,6 +857,14 @@ def main() -> int:
         liquidity_analyzer=services.get("liquidity_analyzer"),
         breakout_detector=services.get("breakout_detector"),
         metamask_wallet=services.get("metamask_wallet"),
+        sim_twin=services.get("sim_twin"),
+        mutation_lab=services.get("mutation_lab"),
+        contract_analyzer=services.get("contract_analyzer"),
+        honeypot_detector=services.get("honeypot_detector"),
+        liq_lock_analyzer=services.get("liq_lock_analyzer"),
+        wallet_graph_analyzer=services.get("wallet_graph_analyzer"),
+        rugpull_scorer=services.get("rugpull_scorer"),
+        launch_signal=services.get("launch_signal"),
     )
     splash.finish(window)
     window.showMaximized()
