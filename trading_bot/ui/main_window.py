@@ -833,6 +833,7 @@ class MainWindow(QMainWindow):
         arb_detector=None,
         arb_trader=None,
         trend_scanner=None,
+        pair_scanner=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -871,6 +872,7 @@ class MainWindow(QMainWindow):
         self._arb_detector       = arb_detector
         self._arb_trader         = arb_trader
         self._trend_scanner      = trend_scanner
+        self._pair_scanner       = pair_scanner
 
         self._settings       = get_settings()
         self._intel          = get_intel_logger()
@@ -1060,6 +1062,19 @@ class MainWindow(QMainWindow):
                 # Forward double-click → chart follows symbol
                 self.trend_widget.symbol_selected.connect(self._on_symbol_changed)
                 tabs.addTab(self.trend_widget, "📈  Trends")
+            except Exception:
+                pass
+
+            # Pair discovery scanner tab
+            try:
+                from ui.pair_scanner_widget import PairScannerWidget
+                self.pair_scanner_widget = PairScannerWidget(
+                    pair_scanner=self._pair_scanner,
+                    arb_detector=self._arb_detector,
+                    trend_scanner=self._trend_scanner,
+                )
+                self.pair_scanner_widget.symbol_selected.connect(self._on_symbol_changed)
+                tabs.addTab(self.pair_scanner_widget, "🔍  Pairs")
             except Exception:
                 pass
 

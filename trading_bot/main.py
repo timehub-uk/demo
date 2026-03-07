@@ -278,6 +278,10 @@ def build_services(settings):
     from ml.trend_scanner import TrendScanner
     trend_scanner = TrendScanner(binance_client=binance)
 
+    intel.system("Startup", "Initialising pair discovery scanner…")
+    from ml.pair_scanner import PairScanner
+    pair_scanner = PairScanner(binance_client=binance)
+
     intel.system("Startup", "Initialising auto-trader…")
     from core.auto_trader import AutoTrader
     auto_trader = AutoTrader(
@@ -345,6 +349,7 @@ def build_services(settings):
         "arb_detector":   arb_detector,
         "arb_trader":     arb_trader,
         "trend_scanner":  trend_scanner,
+        "pair_scanner":   pair_scanner,
     }
 
 
@@ -448,6 +453,67 @@ def start_background_services(services: dict, settings) -> None:
     if trend_scanner:
         trend_scanner.start()
         intel.system("Startup", "Trend scanner started (7 timeframes × all pairs)")
+
+    # Pair discovery scanner — wire callbacks to propagate top pairs to all modules
+    pair_scanner  = services.get("pair_scanner")
+    arb_det_ref   = services.get("arb_detector")
+    trend_ref     = trend_scanner
+    engine_ref2   = engine
+    predictor_ref = services.get("predictor")
+
+    def _on_pairs_updated(pairs):
+        """
+        Called after each pair-scanner refresh.
+        Propagates top pairs to ArbitrageDetector, TrendScanner,
+        TradingEngine, and MLPredictor so they always have the full universe.
+        """
+        try:
+            high_syms    = [p.symbol for p in pairs if p.priority == "HIGH"]
+            medium_syms  = [p.symbol for p in pairs if p.priority == "MEDIUM"]
+            all_watch    = high_syms + medium_syms          # HIGH + MEDIUM → trend scanner
+            top_50       = [p.symbol for p in pairs[:50]]  # top-50 → engine / predictor
+
+            # Trend scanner: add all HIGH + MEDIUM symbols
+            if trend_ref:
+                for sym in all_watch:
+                    try:
+                        trend_ref.add_symbol(sym)
+                    except Exception:
+                        pass
+
+            # Arbitrage detector: add top-20 HIGH pairs (combined with BTCUSDT base)
+            if arb_det_ref:
+                for sym in high_syms[:20]:
+                    try:
+                        # Only add USDT pairs as stat-arb pairs against each other
+                        if sym.endswith("USDT"):
+                            arb_det_ref.add_pair(sym, "BTCUSDT")
+                    except Exception:
+                        pass
+
+            # Engine: subscribe top-50 symbols for live WS feeds
+            if engine_ref2:
+                for sym in top_50:
+                    try:
+                        engine_ref2.add_symbol(sym)
+                    except Exception:
+                        pass
+
+            # Predictor: add symbols for ML signal generation
+            if predictor_ref:
+                for sym in top_50:
+                    try:
+                        predictor_ref.add_symbol(sym)
+                    except Exception:
+                        pass
+
+        except Exception as exc:
+            logger.warning(f"Pair propagation error: {exc!r}")
+
+    if pair_scanner:
+        pair_scanner.on_update(_on_pairs_updated)
+        pair_scanner.start()
+        intel.system("Startup", "Pair scanner started (auto-populates all modules)")
 
     # Market pulse broad monitor
     market_pulse = services.get("market_pulse")
@@ -642,6 +708,7 @@ def main() -> int:
         arb_detector=services.get("arb_detector"),
         arb_trader=services.get("arb_trader"),
         trend_scanner=services.get("trend_scanner"),
+        pair_scanner=services.get("pair_scanner"),
     )
     splash.finish(window)
     window.showMaximized()
