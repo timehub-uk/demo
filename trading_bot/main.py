@@ -282,6 +282,49 @@ def build_services(settings):
     from ml.pair_scanner import PairScanner
     pair_scanner = PairScanner(binance_client=binance)
 
+    intel.system("Startup", "Initialising pair ML cross-reference analyzer…")
+    from ml.pair_ml_analyzer import PairMLAnalyzer
+    pair_ml_analyzer = PairMLAnalyzer(
+        pair_scanner=pair_scanner,
+        trend_scanner=trend_scanner,
+        predictor=predictor,
+        whale_watcher=whale_watcher,
+        sentiment=sentiment,
+        regime_detector=regime_detector,
+        arb_detector=arb_detector,
+    )
+
+    intel.system("Startup", "Initialising MetaMask wallet bridge (optional)…")
+    from core.metamask_wallet import MetaMaskWallet
+    metamask_wallet = MetaMaskWallet(
+        binance_client=binance,
+        address=getattr(settings, "metamask_address", ""),
+        network=getattr(settings, "metamask_network", "bsc"),
+        auto_transfer=getattr(settings, "metamask_auto_transfer", False),
+        threshold_usdt=getattr(settings, "metamask_threshold_usdt", 100.0),
+    )
+
+    intel.system("Startup", "Initialising accumulation detector…")
+    from ml.accumulation_detector import AccumulationDetector
+    accumulation_detector = AccumulationDetector(
+        binance_client=binance,
+        pair_scanner=pair_scanner,
+    )
+
+    intel.system("Startup", "Initialising liquidity depth analyzer…")
+    from ml.liquidity_depth_analyzer import LiquidityDepthAnalyzer
+    liquidity_analyzer = LiquidityDepthAnalyzer(
+        binance_client=binance,
+        pair_scanner=pair_scanner,
+    )
+
+    intel.system("Startup", "Initialising volume breakout detector…")
+    from ml.volume_breakout_detector import VolumeBreakoutDetector
+    breakout_detector = VolumeBreakoutDetector(
+        binance_client=binance,
+        pair_scanner=pair_scanner,
+    )
+
     intel.system("Startup", "Initialising auto-trader…")
     from core.auto_trader import AutoTrader
     auto_trader = AutoTrader(
@@ -348,8 +391,13 @@ def build_services(settings):
         "strategy_manager": strategy_manager,
         "arb_detector":   arb_detector,
         "arb_trader":     arb_trader,
-        "trend_scanner":  trend_scanner,
-        "pair_scanner":   pair_scanner,
+        "trend_scanner":       trend_scanner,
+        "pair_scanner":        pair_scanner,
+        "pair_ml_analyzer":    pair_ml_analyzer,
+        "accumulation_detector": accumulation_detector,
+        "liquidity_analyzer":  liquidity_analyzer,
+        "breakout_detector":   breakout_detector,
+        "metamask_wallet":     metamask_wallet,
     }
 
 
@@ -514,6 +562,30 @@ def start_background_services(services: dict, settings) -> None:
         pair_scanner.on_update(_on_pairs_updated)
         pair_scanner.start()
         intel.system("Startup", "Pair scanner started (auto-populates all modules)")
+
+    # Pair ML cross-reference analyzer (every 5 min after pair scanner warms up)
+    pair_ml_ana = services.get("pair_ml_analyzer")
+    if pair_ml_ana:
+        pair_ml_ana.start()
+        intel.system("Startup", "Pair ML analyzer started (cross-references all ML tools)")
+
+    # Accumulation detector (stealth collecting — scans LOW+MEDIUM every 30 min)
+    accum_det = services.get("accumulation_detector")
+    if accum_det:
+        accum_det.start()
+        intel.system("Startup", "Accumulation detector started (stealth accumulation signals)")
+
+    # Liquidity depth analyzer (order-book depth — scans HIGH+MEDIUM every 10 min)
+    liq_ana = services.get("liquidity_analyzer")
+    if liq_ana:
+        liq_ana.start()
+        intel.system("Startup", "Liquidity depth analyzer started (order-book depth scoring)")
+
+    # Volume breakout detector (4-stage pattern — scans HIGH+MEDIUM every 15 min)
+    brk_det = services.get("breakout_detector")
+    if brk_det:
+        brk_det.start()
+        intel.system("Startup", "Volume breakout detector started (4-stage breakout patterns)")
 
     # Market pulse broad monitor
     market_pulse = services.get("market_pulse")
@@ -709,6 +781,11 @@ def main() -> int:
         arb_trader=services.get("arb_trader"),
         trend_scanner=services.get("trend_scanner"),
         pair_scanner=services.get("pair_scanner"),
+        pair_ml_analyzer=services.get("pair_ml_analyzer"),
+        accumulation_detector=services.get("accumulation_detector"),
+        liquidity_analyzer=services.get("liquidity_analyzer"),
+        breakout_detector=services.get("breakout_detector"),
+        metamask_wallet=services.get("metamask_wallet"),
     )
     splash.finish(window)
     window.showMaximized()

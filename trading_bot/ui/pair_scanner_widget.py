@@ -59,19 +59,22 @@ class PairScannerWidget(QWidget):
     symbol_selected = pyqtSignal(str)   # double-click → chart follows
 
     # Table columns
-    _COLS = ["", "Symbol", "Price", "24h %", "Volume USDT", "Trades", "Volatility %", "Score"]
+    _COLS = ["", "Symbol", "Price", "24h %", "Volume USDT", "Trades", "Vol%", "Score", "Tradability"]
 
     def __init__(
         self,
         pair_scanner=None,
         arb_detector=None,
         trend_scanner=None,
+        pair_ml_analyzer=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self._scanner      = pair_scanner
-        self._arb_detector = arb_detector
-        self._trend_scanner = trend_scanner
+        self._scanner        = pair_scanner
+        self._arb_detector   = arb_detector
+        self._trend_scanner  = trend_scanner
+        self._ml_analyzer    = pair_ml_analyzer
+        self._ml_results: dict[str, dict] = {}   # symbol → analyzer result
 
         self._all_pairs: list = []    # current full list from scanner
         self._filter_priority = "ALL"
@@ -226,12 +229,21 @@ class PairScannerWidget(QWidget):
     # ── Scanner integration ────────────────────────────────────────────────────
 
     def _connect_scanner(self) -> None:
-        if not self._scanner:
-            return
-        try:
-            self._scanner.on_update(self._on_scanner_update)
-        except Exception as exc:
-            logger.warning(f"PairScannerWidget: scanner connect failed: {exc!r}")
+        if self._scanner:
+            try:
+                self._scanner.on_update(self._on_scanner_update)
+            except Exception as exc:
+                logger.warning(f"PairScannerWidget: scanner connect failed: {exc!r}")
+        if self._ml_analyzer:
+            try:
+                self._ml_analyzer.on_update(self._on_ml_update)
+            except Exception as exc:
+                logger.warning(f"PairScannerWidget: ML analyzer connect failed: {exc!r}")
+
+    def _on_ml_update(self, results: list) -> None:
+        """Called from analyzer thread — store and refresh."""
+        self._ml_results = {r["symbol"]: r for r in results}
+        QTimer.singleShot(0, self._refresh_table)
 
     def _on_scanner_update(self, pairs: list) -> None:
         """Called from scanner background thread — defer to Qt thread."""
@@ -294,6 +306,32 @@ class PairScannerWidget(QWidget):
             score_itm.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             score_itm.setForeground(QColor(ACCENT))
             self._table.setItem(row, 7, score_itm)
+
+            # Tradability score (from PairMLAnalyzer)
+            ml_rec = self._ml_results.get(p.symbol)
+            if ml_rec:
+                tscore = ml_rec.get("tradability_score", 0.0)
+                sig    = ml_rec.get("ml_signal", "HOLD")
+                t_txt  = f"{tscore:.3f}  {sig}"
+                t_col  = GREEN if sig == "BUY" else (RED if sig == "SELL" else FG2)
+                t_item = QTableWidgetItem(t_txt)
+                t_item.setForeground(QColor(t_col))
+                t_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                trend_d = ml_rec.get("trend_detail", {})
+                t_item.setToolTip(
+                    f"<b>{p.symbol} — Tradability</b><br>"
+                    f"Score: {tscore:.3f}<br>"
+                    f"Signal: {sig} ({ml_rec.get('ml_confidence', 0):.0%})<br>"
+                    f"Regime: {ml_rec.get('regime', '—')}<br>"
+                    f"Whale: {ml_rec.get('whale_score', 0):.2f}  "
+                    f"Sentiment: {ml_rec.get('sentiment_score', 0):.2f}<br>"
+                    f"Trends: {', '.join(f'{k}:{v[:1]}' for k, v in trend_d.items())}"
+                )
+            else:
+                t_item = QTableWidgetItem("—")
+                t_item.setForeground(QColor(FG2))
+                t_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._table.setItem(row, 8, t_item)
 
             self._table.setRowHeight(row, 28)
 

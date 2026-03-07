@@ -221,6 +221,9 @@ class PairScanner:
             f"(top: {pairs[0].symbol if pairs else 'n/a'})"
         )
 
+        # Persist market stats to pair_registry table
+        self._persist_to_db(pairs)
+
         # Broadcast
         for cb in self._callbacks:
             try:
@@ -335,6 +338,31 @@ class PairScanner:
         return pairs
 
     # ── Offline fallback ───────────────────────────────────────────────────────
+
+    def _persist_to_db(self, pairs: list[PairInfo]) -> None:
+        """Upsert all pair market stats into the pair_registry table."""
+        try:
+            from db.postgres import get_db
+            from db.models import PairRegistry
+            with get_db() as db:
+                for p in pairs:
+                    row = db.query(PairRegistry).filter_by(symbol=p.symbol).first()
+                    if row is None:
+                        row = PairRegistry(symbol=p.symbol, base=p.base, quote=p.quote)
+                        db.add(row)
+                    row.last_price       = p.last_price
+                    row.price_change_pct = p.price_change_pct
+                    row.quote_volume     = p.quote_volume
+                    row.trade_count      = p.trade_count
+                    row.high_24h         = p.high_24h
+                    row.low_24h          = p.low_24h
+                    row.volume_score     = p.volume_score
+                    row.activity_score   = p.activity_score
+                    row.momentum_score   = p.momentum_score
+                    row.priority_score   = p.priority_score
+                    row.priority         = p.priority
+        except Exception as exc:
+            logger.debug(f"PairScanner: DB persist failed: {exc!r}")
 
     @staticmethod
     def _synthetic_tickers() -> list[dict]:

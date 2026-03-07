@@ -248,6 +248,110 @@ class TaxRecord(Base):
     created_at = now_utc()
 
 
+class PairRegistry(Base):
+    """
+    Master registry of every discovered trading pair.
+    Updated by PairScanner every 15 minutes with 24h market stats and ML scores.
+    Cross-ML tradability score is updated separately by PairMLAnalyzer every 5 min.
+    """
+    __tablename__ = "pair_registry"
+
+    id       = uuid_pk()
+    symbol   = Column(String(20), nullable=False, index=True)
+    base     = Column(String(15), nullable=False)
+    quote    = Column(String(10), nullable=False)
+
+    # 24h market stats (PairScanner)
+    last_price       = Column(Numeric(30, 12), default=0)
+    price_change_pct = Column(Float,           default=0)
+    quote_volume     = Column(Numeric(30, 12), default=0)
+    trade_count      = Column(Integer,         default=0)
+    high_24h         = Column(Numeric(30, 12), default=0)
+    low_24h          = Column(Numeric(30, 12), default=0)
+
+    # PairScanner ML scores (0–1)
+    volume_score   = Column(Float, default=0)
+    activity_score = Column(Float, default=0)
+    momentum_score = Column(Float, default=0)
+    priority_score = Column(Float, default=0)
+    priority       = Column(String(10), default="LOW")   # HIGH | MEDIUM | LOW
+
+    # Cross-ML tradability (PairMLAnalyzer — updated every 5 min)
+    tradability_score = Column(Float, default=0)     # 0–1 composite
+    trend_alignment   = Column(Float, default=0)     # fraction of TFs agreeing
+    sentiment_score   = Column(Float, default=0)     # −1 to +1
+    whale_score       = Column(Float, default=0)     # 0–1 whale activity
+    ml_signal         = Column(String(10))           # BUY | HOLD | SELL
+    ml_confidence     = Column(Float, default=0)     # 0–1
+    regime            = Column(String(20))           # Bull | Bear | Ranging | Volatile
+    arb_opportunity   = Column(Boolean, default=False)
+
+    # Accumulation detector (AccumulationDetector)
+    accumulation_score   = Column(Float, default=0)  # 0–1 stealth accumulation
+    accumulation_label   = Column(String(20))        # NONE | WATCH | ALERT | STRONG
+
+    # Liquidity depth (LiquidityDepthAnalyzer)
+    liquidity_score   = Column(Float, default=0)    # 0–1 order-book depth quality
+    liquidity_grade   = Column(String(15))          # DEEP | ADEQUATE | THIN | ILLIQUID
+
+    # Volume breakout stage (VolumeBreakoutDetector)
+    breakout_stage    = Column(Integer, default=0)  # 0–4
+    breakout_score    = Column(Float, default=0)    # 0–1 stage confidence
+
+    first_seen_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+    updated_at    = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("symbol"),
+        Index("idx_pair_registry_priority", "priority"),
+        Index("idx_pair_registry_tradability", "tradability_score"),
+    )
+
+
+class PairMLSnapshot(Base):
+    """
+    Time-series record of per-pair ML analysis results.
+    Enables the ML layer to review historical scores and learn which
+    signals led to profitable outcomes.
+    """
+    __tablename__ = "pair_ml_snapshots"
+
+    id        = uuid_pk()
+    symbol    = Column(String(20), nullable=False, index=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    # Multi-timeframe trends
+    trend_15m = Column(String(10))   # UP | SIDEWAYS | DOWN
+    trend_30m = Column(String(10))
+    trend_1h  = Column(String(10))
+    trend_12h = Column(String(10))
+    trend_24h = Column(String(10))
+    trend_7d  = Column(String(10))
+    trend_30d = Column(String(10))
+
+    # ML signals at snapshot time
+    ml_signal     = Column(String(10))
+    ml_confidence = Column(Float)
+
+    # Market context
+    price       = Column(Numeric(30, 12))
+    volume_usdt = Column(Numeric(30, 12))
+    regime      = Column(String(20))
+
+    # Composite scores
+    tradability_score  = Column(Float)
+    priority           = Column(String(10))
+    accumulation_score = Column(Float)
+    liquidity_score    = Column(Float)
+    breakout_stage     = Column(Integer)
+
+    created_at = now_utc()
+
+    __table_args__ = (
+        Index("idx_pair_ml_symbol_time", "symbol", "timestamp"),
+    )
+
+
 class Alert(Base):
     __tablename__ = "alerts"
 

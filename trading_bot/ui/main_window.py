@@ -834,45 +834,55 @@ class MainWindow(QMainWindow):
         arb_trader=None,
         trend_scanner=None,
         pair_scanner=None,
+        pair_ml_analyzer=None,
+        accumulation_detector=None,
+        liquidity_analyzer=None,
+        breakout_detector=None,
+        metamask_wallet=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
 
-        self._engine             = engine
-        self._portfolio          = portfolio
-        self._predictor          = predictor
-        self._order_manager      = order_manager
-        self._trainer            = trainer
-        self._tax_calc           = tax_calc
-        self._cl                 = continuous_learner
-        self._whale_watcher      = whale_watcher
-        self._token_ml           = token_ml
-        self._sentiment          = sentiment
-        self._port_opt           = port_opt
-        self._backtester         = backtester
-        self._voice              = voice
-        self._telegram           = telegram
-        self._new_token_watcher  = new_token_watcher
-        self._regime_detector    = regime_detector
-        self._mtf_filter         = mtf_filter
-        self._signal_council     = signal_council
-        self._ensemble           = ensemble
-        self._dynamic_risk       = dynamic_risk
-        self._monte_carlo        = monte_carlo
-        self._walk_forward       = walk_forward
-        self._trade_journal      = trade_journal
-        self._market_scanner     = market_scanner
-        self._auto_trader        = auto_trader
-        self._market_pulse       = market_pulse
-        self._forecast_tracker   = forecast_tracker
-        self._archive_downloader = archive_downloader
-        self._data_collector     = data_collector
-        self._ping_pong          = ping_pong
-        self._strategy_manager   = strategy_manager
-        self._arb_detector       = arb_detector
-        self._arb_trader         = arb_trader
-        self._trend_scanner      = trend_scanner
-        self._pair_scanner       = pair_scanner
+        self._metamask_wallet        = metamask_wallet
+        self._engine                 = engine
+        self._portfolio              = portfolio
+        self._predictor              = predictor
+        self._order_manager          = order_manager
+        self._trainer                = trainer
+        self._tax_calc               = tax_calc
+        self._cl                     = continuous_learner
+        self._whale_watcher          = whale_watcher
+        self._token_ml               = token_ml
+        self._sentiment              = sentiment
+        self._port_opt               = port_opt
+        self._backtester             = backtester
+        self._voice                  = voice
+        self._telegram               = telegram
+        self._new_token_watcher      = new_token_watcher
+        self._regime_detector        = regime_detector
+        self._mtf_filter             = mtf_filter
+        self._signal_council         = signal_council
+        self._ensemble               = ensemble
+        self._dynamic_risk           = dynamic_risk
+        self._monte_carlo            = monte_carlo
+        self._walk_forward           = walk_forward
+        self._trade_journal          = trade_journal
+        self._market_scanner         = market_scanner
+        self._auto_trader            = auto_trader
+        self._market_pulse           = market_pulse
+        self._forecast_tracker       = forecast_tracker
+        self._archive_downloader     = archive_downloader
+        self._data_collector         = data_collector
+        self._ping_pong              = ping_pong
+        self._strategy_manager       = strategy_manager
+        self._arb_detector           = arb_detector
+        self._arb_trader             = arb_trader
+        self._trend_scanner          = trend_scanner
+        self._pair_scanner           = pair_scanner
+        self._pair_ml_analyzer       = pair_ml_analyzer
+        self._accumulation_detector  = accumulation_detector
+        self._liquidity_analyzer     = liquidity_analyzer
+        self._breakout_detector      = breakout_detector
 
         self._settings       = get_settings()
         self._intel          = get_intel_logger()
@@ -1072,9 +1082,40 @@ class MainWindow(QMainWindow):
                     pair_scanner=self._pair_scanner,
                     arb_detector=self._arb_detector,
                     trend_scanner=self._trend_scanner,
+                    pair_ml_analyzer=self._pair_ml_analyzer,
                 )
                 self.pair_scanner_widget.symbol_selected.connect(self._on_symbol_changed)
                 tabs.addTab(self.pair_scanner_widget, "🔍  Pairs")
+            except Exception:
+                pass
+
+            # Stealth accumulation detector tab
+            try:
+                from ui.accumulation_widget import AccumulationWidget
+                self.accumulation_widget = AccumulationWidget(
+                    accumulation_detector=self._accumulation_detector,
+                )
+                tabs.addTab(self.accumulation_widget, "🕵  Accumulation")
+            except Exception:
+                pass
+
+            # Liquidity depth analyzer tab
+            try:
+                from ui.liquidity_widget import LiquidityWidget
+                self.liquidity_widget = LiquidityWidget(
+                    liquidity_analyzer=self._liquidity_analyzer,
+                )
+                tabs.addTab(self.liquidity_widget, "💧  Liquidity")
+            except Exception:
+                pass
+
+            # Volume breakout detector tab
+            try:
+                from ui.breakout_widget import BreakoutWidget
+                self.breakout_widget = BreakoutWidget(
+                    breakout_detector=self._breakout_detector,
+                )
+                tabs.addTab(self.breakout_widget, "💥  Breakouts")
             except Exception:
                 pass
 
@@ -1158,11 +1199,32 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.connections_page)
 
     def _build_settings_page(self) -> None:
+        from PyQt6.QtWidgets import QTabWidget
+        tabs = QTabWidget()
+        tabs.setStyleSheet(
+            f"QTabWidget::pane {{ border:1px solid {BORDER}; background:{BG1}; }}"
+            f"QTabBar::tab {{ background:{BG3}; color:{FG2}; padding:6px 14px; border:none; }}"
+            f"QTabBar::tab:selected {{ background:{BG4}; color:{FG0}; }}"
+        )
+
         from ui.system_settings_widget import SystemSettingsWidget
-        self.settings_page = SystemSettingsWidget()
-        self.settings_page.settings_saved.connect(
+        sys_settings = SystemSettingsWidget()
+        sys_settings.settings_saved.connect(
             lambda: self._intel.system("Settings", "Configuration saved.")
         )
+        tabs.addTab(sys_settings, "⚙  System")
+
+        # MetaMask wallet tab
+        try:
+            from ui.metamask_widget import MetaMaskWidget
+            self.metamask_widget = MetaMaskWidget(
+                metamask_wallet=self._metamask_wallet,
+            )
+            tabs.addTab(self.metamask_widget, "🦊  MetaMask")
+        except Exception:
+            pass
+
+        self.settings_page = tabs
         self.stack.addWidget(self.settings_page)
 
     def _build_help_page(self) -> None:
