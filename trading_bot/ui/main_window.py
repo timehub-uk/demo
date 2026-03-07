@@ -116,6 +116,13 @@ _PANEL_HELP: dict[int, tuple[str, str]] = {
         "• Risk management rules and defaults\n"
         "• UK HMRC CGT tax reporting documentation\n"
         "• About BinanceML Pro"),
+    10: ("Simulation",
+        "Live Simulation Twin, Strategy Mutation Lab & Safety Scanner.\n\n"
+        "• Live Simulation Twin: shadow every decision in parallel\n"
+        "• Strategy Mutation Lab: automated genetic evolution of strategies\n"
+        "• Safety Scanner: contract analysis, honeypot, rug-pull scoring\n"
+        "• Drift detection: alert when model accuracy deviates from baseline\n"
+        "• Shortcut: Ctrl+Shift+S"),
 }
 
 
@@ -310,16 +317,17 @@ class HeaderBar(QFrame):
 # ══════════════════════════════════════════════════════════════════════════════
 
 _NAV_ITEMS = [
-    (0, "trading",      "TRADE"),
-    (1, "autotrader",   "AUTO"),
-    (2, "ml",           "ML"),
-    (3, "risk",         "RISK"),
-    (4, "backtest",     "BT"),
-    (5, "journal",      "JNL"),
-    (6, "strategy",     "STRAT"),
-    (7, "connections",  "NET"),
-    (8, "settings",     "CFG"),
-    (9, "help",         "HELP"),
+    (0,  "trading",      "TRADE"),
+    (1,  "autotrader",   "AUTO"),
+    (2,  "ml",           "ML"),
+    (3,  "risk",         "RISK"),
+    (4,  "backtest",     "BT"),
+    (5,  "journal",      "JNL"),
+    (6,  "strategy",     "STRAT"),
+    (7,  "connections",  "NET"),
+    (8,  "settings",     "CFG"),
+    (9,  "help",         "HELP"),
+    (10, "simulation",   "SIM"),
 ]
 
 
@@ -949,6 +957,7 @@ class MainWindow(QMainWindow):
         self._build_connections_page()   # 7
         self._build_settings_page()      # 8
         self._build_help_page()          # 9
+        self._build_simulation_page()    # 10
 
         # Toast notification overlay (floats over the window)
         self._toast = ToastOverlay(central)
@@ -1187,6 +1196,46 @@ class MainWindow(QMainWindow):
             self.strategy_page = _placeholder("Strategy Builder", f"Not available: {exc}")
         self.stack.addWidget(self.strategy_page)
 
+    def _build_simulation_page(self) -> None:
+        """Simulation – Live Twin + Mutation Lab (accessed from Simulation menu)."""
+        try:
+            from PyQt6.QtWidgets import QTabWidget
+            tabs = QTabWidget()
+            tabs.setStyleSheet(
+                f"QTabWidget::pane {{ border:1px solid #2A2A4A; background:#0A0A12; }}"
+                f"QTabBar::tab {{ background:#12121E; color:#8888AA; padding:7px 16px; }}"
+                f"QTabBar::tab:selected {{ background:#1A1A2E; color:#00D4FF; "
+                f"border-bottom:2px solid #00D4FF; }}"
+            )
+
+            # Live Simulation Twin
+            from ui.simulation_twin_widget import SimulationTwinWidget
+            self.sim_twin_widget = SimulationTwinWidget(twin=getattr(self, "_sim_twin", None))
+            tabs.addTab(self.sim_twin_widget, "🔮  Simulation Twin")
+
+            # Strategy Mutation Lab
+            from ui.mutation_lab_widget import MutationLabWidget
+            self.mutation_lab_widget = MutationLabWidget(lab=getattr(self, "_mutation_lab", None))
+            tabs.addTab(self.mutation_lab_widget, "🧬  Mutation Lab")
+
+            # Token & Contract Safety
+            from ui.safety_widget import SafetyWidget
+            self.safety_widget = SafetyWidget(
+                contract_analyzer=getattr(self, "_contract_analyzer", None),
+                honeypot_detector=getattr(self, "_honeypot_detector", None),
+                liq_analyzer=getattr(self, "_liq_lock_analyzer", None),
+                wallet_analyzer=getattr(self, "_wallet_graph_analyzer", None),
+                rugpull_scorer=getattr(self, "_rugpull_scorer", None),
+                launch_signal_engine=getattr(self, "_launch_signal", None),
+            )
+            tabs.addTab(self.safety_widget, "🛡  Safety Scanner")
+
+            self.simulation_page = tabs
+        except Exception as exc:
+            logger.warning(f"Simulation page unavailable: {exc}")
+            self.simulation_page = _placeholder("Simulation", f"Not available: {exc}")
+        self.stack.addWidget(self.simulation_page)
+
     def _build_connections_page(self) -> None:
         from ui.connections_widget import ConnectionsWidget
         binance_client = None
@@ -1213,6 +1262,15 @@ class MainWindow(QMainWindow):
             lambda: self._intel.system("Settings", "Configuration saved.")
         )
         tabs.addTab(sys_settings, "⚙  System")
+
+        # Layers configuration panel
+        try:
+            from ui.layers_settings_panel import LayersSettingsPanel
+            from core.feature_flag_controller import get_flags
+            self.layers_panel = LayersSettingsPanel(flags_controller=get_flags())
+            tabs.addTab(self.layers_panel, "🧩  Layers")
+        except Exception as exc:
+            logger.warning(f"Layers panel unavailable: {exc}")
 
         # MetaMask wallet tab
         try:
@@ -1285,6 +1343,35 @@ class MainWindow(QMainWindow):
         mlm.addSeparator()
         mlm.addAction(self._act("Reload Model",         self._reload_model,         "Ctrl+R"))
         mlm.addAction(self._act("Data Integrity Check", self._run_integrity_check,  "Ctrl+I"))
+
+        # Simulation
+        simm = mb.addMenu("&Simulation")
+        simm.addAction(self._act(
+            "Open Simulation Panel",
+            lambda: self._navigate_to(10), "Ctrl+Shift+S"
+        ))
+        simm.addSeparator()
+        simm.addAction(self._act(
+            "🔮 Live Simulation Twin",
+            lambda: self._open_sim_tab(0), "Ctrl+Shift+T"
+        ))
+        simm.addAction(self._act(
+            "🧬 Strategy Mutation Lab",
+            lambda: self._open_sim_tab(1), "Ctrl+Shift+M"
+        ))
+        simm.addAction(self._act(
+            "🛡  Safety Scanner",
+            lambda: self._open_sim_tab(2), "Ctrl+Shift+F"
+        ))
+        simm.addSeparator()
+        # Layer shortcuts
+        layers_menu = simm.addMenu("⚙  Layer Settings (Shift+Alt+N)")
+        for n in range(1, 11):
+            key = "0" if n == 10 else str(n)
+            layers_menu.addAction(
+                self._act(f"Layer {n}", lambda _, lnum=n: self._open_layer(lnum),
+                         f"Shift+Alt+{key}")
+            )
 
         # Tax
         taxm = mb.addMenu("&Tax")
@@ -1435,6 +1522,30 @@ class MainWindow(QMainWindow):
     def _navigate_to(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
         self.nav.set_active(index)
+
+    def _open_sim_tab(self, tab_index: int) -> None:
+        """Navigate to simulation page and select a specific tab."""
+        self._navigate_to(10)
+        try:
+            if hasattr(self, "simulation_page") and hasattr(self.simulation_page, "setCurrentIndex"):
+                self.simulation_page.setCurrentIndex(tab_index)
+        except Exception:
+            pass
+
+    def _open_layer(self, layer_num: int) -> None:
+        """Navigate to Settings >> Layers and jump to a specific layer."""
+        self._navigate_to(8)  # Settings page
+        try:
+            if hasattr(self, "settings_page"):
+                # Find Layers tab in settings
+                for i in range(self.settings_page.count()):
+                    if "Layer" in self.settings_page.tabText(i):
+                        self.settings_page.setCurrentIndex(i)
+                        if hasattr(self, "layers_panel"):
+                            self.layers_panel._jump_to_layer(layer_num)
+                        break
+        except Exception:
+            pass
 
     # ──────────────────────────────────────────────────────────────────
     # Event handlers

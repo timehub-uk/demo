@@ -1,6 +1,6 @@
 # BinanceML Pro — Installation, Setup & User Manual
 
-**Version 1.0 · Professional AI Trading Platform for Binance**
+**Version 2.0 · Professional AI Trading Platform for Binance**
 
 ---
 
@@ -21,11 +21,12 @@
 13. [Trade Journal](#13-trade-journal)
 14. [Backtesting Engine](#14-backtesting-engine)
 15. [Connections & Health](#15-connections--health)
-16. [Settings](#16-settings)
-17. [Keyboard Shortcuts](#17-keyboard-shortcuts)
-18. [UK Tax (CGT) Reporting](#18-uk-tax-cgt-reporting)
-19. [Troubleshooting](#19-troubleshooting)
-20. [Architecture Overview](#20-architecture-overview)
+16. [Settings & Layer Configuration](#16-settings--layer-configuration)
+17. [Simulation Panel](#17-simulation-panel)
+18. [Keyboard Shortcuts](#18-keyboard-shortcuts)
+19. [UK Tax (CGT) Reporting](#19-uk-tax-cgt-reporting)
+20. [Troubleshooting](#20-troubleshooting)
+21. [Architecture Overview — 10-Layer Stack](#21-architecture-overview--10-layer-stack)
 
 ---
 
@@ -847,6 +848,250 @@ Go to **ML Training** → **Stop** to halt background training temporarily.
 5. **TradingEngine** → confirms fill, updates portfolio
 6. **TradeJournal** → records everything with full context
 7. **UI** → refreshes from data every 5 seconds, shows live state
+
+---
+
+---
+
+## 16. Settings & Layer Configuration
+
+### 16.1 Opening the Layer Configuration Panel
+
+Navigate to **Settings (Ctrl+9)** and click the **🧩 Layers** tab,
+or use **Simulation > ⚙ Layer Settings** in the menu bar.
+
+Each layer has its own tab with sub-tabs for every module.
+
+### 16.2 Layer Keyboard Shortcuts
+
+Jump directly to any layer's settings with:
+
+| Shortcut | Layer |
+|----------|-------|
+| `Shift+Alt+1` | Layer 1 – Infrastructure & Orchestration |
+| `Shift+Alt+2` | Layer 2 – Market Data Ingestion |
+| `Shift+Alt+3` | Layer 3 – Data Engineering & Storage |
+| `Shift+Alt+4` | Layer 4 – Research & Quant |
+| `Shift+Alt+5` | Layer 5 – Alpha & Signal |
+| `Shift+Alt+6` | Layer 6 – Risk & Capital Management |
+| `Shift+Alt+7` | Layer 7 – Execution |
+| `Shift+Alt+8` | Layer 8 – Token & Contract Safety |
+| `Shift+Alt+9` | Layer 9 – Monitoring & Reporting |
+| `Shift+Alt+0` | Layer 10 – Governance & Oversight |
+
+### 16.3 Module Controls
+
+Each module panel provides:
+- **Enabled toggle** — turn the module on/off at runtime without restart
+- **Parameter sliders/spinners** — tune thresholds, periods, and limits
+- **API key fields** — enter credentials securely (masked input)
+- **Dependency notification** — when a module requires another module to be
+  active, enabling it will automatically activate dependencies and show a
+  yellow notification: *"⚡ Auto-activated: module_name"*
+
+---
+
+## 17. Simulation Panel
+
+Access via **Simulation** menu (`Ctrl+Shift+S`) or nav sidebar item **SIM**.
+
+### 17.1 Live Simulation Twin (`Ctrl+Shift+T`)
+
+A shadow engine running beside production:
+
+| Feature | Description |
+|---------|-------------|
+| **Shadow decisions** | Every live decision replayed across 6 parallel variants |
+| **Variants** | size_half, size_2x, delayed_5m, tighter_stop, wider_stop, skip |
+| **Drift detection** | Alerts when live accuracy deviates >5% from backtested baseline |
+| **Opportunity cost** | Tracks PnL missed by passing on trades |
+| **Variant leaderboard** | Shows which alternative consistently beats live |
+
+**Drift severities:**
+- **Minor** — >5% deviation from baseline accuracy
+- **Severe** — >15% deviation (model retraining recommended)
+
+### 17.2 Strategy Mutation Lab (`Ctrl+Shift+M`)
+
+Automated genetic evolution of strategy parameters:
+
+| Stage | Description |
+|-------|-------------|
+| **Initialise** | Seed population from current strategy parameters |
+| **Evaluate** | Backtest + walk-forward + regime stability in parallel threads |
+| **Gate** | Hard reject: Sharpe < 0.5 OR drawdown > 20% OR < 30 trades |
+| **Select** | Tournament selection from passed variants |
+| **Breed** | Crossover + mutation of surviving parameter sets |
+| **Promote** | Auto-register champions (fitness ≥ 0.65, regime stability ≥ 0.7) |
+
+**Configuration:**
+- Population size: 5–100
+- Mutation rate: 5–50%
+- Max drawdown gate: 5–50%
+- All settings configurable from Settings >> Layer 4 >> Module 34
+
+### 17.3 Safety Scanner (`Ctrl+Shift+F`)
+
+Token & contract safety analysis for new launches:
+
+| Module | What It Checks |
+|--------|---------------|
+| **Contract Analyzer** | Mint authority, blacklist, pausability, fee mutability |
+| **Honeypot Detector** | Simulates buy + sell to confirm token is sellable |
+| **Liquidity Lock** | Lock percentage, duration, verified locker contract |
+| **Wallet Graph** | Deployer relationships, fresh wallets, multi-deployers |
+| **Rug-Pull Score** | Composite 0–100% probability with risk level classification |
+
+**Risk levels:**
+- 🟢 Low (0–20%) — proceed with normal caution
+- 🟡 Medium (20–45%) — reduce position size
+- 🔴 High (45–70%) — avoid
+- 💀 Critical (70–100%) — do not trade
+
+---
+
+## 18. Keyboard Shortcuts
+
+### Navigation
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+1` | Trading Panel |
+| `Ctrl+2` | AutoTrader |
+| `Ctrl+3` | ML Training |
+| `Ctrl+4` | Risk Dashboard |
+| `Ctrl+5` | Backtesting |
+| `Ctrl+6` | Trade Journal |
+| `Ctrl+7` | Strategy Builder |
+| `Ctrl+8` | Connections |
+| `Ctrl+9` | Settings |
+| `F1` | Help |
+| `Ctrl+Shift+S` | Simulation Panel |
+
+### Simulation
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Shift+T` | Live Simulation Twin tab |
+| `Ctrl+Shift+M` | Strategy Mutation Lab tab |
+| `Ctrl+Shift+F` | Safety Scanner tab |
+
+### Layer Settings
+
+| Shortcut | Action |
+|----------|--------|
+| `Shift+Alt+1` | Layer 1 settings |
+| `Shift+Alt+2` | Layer 2 settings |
+| … | … |
+| `Shift+Alt+0` | Layer 10 settings |
+
+### AutoTrader
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Shift+A` | Take Aim (place trade) |
+| `Ctrl+Shift+E` | Exit Trade |
+| `Ctrl+Shift+N` | Scan Now |
+
+### ML & Data
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+T` | Start Training |
+| `Ctrl+Shift+T` | Stop Training |
+| `Ctrl+R` | Reload Model |
+| `Ctrl+I` | Data Integrity Check |
+
+### Window
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+L` | Toggle Intel Log |
+| `Ctrl+B` | Toggle Order Book |
+| `Ctrl++` | Add Chart Tab |
+| `F11` | Toggle Fullscreen |
+| `Ctrl+,` | Settings |
+| `Ctrl+Q` | Exit |
+
+---
+
+## 19. UK Tax (CGT) Reporting
+
+*(Previously section 18 — content unchanged)*
+
+---
+
+## 20. Troubleshooting
+
+*(Previously section 19 — content unchanged)*
+
+---
+
+## 21. Architecture Overview — 10-Layer Stack
+
+BinanceML Pro v2.0 implements a full institutional-grade trading stack
+organised into 10 functional layers with 77 modules:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Layer 1 – Infrastructure & Orchestration (Modules 1–6)         │
+│  MasterOrchestrator · StrategyRegistry · SecretsManager         │
+│  FeatureFlagController · ServiceHealthMonitor                   │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 2 – Market Data Ingestion (Modules 7–18)                 │
+│  ExchangeMDC · DEXMDC · OrderBookCollector · TradeTape          │
+│  FundingBasis · OptionsVolSurface · OnChainTx · TokenMetadata   │
+│  NewsEvents · SocialSentiment · DevActivity · MempoolCollector  │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 3 – Data Engineering & Storage (Modules 19–25)           │
+│  TimeNormalizer · SymbolMapper · DataCleaner · FeatureStore     │
+│  HistoricalArchive · RealtimeCache · DataQualityAuditor         │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 4 – Research & Quant (Modules 26–36)                     │
+│  FactorResearch · RegimeDetector · Correlation · PortfolioOpt   │
+│  WalkForward · MonteCarlo · Backtester · Scenario               │
+│  StrategyEvolution · ModelTraining · ModelRegistry              │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 5 – Alpha & Signal (Modules 37–46)                       │
+│  Momentum · MeanReversion · BasisCarry · Volatility · StatArb   │
+│  OnChainSmartMoney · TokenLaunchSignal · Sentiment              │
+│  EventDriven · EnsembleSignalCouncil                            │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 6 – Risk & Capital Management (Modules 47–54)            │
+│  DynamicRisk · PositionSizing · ExposureEngine · DrawdownGuard  │
+│  LiquidityRisk · CounterpartyRisk · TreasuryRisk · KillSwitch  │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 7 – Execution (Modules 55–60)                            │
+│  SmartOrderRouter · ExecutionAlgo · DEXRouter                   │
+│  GasFeeEngine · MEVProtection · TradeReconciliation             │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 8 – Token & Contract Safety (Modules 61–65)              │
+│  ContractAnalyzer · HoneypotDetector · LiquidityLockAnalyzer    │
+│  WalletGraphAnalyzer · RugPullScorer                            │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 9 – Monitoring & Reporting (Modules 66–72)               │
+│  PnLAttribution · ForecastTracker · TradeJournal · Alerting     │
+│  Dashboard · ComplianceLog · PostMortemAnalyzer                 │
+├─────────────────────────────────────────────────────────────────┤
+│  Layer 10 – Governance & Oversight (Modules 73–77)              │
+│  InvestmentCommittee · ResearchNotebook · ApprovalWorkflow      │
+│  AccessControl · DisasterRecovery                               │
+└─────────────────────────────────────────────────────────────────┘
+              ↑
+    Evolution Layer (above all)
+    LiveSimulationTwin · StrategyMutationLab
+```
+
+### Data Flow (v2.0)
+
+1. **Market Data** → Exchange MDC / DEX MDC / Mempool Collector
+2. **Data Engineering** → Time normalisation → Symbol mapping → Cleaning → Feature Store
+3. **Research** → Regime detection → Factor research → Signal generation
+4. **Signal Council** → Ensemble weighting → Conflict resolution → Final signal
+5. **Risk** → Exposure check → Position sizing → Drawdown guard → Kill switch check
+6. **Execution** → Smart routing → Algo execution → MEV protection → Reconciliation
+7. **Simulation Twin** → Shadows every decision → Drift detection → Variant comparison
+8. **Governance** → Compliance log → Approval workflow → Access control
 
 ---
 
