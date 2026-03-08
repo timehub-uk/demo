@@ -482,7 +482,7 @@ class MultiChartPanel(QWidget):
 
         try:
             from ui.chart_widget import ChartWidget
-            cw = ChartWidget()
+            cw = ChartWidget(forecast_tracker=self._forecast_tracker)
             cw.set_symbol(symbol)
             if hasattr(cw, "set_overlays"):
                 cw.set_overlays(list(self._active_overlays))
