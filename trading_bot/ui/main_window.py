@@ -123,6 +123,14 @@ _PANEL_HELP: dict[int, tuple[str, str]] = {
         "• Safety Scanner: contract analysis, honeypot, rug-pull scoring\n"
         "• Drift detection: alert when model accuracy deviates from baseline\n"
         "• Shortcut: Ctrl+Shift+S"),
+    11: ("Reports",
+        "Comprehensive performance reports across every time horizon.\n\n"
+        "• Daily:     today's P&L, trade log, signal attribution, risk status\n"
+        "• Weekly:    7-day bar chart, day-by-day table, win-rate trend\n"
+        "• Monthly:   weekly breakdown, UK CGT tax estimate, CSV / email export\n"
+        "• Quarterly: Q1–Q4 bar chart, Sharpe estimate, month-by-month table\n"
+        "• Ad-Hoc:    custom date range, full/P&L/attribution/forecast/risk/tax\n"
+        "• Shortcut: F2"),
 }
 
 

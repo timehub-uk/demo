@@ -15,15 +15,17 @@ Tabs
 
 from __future__ import annotations
 
+import calendar as _cal
 import csv
 import io
 import threading
 from datetime import date, datetime, timedelta
 from typing import Optional
 
+import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QTimer, QDate
-from PyQt6.QtGui import QColor, QFont, QBrush
+from PyQt6.QtGui import QColor, QFont, QBrush, QPen
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTabWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QGroupBox,
@@ -39,6 +41,113 @@ from ui.styles import (
 
 pg.setConfigOption("background", BG2)
 pg.setConfigOption("foreground", FG1)
+
+# ── chart helpers ──────────────────────────────────────────────────────────────
+
+def _make_plot(title: str, x_label: str, y_label: str = "P&L (USDT)",
+               min_height: int = 200) -> pg.PlotWidget:
+    """
+    Create a fully-configured PlotWidget:
+      • proper title and axis labels
+      • grid on both axes
+      • styled tick fonts
+      • dark background matching the panel
+      • minimum height so it never collapses
+    """
+    pw = pg.PlotWidget()
+    pw.setMinimumHeight(min_height)
+    pw.setBackground(BG2)
+
+    # Title
+    pw.setTitle(
+        f"<span style='color:{FG1};font-size:11px;font-weight:700;'>{title}</span>",
+        size="11pt",
+    )
+
+    # Axis labels
+    label_style = {"color": FG1, "font-size": "10px"}
+    pw.setLabel("left",   y_label, **label_style)
+    pw.setLabel("bottom", x_label, **label_style)
+
+    # Grid
+    pw.showGrid(x=True, y=True, alpha=0.18)
+
+    # Tick font
+    font = QFont("Monospace", 9)
+    pw.getAxis("bottom").setTickFont(font)
+    pw.getAxis("left").setTickFont(font)
+    pw.getAxis("bottom").setTextPen(pg.mkPen(FG1))
+    pw.getAxis("left").setTextPen(pg.mkPen(FG1))
+
+    # Hide top/right spines
+    pw.showAxis("top",   False)
+    pw.showAxis("right", False)
+
+    return pw
+
+
+def _draw_bars(pw: pg.PlotWidget,
+               values: list[float],
+               tick_labels: list[str],
+               bar_width: float = 0.6) -> None:
+    """
+    Clear the PlotWidget and draw a colour-coded bar chart.
+    Green bars ≥ 0, red bars < 0.
+    Includes:
+      • a dashed zero baseline
+      • correct X and Y range with padding
+      • per-bar value text labels
+    """
+    pw.clear()
+    n = len(values)
+    if n == 0:
+        return
+
+    xs = list(range(n))
+
+    # ── bars ──────────────────────────────────────────────────────────
+    bar_colours = [QColor(GREEN if v >= 0 else RED) for v in values]
+    bars = pg.BarGraphItem(x=xs, height=values, width=bar_width,
+                           brushes=bar_colours, pens=[pg.mkPen(None)] * n)
+    pw.addItem(bars)
+
+    # ── zero baseline ─────────────────────────────────────────────────
+    zero = pg.InfiniteLine(
+        pos=0, angle=0,
+        pen=pg.mkPen(color=FG2, width=1, style=Qt.PenStyle.DashLine),
+        movable=False,
+    )
+    pw.addItem(zero)
+
+    # ── value labels above / below each bar ───────────────────────────
+    for i, v in enumerate(values):
+        txt = pg.TextItem(
+            text=f"{v:+,.0f}",
+            color=GREEN if v >= 0 else RED,
+            anchor=(0.5, 1.0 if v >= 0 else 0.0),
+        )
+        txt.setFont(QFont("Monospace", 8))
+        pw.addItem(txt)
+        y_off = max(abs(v) * 0.04, abs(max(values, key=abs, default=1)) * 0.015)
+        txt.setPos(i, v + y_off if v >= 0 else v - y_off)
+
+    # ── axis ticks ────────────────────────────────────────────────────
+    pw.getAxis("bottom").setTicks([list(zip(xs, tick_labels))])
+
+    # ── X/Y range ─────────────────────────────────────────────────────
+    pw.setXRange(-0.5, n - 0.5, padding=0.02)
+
+    all_vals = [v for v in values if v != 0]
+    if all_vals:
+        lo, hi = min(all_vals), max(all_vals)
+        span = max(hi - lo, abs(lo), abs(hi), 1.0)
+        pad  = span * 0.20
+        # Always include zero in the range
+        pw.setYRange(min(lo - pad, 0 - pad * 0.3),
+                     max(hi + pad, 0 + pad * 0.3), padding=0)
+    else:
+        pw.setYRange(-1, 1, padding=0.1)
+
 
 # ── shared helpers ─────────────────────────────────────────────────────────────
 
@@ -126,6 +235,37 @@ def _pnl_colour(pnl: float) -> str:
     return GREEN if pnl > 0 else RED if pnl < 0 else FG1
 
 
+# ── journal helpers ────────────────────────────────────────────────────────────
+
+def _day_stats(journal, target: date) -> dict:
+    """
+    Aggregate closed trades for a single calendar day.
+
+    Uses `journal._db_query_closed` so that any date can be queried, not just
+    today.  Returns keys consistent with what all tabs expect:
+      pnl, total_trades, wins, win_rate, best_pnl, trades (list of dicts)
+    """
+    prefix = target.isoformat()          # "YYYY-MM-DD"
+    try:
+        all_trades = journal._db_query_closed(limit=10_000)
+    except Exception:
+        return {}
+    day = [t for t in all_trades if (t.get("exit_time") or "").startswith(prefix)]
+    if not day:
+        return {"pnl": 0.0, "total_trades": 0, "wins": 0,
+                "win_rate": 0.0, "best_pnl": 0.0, "trades": []}
+    pnls = [float(t.get("pnl", 0) or 0) for t in day]
+    wins = [p for p in pnls if p > 0]
+    return {
+        "pnl":          sum(pnls),
+        "total_trades": len(day),
+        "wins":         len(wins),
+        "win_rate":     len(wins) / len(day),
+        "best_pnl":     max(pnls),
+        "trades":       day,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # DAILY TAB
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -175,7 +315,7 @@ class DailyTab(QWidget):
 
         # Source attribution
         ag, alay = _card("Signal Attribution – Today")
-        self._attr_tbl = _table(["Source", "Trades", "Wins", "Win %", "Net P&L"])
+        self._attr_tbl = _table(["Source", "Trades", "Wins", "Win %", "Losses"])
         alay.addWidget(self._attr_tbl)
 
         # Forecast accuracy
@@ -207,10 +347,11 @@ class DailyTab(QWidget):
         if not self._journal:
             return
         try:
+            # daily_summary() returns: pnl, total_trades, win_rate (today only)
             summary = self._journal.daily_summary()
-            pnl     = float(summary.get("total_pnl", 0))
-            trades  = int(summary.get("trade_count", 0))
-            wr      = float(summary.get("win_rate", 0))
+            pnl    = float(summary.get("pnl", 0))
+            trades = int(summary.get("total_trades", 0))
+            wr     = float(summary.get("win_rate", 0))
 
             self._c_pnl._value_lbl.setText(f"{pnl:+,.2f}")
             self._c_pnl._value_lbl.setStyleSheet(
@@ -223,32 +364,33 @@ class DailyTab(QWidget):
                 f"font-size:20px;font-weight:700;"
             )
 
-            # Trade table
-            trade_list = summary.get("trades", [])
+            # Trade list — use _day_stats which queries _db_query_closed
+            today_stats = _day_stats(self._journal, date.today())
+            trade_list  = today_stats.get("trades", [])
             self._trade_tbl.setRowCount(len(trade_list))
             for r, t in enumerate(trade_list):
-                tp = float(t.get("pnl", 0) or 0)
-                ts = t.get("created_at", "")[:19].replace("T", " ")
-                self._trade_tbl.setItem(r, 0, _item(ts[-8:], FG1))
+                tp   = float(t.get("pnl", 0) or 0)
+                ts   = (t.get("exit_time", "") or "")[:19].replace("T", " ")
+                side = (t.get("side", "") or "").upper()
+                src  = t.get("council_final") or t.get("regime") or "—"
+                self._trade_tbl.setItem(r, 0, _item(ts[-8:] or ts, FG1))
                 self._trade_tbl.setItem(r, 1, _item(t.get("symbol", ""), FG0))
-                side = t.get("side", "")
                 self._trade_tbl.setItem(r, 2, _item(side, GREEN if side == "BUY" else RED))
-                self._trade_tbl.setItem(r, 3, _item(f"{float(t.get('quantity', 0)):.4f}", FG1))
-                self._trade_tbl.setItem(r, 4, _item(f"{float(t.get('price', 0)):,.4f}", FG1))
+                self._trade_tbl.setItem(r, 3, _item(f"{float(t.get('quantity', 0) or 0):.4f}", FG1))
+                self._trade_tbl.setItem(r, 4, _item(f"{float(t.get('exit_price', 0) or 0):,.4f}", FG1))
                 self._trade_tbl.setItem(r, 5, _item(f"{tp:+,.2f}", _pnl_colour(tp)))
-                self._trade_tbl.setItem(r, 6, _item(t.get("ml_signal", "—"), ACCENT2))
+                self._trade_tbl.setItem(r, 6, _item(str(src), ACCENT2))
 
-            # Attribution
+            # Attribution — source_attribution() returns: wins, losses, win_rate, total
             attr = self._journal.source_attribution() if hasattr(self._journal, "source_attribution") else {}
             self._attr_tbl.setRowCount(len(attr))
-            for r, (src, stats) in enumerate(sorted(attr.items(), key=lambda x: -x[1].get("net_pnl", 0))):
-                net = float(stats.get("net_pnl", 0))
+            for r, (src, stats) in enumerate(sorted(attr.items(), key=lambda x: -x[1].get("wins", 0))):
                 wr2 = float(stats.get("win_rate", 0))
                 self._attr_tbl.setItem(r, 0, _item(src, ACCENT2))
                 self._attr_tbl.setItem(r, 1, _item(str(stats.get("total", 0)), FG1))
                 self._attr_tbl.setItem(r, 2, _item(str(stats.get("wins", 0)), GREEN))
                 self._attr_tbl.setItem(r, 3, _item(f"{wr2:.0%}", GREEN if wr2 >= 0.5 else YELLOW))
-                self._attr_tbl.setItem(r, 4, _item(f"{net:+,.2f}", _pnl_colour(net)))
+                self._attr_tbl.setItem(r, 4, _item(str(stats.get("losses", 0)), RED))
         except Exception:
             pass
 
@@ -338,10 +480,7 @@ class WeeklyTab(QWidget):
 
         # Bar chart
         cg, clay = _card("Daily P&L – Last 7 Days")
-        self._plot = pg.PlotWidget()
-        self._plot.showGrid(x=False, y=True, alpha=0.15)
-        self._plot.setLabel("left", "P&L (USDT)")
-        self._plot.getAxis("bottom").setTicks([])
+        self._plot = _make_plot("Net P&L per Day", "Day of Week", "P&L (USDT)")
         clay.addWidget(self._plot)
         splitter.addWidget(cg)
 
@@ -373,13 +512,14 @@ class WeeklyTab(QWidget):
             day_data = []
             for d in days:
                 try:
-                    s = self._journal.daily_summary(d.isoformat()) \
-                        if hasattr(self._journal, "daily_summary") else {}
+                    s = _day_stats(self._journal, d) \
+                        if hasattr(self._journal, "_db_query_closed") else {}
                     day_data.append({
-                        "date": d, "pnl": float(s.get("total_pnl", 0)),
-                        "trades": int(s.get("trade_count", 0)),
+                        "date":   d,
+                        "pnl":    float(s.get("pnl", 0)),
+                        "trades": int(s.get("total_trades", 0)),
                         "wins":   int(s.get("wins", 0)),
-                        "best":   float(s.get("best_trade_pnl", 0)),
+                        "best":   float(s.get("best_pnl", 0)),
                     })
                 except Exception:
                     day_data.append({"date": d, "pnl": 0, "trades": 0, "wins": 0, "best": 0})
@@ -402,15 +542,11 @@ class WeeklyTab(QWidget):
             self._c_worst._value_lbl.setText(f"{worst_day['pnl']:+,.0f}")
 
             # Bar chart
-            self._plot.clear()
-            xs = list(range(len(day_data)))
-            bars = pg.BarGraphItem(
-                x=xs, height=[d["pnl"] for d in day_data], width=0.6,
-                brushes=[QColor(GREEN if d["pnl"] >= 0 else RED) for d in day_data],
+            _draw_bars(
+                self._plot,
+                values=[d["pnl"] for d in day_data],
+                tick_labels=[d["date"].strftime("%a\n%d %b") for d in day_data],
             )
-            self._plot.addItem(bars)
-            ticks = [(i, day_data[i]["date"].strftime("%a")) for i in xs]
-            self._plot.getAxis("bottom").setTicks([ticks])
 
             # Table
             self._day_tbl.setRowCount(len(day_data))
@@ -492,9 +628,7 @@ class MonthlyTab(QWidget):
 
         # Monthly bar chart (week-by-week)
         cg, clay = _card("Weekly P&L – This Month")
-        self._plot = pg.PlotWidget()
-        self._plot.showGrid(x=False, y=True, alpha=0.15)
-        self._plot.setLabel("left", "P&L (USDT)")
+        self._plot = _make_plot("Net P&L per Week", "Week Ending", "P&L (USDT)")
         clay.addWidget(self._plot)
         splitter.addWidget(cg)
 
@@ -535,8 +669,7 @@ class MonthlyTab(QWidget):
             return
         try:
             # Build weekly buckets
-            import calendar
-            _, last_day = calendar.monthrange(year, month)
+            _, last_day = _cal.monthrange(year, month)
             first = date(year, month, 1)
             last  = date(year, month, last_day)
 
@@ -553,10 +686,10 @@ class MonthlyTab(QWidget):
                 d = wstart
                 while d <= wend:
                     try:
-                        s = self._journal.daily_summary(d.isoformat()) \
-                            if hasattr(self._journal, "daily_summary") else {}
-                        tot_pnl    += float(s.get("total_pnl", 0))
-                        tot_trades += int(s.get("trade_count", 0))
+                        s = _day_stats(self._journal, d) \
+                            if hasattr(self._journal, "_db_query_closed") else {}
+                        tot_pnl    += float(s.get("pnl", 0))
+                        tot_trades += int(s.get("total_trades", 0))
                         tot_wins   += int(s.get("wins", 0))
                     except Exception:
                         pass
@@ -577,14 +710,10 @@ class MonthlyTab(QWidget):
             self._c_winrate._value_lbl.setText(f"{wr:.0%}")
 
             # Bar chart
-            self._plot.clear()
-            xs = list(range(len(week_data)))
-            self._plot.addItem(pg.BarGraphItem(
-                x=xs, height=[d["pnl"] for d in week_data], width=0.6,
-                brushes=[QColor(GREEN if d["pnl"] >= 0 else RED) for d in week_data],
-            ))
-            self._plot.getAxis("bottom").setTicks(
-                [[(i, week_data[i]["label"]) for i in xs]]
+            _draw_bars(
+                self._plot,
+                values=[d["pnl"] for d in week_data],
+                tick_labels=[d["label"] for d in week_data],
             )
 
             # Table
@@ -636,8 +765,7 @@ class MonthlyTab(QWidget):
         if not data:
             return
         year, month = data
-        import calendar
-        month_name = calendar.month_name[month]
+        month_name = _cal.month_name[month]
         self._email.send_text(
             subject=f"[BinanceML Pro] Monthly Report – {month_name} {year}",
             message=f"Monthly report for {month_name} {year} generated from the app."
@@ -720,9 +848,7 @@ class QuarterlyTab(QWidget):
 
         # Monthly bar chart
         cg, clay = _card("Monthly P&L – Quarter")
-        self._plot = pg.PlotWidget()
-        self._plot.showGrid(x=False, y=True, alpha=0.15)
-        self._plot.setLabel("left", "P&L (USDT)")
+        self._plot = _make_plot("Net P&L per Month", "Month", "P&L (USDT)")
         clay.addWidget(self._plot)
         splitter.addWidget(cg)
 
@@ -733,7 +859,7 @@ class QuarterlyTab(QWidget):
 
         # Source attribution for quarter
         ag, alay = _card("Signal Attribution", ACCENT2)
-        self._attr_tbl = _table(["Source", "Trades", "Win %", "Net P&L"])
+        self._attr_tbl = _table(["Source", "Trades", "Win %", "Losses"])
         alay.addWidget(self._attr_tbl)
 
         right = QWidget()
@@ -767,25 +893,18 @@ class QuarterlyTab(QWidget):
 
         for yr, mo in months:
             mp, mt, mw, mt_est = 0.0, 0, 0, 0.0
-            if self._journal:
+            if self._journal and hasattr(self._journal, "_db_query_closed"):
                 try:
-                    s = self._journal.daily_summary() if hasattr(self._journal, "daily_summary") else {}
-                    # For historical months use monthly aggregate if available
-                    try:
-                        import calendar
-                        _, last_d = calendar.monthrange(yr, mo)
-                        for dd in range(1, last_d + 1):
-                            try:
-                                ds = self._journal.daily_summary(f"{yr}-{mo:02d}-{dd:02d}") \
-                                    if hasattr(self._journal, "daily_summary") else {}
-                                mp += float(ds.get("total_pnl", 0))
-                                mt += int(ds.get("trade_count", 0))
-                                mw += int(ds.get("wins", 0))
-                                daily_pnls.append(float(ds.get("total_pnl", 0)))
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
+                    _, last_d = _cal.monthrange(yr, mo)
+                    for dd in range(1, last_d + 1):
+                        try:
+                            ds = _day_stats(self._journal, date(yr, mo, dd))
+                            mp += float(ds.get("pnl", 0))
+                            mt += int(ds.get("total_trades", 0))
+                            mw += int(ds.get("wins", 0))
+                            daily_pnls.append(float(ds.get("pnl", 0)))
+                        except Exception:
+                            pass
                 except Exception:
                     pass
             if self._tax:
@@ -802,7 +921,6 @@ class QuarterlyTab(QWidget):
         wr = total_wins / total_trades if total_trades else 0
 
         # Sharpe estimate
-        import numpy as np
         sharpe = 0.0
         if len(daily_pnls) > 5:
             arr = np.array(daily_pnls)
@@ -824,23 +942,20 @@ class QuarterlyTab(QWidget):
         self._c_tax._value_lbl.setText(f"£{tax_total:,.0f}")
 
         # Chart
-        self._plot.clear()
-        import calendar as cal
-        labels = [cal.month_abbr[d["month"]] for d in month_data]
-        self._plot.addItem(pg.BarGraphItem(
-            x=list(range(len(month_data))),
-            height=[d["pnl"] for d in month_data],
-            width=0.6,
-            brushes=[QColor(GREEN if d["pnl"] >= 0 else RED) for d in month_data],
-        ))
-        self._plot.getAxis("bottom").setTicks([[(i, labels[i]) for i in range(len(labels))]])
+        _draw_bars(
+            self._plot,
+            values=[d["pnl"] for d in month_data],
+            tick_labels=[
+                f"{_cal.month_abbr[d['month']]}\n{d['year']}"
+                for d in month_data
+            ],
+        )
 
         # Table
         self._month_tbl.setRowCount(len(month_data))
-        import calendar as cal2
         for r, d in enumerate(month_data):
             wr2 = d["wins"] / d["trades"] if d["trades"] else 0
-            self._month_tbl.setItem(r, 0, _item(f"{cal2.month_abbr[d['month']]} {d['year']}", FG1))
+            self._month_tbl.setItem(r, 0, _item(f"{_cal.month_abbr[d['month']]} {d['year']}", FG1))
             self._month_tbl.setItem(r, 1, _item(str(d["trades"]), FG0))
             self._month_tbl.setItem(r, 2, _item(str(d["wins"]), GREEN))
             self._month_tbl.setItem(r, 3, _item(f"{wr2:.0%}", GREEN if wr2 >= 0.5 else YELLOW))
@@ -852,13 +967,12 @@ class QuarterlyTab(QWidget):
             try:
                 attr = self._journal.source_attribution()
                 self._attr_tbl.setRowCount(len(attr))
-                for r, (src, stats) in enumerate(sorted(attr.items(), key=lambda x: -x[1].get("net_pnl", 0))):
+                for r, (src, stats) in enumerate(sorted(attr.items(), key=lambda x: -x[1].get("wins", 0))):
                     wr3 = float(stats.get("win_rate", 0))
-                    net = float(stats.get("net_pnl", 0))
                     self._attr_tbl.setItem(r, 0, _item(src, ACCENT2))
                     self._attr_tbl.setItem(r, 1, _item(str(stats.get("total", 0)), FG0))
                     self._attr_tbl.setItem(r, 2, _item(f"{wr3:.0%}", GREEN if wr3 >= 0.5 else YELLOW))
-                    self._attr_tbl.setItem(r, 3, _item(f"{net:+,.2f}", _pnl_colour(net)))
+                    self._attr_tbl.setItem(r, 3, _item(str(stats.get("losses", 0)), RED))
             except Exception:
                 pass
 
@@ -1037,10 +1151,10 @@ class AdHocTab(QWidget):
             d = from_date
             while d <= to_date:
                 try:
-                    s = self._journal.daily_summary(d.isoformat()) \
-                        if hasattr(self._journal, "daily_summary") else {}
-                    total_pnl    += float(s.get("total_pnl", 0))
-                    total_trades += int(s.get("trade_count", 0))
+                    s = _day_stats(self._journal, d) \
+                        if hasattr(self._journal, "_db_query_closed") else {}
+                    total_pnl    += float(s.get("pnl", 0))
+                    total_trades += int(s.get("total_trades", 0))
                     total_wins   += int(s.get("wins", 0))
                 except Exception:
                     pass
@@ -1061,12 +1175,13 @@ class AdHocTab(QWidget):
         lines = ["── SIGNAL ATTRIBUTION ──────────────────────────────"]
         try:
             attr = self._journal.source_attribution() if hasattr(self._journal, "source_attribution") else {}
-            for src, stats in sorted(attr.items(), key=lambda x: -x[1].get("net_pnl", 0)):
-                wr = float(stats.get("win_rate", 0))
-                net = float(stats.get("net_pnl", 0))
+            for src, stats in sorted(attr.items(), key=lambda x: -x[1].get("wins", 0)):
+                wr  = float(stats.get("win_rate", 0))
+                win = int(stats.get("wins", 0))
+                los = int(stats.get("losses", 0))
                 lines.append(
                     f"  {src:<30} {stats.get('total',0):>4} trades  "
-                    f"WR {wr:.0%}  Net {net:+,.2f}"
+                    f"WR {wr:.0%}  W:{win}  L:{los}"
                 )
             lines.append("")
         except Exception as exc:
@@ -1127,7 +1242,6 @@ class AdHocTab(QWidget):
             total_net, total_tax = 0.0, 0.0
             for yr, mo in sorted(months_covered):
                 try:
-                    import calendar
                     ms = self._tax.monthly_summary(yr, mo)
                     if ms:
                         net = float(ms.get("net_gain", 0))
@@ -1135,7 +1249,7 @@ class AdHocTab(QWidget):
                         total_net += net
                         total_tax += tax
                         lines.append(
-                            f"  {calendar.month_abbr[mo]} {yr}  "
+                            f"  {_cal.month_abbr[mo]} {yr}  "
                             f"Net: £{net:+,.2f}  Est. tax: £{tax:,.2f}"
                         )
                 except Exception:

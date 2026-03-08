@@ -275,6 +275,13 @@ _SVGS: dict[str, str] = {
   <line x1="12" y1="8" x2="12" y2="8" stroke="{color}" stroke-width="2.5" stroke-linecap="round"/>
   <line x1="12" y1="12" x2="12" y2="16" stroke="{color}" stroke-width="1.5" stroke-linecap="round"/>
 </svg>""",
+    # Bar-chart icon used for the Reports nav button
+    "reports": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <rect x="3" y="12" width="4" height="9" rx="1" stroke="{color}" stroke-width="1.5"/>
+  <rect x="10" y="7"  width="4" height="14" rx="1" stroke="{color}" stroke-width="1.5"/>
+  <rect x="17" y="3"  width="4" height="18" rx="1" stroke="{color}" stroke-width="1.5"/>
+  <line x1="2" y1="21" x2="22" y2="21" stroke="{color}" stroke-width="1.5" stroke-linecap="round"/>
+</svg>""",
 }
 
 
