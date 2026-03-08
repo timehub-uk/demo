@@ -431,18 +431,23 @@ class VolumeBreakoutDetector:
 
     @staticmethod
     def _count_consol_bars(closes: np.ndarray, range_pct: float) -> int:
-        """Count consecutive trailing bars within a tight range."""
-        count = 0
-        for i in range(len(closes) - 1, 0, -1):
-            window = closes[i - count: i + 1]
-            if len(window) < 2:
-                break
+        """Count how many trailing bars fit within a tight range_pct band.
+
+        Expands the window backward from the last bar until the range exceeds
+        range_pct, then returns the last window size that still passed.
+        """
+        n = len(closes)
+        if n < 2:
+            return 0
+        mean = closes.mean()
+        if mean == 0:
+            return 0
+        for count in range(2, n + 1):
+            window = closes[n - count:]
             r = (window.max() - window.min()) / window.mean() * 100
-            if r <= range_pct:
-                count += 1
-            else:
-                break
-        return count
+            if r > range_pct:
+                return count - 1
+        return n
 
     # ── Kline cache ────────────────────────────────────────────────────────────
 
