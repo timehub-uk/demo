@@ -63,6 +63,40 @@ class AIConfig(BaseModel):
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
     voice_enabled: bool = True
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
+
+class NotificationsConfig(BaseModel):
+    # REST API webhook bearer token
+    # Leave blank to auto-derive from the first 16 chars of the Binance API key.
+    api_key: str = ""
+
+    # Discord
+    discord_webhook_url: str = ""
+    discord_trade_alerts: bool = True
+    discord_signal_alerts: bool = True
+    discord_whale_alerts: bool = True
+    discord_daily_report: bool = True
+
+    # Slack
+    slack_webhook_url: str = ""
+    slack_channel: str = "#binanceml-alerts"
+    slack_trade_alerts: bool = True
+    slack_signal_alerts: bool = False
+    slack_daily_report: bool = True
+
+    # Email (SMTP)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+    email_from: str = ""
+    email_to: str = ""                  # comma-separated recipients
+    email_trade_alerts: bool = False
+    email_daily_report: bool = True
+    email_tax_reports: bool = True
 
 
 class MLConfig(BaseModel):
@@ -141,6 +175,7 @@ class Settings:
         self.tax = TaxConfig()
         self.trading = TradingConfig()
         self.ui = UIConfig()
+        self.notifications = NotificationsConfig()
         self.first_run: bool = True
         self._loaded = True
 
@@ -157,6 +192,7 @@ class Settings:
             "tax": self.tax.model_dump(),
             "trading": self.trading.model_dump(),
             "ui": self.ui.model_dump(),
+            "notifications": self.notifications.model_dump(),
             "first_run": self.first_run,
         }
         from .encryption import EncryptionManager
@@ -193,7 +229,16 @@ class Settings:
         self.tax = TaxConfig(**data.get("tax", {}))
         self.trading = TradingConfig(**data.get("trading", {}))
         self.ui = UIConfig(**data.get("ui", {}))
+        self.notifications = NotificationsConfig(**data.get("notifications", {}))
         self.first_run = data.get("first_run", True)
+
+    def effective_api_key(self) -> str:
+        """Bearer token used by the REST API and webhooks.
+        Falls back to the first 16 chars of the Binance API key when no
+        explicit key has been set."""
+        if self.notifications.api_key:
+            return self.notifications.api_key
+        return self.binance.api_key[:16] if self.binance.api_key else "dev"
 
     @property
     def db_url(self) -> str:

@@ -164,6 +164,18 @@ def build_services(settings):
     from core.telegram_bot import TelegramBot
     telegram = TelegramBot(engine=engine, portfolio=portfolio)
 
+    intel.system("Startup", "Initialising Discord notifier…")
+    from alerts.discord_notifier import get_discord_notifier
+    discord = get_discord_notifier()
+
+    intel.system("Startup", "Initialising Slack notifier…")
+    from alerts.slack_notifier import get_slack_notifier
+    slack = get_slack_notifier()
+
+    intel.system("Startup", "Initialising Email notifier…")
+    from alerts.email_notifier import get_email_notifier
+    email_notifier = get_email_notifier()
+
     intel.system("Startup", "Initialising new token launch watcher…")
     from ml.new_token_watcher import NewTokenWatcher
     new_token_watcher = NewTokenWatcher(binance_client=binance)
@@ -452,6 +464,9 @@ def build_services(settings):
         "launch_signal":       launch_signal,
         "sim_twin":            sim_twin,
         "mutation_lab":        mutation_lab,
+        "discord":             discord,
+        "slack":               slack,
+        "email_notifier":      email_notifier,
     }
 
 
@@ -507,33 +522,64 @@ def start_background_services(services: dict, settings) -> None:
     if voice:
         voice.start()
 
-    # Telegram bot
+    # Telegram bot – inject full services dict so ML layer commands work
     telegram = services.get("telegram")
     if telegram:
+        telegram.set_services(services)
         telegram.start()
 
-    # Wire trade alerts → voice + telegram
+    # Discord, Slack, Email notifiers
+    discord_ref      = services.get("discord")
+    slack_ref        = services.get("slack")
+    email_ref        = services.get("email_notifier")
+    if discord_ref:
+        discord_ref.start()
+    if slack_ref:
+        slack_ref.start()
+    if email_ref:
+        email_ref.start()
+
+    # Wire trade alerts → voice + telegram + discord + slack + email
     engine_ref = engine
     voice_ref  = voice
     tg_ref     = telegram
     def _on_trade(trade):
         try:
+            side   = trade.get("side", "")
+            symbol = trade.get("symbol", "")
+            price  = float(trade.get("price", 0))
+            qty    = float(trade.get("qty", 0))
+            pnl    = trade.get("pnl")
             if voice_ref:
-                pnl = trade.get("pnl")
-                voice_ref.speak_trade(trade.get("side",""), trade.get("symbol",""), float(trade.get("price",0)), pnl)
+                voice_ref.speak_trade(side, symbol, price, pnl)
             if tg_ref:
-                tg_ref.send_trade_alert(trade.get("side",""), trade.get("symbol",""), float(trade.get("price",0)), float(trade.get("qty",0)), trade.get("pnl"))
+                tg_ref.send_trade_alert(side, symbol, price, qty, pnl)
+            if discord_ref:
+                discord_ref.send_trade_alert(side, symbol, price, qty, pnl)
+            if slack_ref:
+                slack_ref.send_trade_alert(side, symbol, price, qty, pnl)
+            if email_ref and pnl is not None:
+                email_ref.send_trade_alert(side, symbol, price, qty, pnl)
         except Exception:
             pass
     engine.on("trade", _on_trade)
 
-    # Wire whale events → voice + telegram
+    # Wire whale events → voice + telegram + discord + slack
     def _on_whale(event):
         try:
+            ev_type    = getattr(event, "event_type", "")
+            symbol     = getattr(event, "symbol", "")
+            volume_usd = getattr(event, "volume_usd", 0)
+            confidence = getattr(event, "confidence", 0)
             if voice_ref:
-                voice_ref.speak_whale_event(getattr(event,"event_type",""), getattr(event,"symbol",""), getattr(event,"volume_usd",0))
-            if tg_ref and getattr(event,"confidence",0) >= 0.75:
-                tg_ref.send_whale_alert(getattr(event,"event_type",""), getattr(event,"symbol",""), getattr(event,"volume_usd",0), getattr(event,"confidence",0))
+                voice_ref.speak_whale_event(ev_type, symbol, volume_usd)
+            if confidence >= 0.75:
+                if tg_ref:
+                    tg_ref.send_whale_alert(ev_type, symbol, volume_usd, confidence)
+                if discord_ref:
+                    discord_ref.send_whale_alert(ev_type, symbol, volume_usd, confidence)
+                if slack_ref:
+                    slack_ref.send_whale_alert(ev_type, symbol, volume_usd, confidence)
         except Exception:
             pass
     engine.on("whale", _on_whale)
@@ -685,6 +731,7 @@ def start_background_services(services: dict, settings) -> None:
             predictor=predictor,
             order_manager=services["orders"],
             tax_calc=services["tax_calc"],
+            services=services,
         )
         intel.api("Startup", f"REST API server: {api_srv.base_url}")
     except Exception as exc:

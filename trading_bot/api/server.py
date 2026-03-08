@@ -46,12 +46,20 @@ def _json_err(msg: str, status: int = 400):
 
 
 def require_token(f: Callable):
-    """Simple Bearer-token auth for all API endpoints."""
+    """Bearer-token auth for all API endpoints.
+
+    Token resolution order:
+      1. Settings → Notifications → API Key  (if set)
+      2. First 16 chars of the Binance API key  (fallback)
+
+    Set your own key in Settings → Notifications → API Key to use a
+    dedicated token instead of the derived Binance key fragment.
+    """
     @wraps(f)
     def decorated(*args, **kwargs):
         auth = request.headers.get("Authorization", "")
         settings = get_settings()
-        expected = settings.binance.api_key[:16] if settings.binance.api_key else "dev"
+        expected = settings.effective_api_key()
         if not auth.startswith("Bearer ") or auth[7:] != expected:
             abort(401)
         return f(*args, **kwargs)
@@ -59,12 +67,13 @@ def require_token(f: Callable):
 
 
 def create_app(engine=None, portfolio=None, predictor=None,
-               order_manager=None, tax_calc=None) -> Flask:
+               order_manager=None, tax_calc=None, services: dict | None = None) -> Flask:
     """Factory – creates Flask app with all routes bound to live services."""
     app = Flask("BinanceMLPro-API")
     app.config["JSON_SORT_KEYS"] = False
     redis_client = RedisClient()
     intel = get_intel_logger()
+    _services = services or {}
 
     # ── Status ─────────────────────────────────────────────────────────
     @app.route("/api/v1/status")
@@ -216,6 +225,36 @@ def create_app(engine=None, portfolio=None, predictor=None,
         intel.api("APIServer", f"POST /api/v1/ml/predict {symbol}")
         return _json_ok(sig)
 
+    # ── ML Layer list ───────────────────────────────────────────────────
+    @app.route("/api/v1/ml/layers")
+    @require_token
+    def ml_layers():
+        """List all 10 layers with name and available tool count."""
+        from ml.layer_results import LAYER_META, get_layer_results
+        result = []
+        for n, meta in LAYER_META.items():
+            data = get_layer_results(n, _services)
+            result.append({
+                "layer": n,
+                "name":  meta["name"],
+                "color": meta["color"],
+                "tool_count": len(data.get("tools", {})),
+            })
+        intel.api("APIServer", "GET /api/v1/ml/layers")
+        return _json_ok(result)
+
+    # ── ML Layer results ────────────────────────────────────────────────
+    @app.route("/api/v1/ml/layer/<int:layer_n>")
+    @require_token
+    def ml_layer(layer_n: int):
+        """Return current results for all ML tools in the given layer (1-10)."""
+        if layer_n < 1 or layer_n > 10:
+            return _json_err("Layer must be 1–10", 400)
+        from ml.layer_results import get_layer_results
+        data = get_layer_results(layer_n, _services)
+        intel.api("APIServer", f"GET /api/v1/ml/layer/{layer_n}")
+        return _json_ok(data)
+
     # ── Tax summary ─────────────────────────────────────────────────────
     @app.route("/api/v1/tax/monthly")
     @require_token
@@ -276,12 +315,13 @@ class APIServer:
         self._host = "127.0.0.1"
         self._port = 8765
 
-    def start(self, host: str = "127.0.0.1", port: int = 8765, **services) -> None:
+    def start(self, host: str = "127.0.0.1", port: int = 8765,
+              services: dict | None = None, **kwargs) -> None:
         if self._running:
             return
         self._host = host
         self._port = port
-        self._app = create_app(**services)
+        self._app = create_app(services=services, **kwargs)
         self._running = True
         self._thread = threading.Thread(
             target=self._run, daemon=True, name="api-server"

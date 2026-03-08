@@ -1183,6 +1183,7 @@ class MainWindow(QMainWindow):
                 monte_carlo=self._monte_carlo,
                 walk_forward=self._walk_forward,
                 engine=self._engine,
+                port_opt=self._port_opt,
             )
         except Exception:
             self.risk_page = _placeholder("Risk Dashboard", "Not available")

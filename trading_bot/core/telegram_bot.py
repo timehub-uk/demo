@@ -50,9 +50,10 @@ class TelegramBot:
     RATE_LIMIT_SEC = 3.0         # Minimum seconds between messages
     POLL_INTERVAL  = 5           # Seconds between update polls
 
-    def __init__(self, engine=None, portfolio=None) -> None:
-        self._engine   = engine
+    def __init__(self, engine=None, portfolio=None, services: dict | None = None) -> None:
+        self._engine    = engine
         self._portfolio = portfolio
+        self._services: dict = services or {}
         self._intel    = get_intel_logger()
         self._token: Optional[str] = None
         self._chat_id: Optional[str] = None
@@ -197,13 +198,28 @@ class TelegramBot:
             self.send_text(self._build_status())
         elif cmd == "/portfolio":
             self.send_text(self._build_portfolio())
+        elif cmd == "/ml_list":
+            self.send_text(self._build_ml_list())
+        elif cmd.startswith("/ml_layer_"):
+            # /ml_layer_1 … /ml_layer_10
+            try:
+                layer_n = int(cmd.split("_")[-1])
+                if 1 <= layer_n <= 10:
+                    self._send_layer(layer_n)
+                else:
+                    self.send_text("❌ Layer must be 1–10. Use /ml_list to see all layers.")
+            except ValueError:
+                self.send_text("❌ Usage: /ml_layer_1 … /ml_layer_10")
         elif cmd == "/help":
             self.send_text(
                 "📖 <b>Available commands:</b>\n"
                 "/status – system status\n"
                 "/portfolio – positions\n"
                 "/pause – pause auto-trading\n"
-                "/resume – resume auto-trading\n"
+                "/resume – resume auto-trading\n\n"
+                "<b>ML Toolbox:</b>\n"
+                "/ml_list – list all 10 layers\n"
+                "/ml_layer_1 … /ml_layer_10 – current results for that layer\n\n"
                 "/help – this message"
             )
 
@@ -223,6 +239,22 @@ class TelegramBot:
             except Exception:
                 pass
         return f"📊 Mode: {mode}"
+
+    def _build_ml_list(self) -> str:
+        from ml.layer_results import LAYER_META
+        lines = ["🧠 <b>ML Toolbox – 10 Layers</b>\n"]
+        for n, meta in LAYER_META.items():
+            lines.append(f"  /ml_layer_{n} – <b>Layer {n}</b>: {meta['name']}")
+        lines.append("\nSend /ml_layer_N to get live results for that layer.")
+        return "\n".join(lines)
+
+    def _send_layer(self, layer_n: int) -> None:
+        """Fetch and send results for one layer (may split into multiple messages)."""
+        from ml.layer_results import format_layer_text
+        text = format_layer_text(layer_n, self._services)
+        # Telegram max 4096 chars per message; split if needed
+        for chunk in _split_message(text, 4000):
+            self.send_text(chunk)
 
     def _build_portfolio(self) -> str:
         if self._portfolio:
@@ -250,6 +282,10 @@ class TelegramBot:
         with urllib.request.urlopen(req, timeout=10) as resp:
             resp.read()
 
+    def set_services(self, services: dict) -> None:
+        """Inject the services dict after construction (called from main.py)."""
+        self._services = services
+
     def _api_get_updates(self) -> list[dict]:
         url = self.API_BASE.format(token=self._token, method="getUpdates")
         params = urllib.parse.urlencode({
@@ -260,3 +296,14 @@ class TelegramBot:
         with urllib.request.urlopen(f"{url}?{params}", timeout=10) as resp:
             data = json.loads(resp.read().decode())
         return data.get("result", [])
+
+
+def _split_message(text: str, max_len: int = 4000) -> list[str]:
+    """Split a long string into chunks without breaking mid-tag."""
+    if len(text) <= max_len:
+        return [text]
+    chunks = []
+    while text:
+        chunks.append(text[:max_len])
+        text = text[max_len:]
+    return chunks

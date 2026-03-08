@@ -26,7 +26,7 @@ from PyQt6.QtGui import QColor, QBrush, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
-    QProgressBar, QSplitter, QGridLayout,
+    QProgressBar, QSplitter, QGridLayout, QPushButton, QComboBox,
 )
 
 from ui.styles import ACCENT, GREEN, RED, YELLOW, BG2, BG3, BG4, BORDER, FG0, FG1, FG2
@@ -78,16 +78,18 @@ class RiskDashboard(QWidget):
         monte_carlo=None,
         walk_forward=None,
         engine=None,
+        port_opt=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self._drm    = dynamic_risk
-        self._regime = regime_detector
-        self._ens    = ensemble
+        self._drm     = dynamic_risk
+        self._regime  = regime_detector
+        self._ens     = ensemble
         self._journal = trade_journal
-        self._mc     = monte_carlo
-        self._wf     = walk_forward
-        self._engine = engine
+        self._mc      = monte_carlo
+        self._wf      = walk_forward
+        self._engine  = engine
+        self._port_opt = port_opt
         self._setup_ui()
         self._timer  = QTimer(self)
         self._timer.timeout.connect(self._refresh)
@@ -238,6 +240,54 @@ class RiskDashboard(QWidget):
         mid_splitter.setSizes([550, 350])
         layout.addWidget(mid_splitter, 1)
 
+        # ── Portfolio Optimiser panel ──────────────────────────────────
+        po_grp, po_lay = _card("Portfolio Optimiser (Layer 4 – Research & Quant)")
+        po_hdr = QHBoxLayout()
+
+        self._po_method_combo = QComboBox()
+        self._po_method_combo.addItems(["max_sharpe", "risk_parity", "kelly", "equal_weight"])
+        self._po_method_combo.setStyleSheet(
+            f"background:{BG4}; color:{FG0}; border:1px solid {BORDER}; padding:3px 8px; border-radius:3px;"
+        )
+        po_hdr.addWidget(_label("Method:", FG1, 10))
+        po_hdr.addWidget(self._po_method_combo)
+
+        self._po_run_btn = QPushButton("▶ Optimise")
+        self._po_run_btn.setFixedHeight(26)
+        self._po_run_btn.setStyleSheet(
+            f"QPushButton {{ background:{ACCENT}; color:#000; font-weight:700; font-size:11px; "
+            f"border:none; border-radius:3px; padding:0 12px; }}"
+            f"QPushButton:hover {{ background:#00B8D9; }}"
+        )
+        self._po_run_btn.clicked.connect(self._run_portfolio_opt)
+        po_hdr.addWidget(self._po_run_btn)
+        po_hdr.addStretch()
+
+        self._po_stats_lbl = _label("", FG1, 10)
+        po_hdr.addWidget(self._po_stats_lbl)
+        po_lay.addLayout(po_hdr)
+
+        # Weights table
+        self._po_table = QTableWidget(0, 4)
+        self._po_table.setHorizontalHeaderLabels(["Symbol", "Weight %", "Kelly Size %", "Est. Return %"])
+        self._po_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self._po_table.setMaximumHeight(160)
+        self._po_table.setStyleSheet(
+            f"QTableWidget {{ background:{BG3}; color:{FG0}; gridline-color:{BORDER}; "
+            f"selection-background-color:{BG4}; border:none; font-size:11px; }}"
+            f"QHeaderView::section {{ background:{BG4}; color:{ACCENT}; border:none; "
+            f"padding:4px; font-size:10px; font-weight:700; }}"
+        )
+        self._po_table.verticalHeader().setVisible(False)
+        po_lay.addWidget(self._po_table)
+
+        # Rebalance suggestions
+        self._po_rebalance_lbl = _label("", FG2, 10)
+        self._po_rebalance_lbl.setWordWrap(True)
+        po_lay.addWidget(self._po_rebalance_lbl)
+
+        layout.addWidget(po_grp)
+
     # ── Refresh logic ──────────────────────────────────────────────────
 
     def _refresh(self) -> None:
@@ -247,6 +297,7 @@ class RiskDashboard(QWidget):
             self._refresh_risk_status()
             self._refresh_attribution()
             self._refresh_weights()
+            self._refresh_portfolio_opt()
             self._refresh_mc()
             self.last_update_lbl.setText(f"Updated: {time.strftime('%H:%M:%S')}")
         except Exception:
@@ -423,3 +474,87 @@ class RiskDashboard(QWidget):
             f"OOS/IS ratio: {report.oos_is_ratio:.2f} | "
             f"Folds: {report.n_folds}"
         )
+
+    # ── Portfolio Optimiser ────────────────────────────────────────────
+
+    def _run_portfolio_opt(self) -> None:
+        """Trigger a fresh optimisation run in a background thread."""
+        if not self._port_opt:
+            return
+        method = self._po_method_combo.currentText()
+        self._po_run_btn.setEnabled(False)
+        self._po_run_btn.setText("Running…")
+
+        import threading
+
+        def _run():
+            try:
+                result = self._port_opt.optimise(symbols=[], method=method)
+                # Cache on the optimiser so _refresh_portfolio_opt can read it
+                self._port_opt._last_result = result
+            except Exception:
+                pass
+            finally:
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, self._on_opt_done)
+
+        threading.Thread(target=_run, daemon=True, name="port-opt-ui").start()
+
+    def _on_opt_done(self) -> None:
+        self._po_run_btn.setEnabled(True)
+        self._po_run_btn.setText("▶ Optimise")
+        self._refresh_portfolio_opt()
+
+    def _refresh_portfolio_opt(self) -> None:
+        """Populate the Portfolio Optimiser table from the last cached result."""
+        if not self._port_opt:
+            return
+        result = getattr(self._port_opt, "_last_result", None)
+        if result is None:
+            return
+        try:
+            weights = result.weights
+            kelly   = result.kelly_sizes
+            exp_ret = result.expected_return_pct
+            sharpe  = result.sharpe_ratio
+            rebal   = result.rebalance_needed
+            notes   = result.notes
+
+            # Update stats label
+            self._po_stats_lbl.setText(
+                f"Sharpe: {sharpe:.2f}  |  E[ret]: {exp_ret:.1f}%  |  "
+                f"Vol: {result.expected_volatility_pct:.1f}%  |  "
+                f"Method: {result.method}"
+            )
+
+            # Fill table (sorted by weight descending)
+            sorted_syms = sorted(weights, key=lambda s: -weights[s])
+            self._po_table.setRowCount(len(sorted_syms))
+            for row, sym in enumerate(sorted_syms):
+                w   = weights[sym] * 100
+                k   = kelly.get(sym, weights[sym]) * 100
+                colour = GREEN if w >= 15 else YELLOW if w >= 8 else FG0
+
+                def _item(text, col=colour):
+                    it = QTableWidgetItem(text)
+                    it.setForeground(QColor(col))
+                    it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    return it
+
+                self._po_table.setItem(row, 0, _item(sym, FG0))
+                self._po_table.setItem(row, 1, _item(f"{w:.1f}%"))
+                self._po_table.setItem(row, 2, _item(f"{k:.1f}%"))
+                self._po_table.setItem(row, 3, _item(f"{exp_ret / max(len(weights), 1):.2f}%", FG2))
+
+            # Rebalance hint
+            if rebal:
+                self._po_rebalance_lbl.setText(
+                    "⚡ Rebalance recommended.  " +
+                    ("  ".join(notes[:3]) if notes else "")
+                )
+                self._po_rebalance_lbl.setStyleSheet(f"color:{YELLOW};")
+            else:
+                self._po_rebalance_lbl.setText("Portfolio within tolerance – no rebalance needed.")
+                self._po_rebalance_lbl.setStyleSheet(f"color:{GREEN};")
+        except Exception:
+            pass
