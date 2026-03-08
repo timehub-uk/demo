@@ -87,6 +87,104 @@ DOCS_HTML = """
   .ok   {{ color: {green}; }}
 </style>
 
+<h2>HOW EVERYTHING WORKS — STEP BY STEP</h2>
+
+<h3>Step 1 · First Run — Setup Wizard</h3>
+<p>On first launch the <b>Setup Wizard</b> opens automatically. It walks you through:</p>
+<ol>
+  <li>Enter your <b>Binance API Key + Secret</b> (read-only keys recommended for testing)</li>
+  <li>Toggle <b>Testnet mode</b> — uses paper balances so no real money is at risk</li>
+  <li>Set a <b>master password</b> — all keys are stored AES-256-GCM encrypted on disk</li>
+  <li>Optionally add AI provider keys (Claude / OpenAI / Gemini / ElevenLabs)</li>
+  <li>Choose a <b>trading mode</b>: Manual · Hybrid · Auto · Paper</li>
+</ol>
+<p>You can revisit any setting at <code>Settings (Ctrl+9)</code> at any time.</p>
+
+<h3>Step 2 · Train the ML Models</h3>
+<ol>
+  <li>Go to <code>ML Training (Ctrl+3)</code></li>
+  <li>Click <b>Start 48h Training</b> — the system downloads ~1 year of OHLCV candles for the
+      top 100 pairs from Binance and trains an <b>LSTM + Transformer ensemble</b></li>
+  <li>Optuna hyperparameter optimisation runs automatically during training</li>
+  <li>After the initial session, the <b>Continuous Learner</b> retrains every 24 h on new data</li>
+  <li>A <b>data integrity check</b> runs every 25 min; gaps or anomalies are flagged in the Intel Log</li>
+</ol>
+<p>You can trade in Manual mode while training runs in the background.</p>
+
+<h3>Step 3 · Understand the Signal Pipeline</h3>
+<p>Every trade candidate passes through 7 sequential gates before an order is placed:</p>
+<table>
+  <tr><th>#</th><th>Gate</th><th>What it checks</th><th>Blocks if…</th></tr>
+  <tr><td>1</td><td>LSTM Predictor</td><td>60-bar sequence → BUY/SELL/HOLD + confidence</td><td>Confidence &lt; threshold</td></tr>
+  <tr><td>2</td><td>Token ML</td><td>Per-symbol fine-tuned model adds second opinion</td><td>Conflicting signal</td></tr>
+  <tr><td>3</td><td>Regime Detector</td><td>Is the market TRENDING / RANGING / VOLATILE?</td><td>Signal doesn't suit regime</td></tr>
+  <tr><td>4</td><td>MTF Confluence</td><td>1h / 4h / 1d timeframes must agree</td><td>No multi-TF agreement</td></tr>
+  <tr><td>5</td><td>Signal Council</td><td>Multi-model deliberation — weighted vote</td><td>Council veto</td></tr>
+  <tr><td>6</td><td>Risk Manager</td><td>Kelly sizing · circuit-breaker · daily drawdown</td><td>Risk limit exceeded</td></tr>
+  <tr><td>7</td><td>Ensemble Aggregator</td><td>Weights adapt from per-source accuracy history</td><td>Aggregate too low</td></tr>
+</table>
+<p>Only signals that pass all 7 gates reach the order entry stage.</p>
+
+<h3>Step 4 · Run the AutoTrader</h3>
+<ol>
+  <li>Go to <code>AutoTrader (Ctrl+2)</code></li>
+  <li>Click <b>Start Scanner</b> — scans 1 000+ USDT/BTC/ETH/BNB/SOL pairs every 15 min</li>
+  <li>Each pair receives a <b>Tradability Score (0–1)</b> from 6 ML tools</li>
+  <li>Pairs scoring above the threshold enter the full signal pipeline</li>
+  <li>In <b>SEMI-AUTO</b> mode: confirmed signals appear in the queue — click <b>Take Aim</b> to trade</li>
+  <li>In <b>FULL-AUTO</b> mode: orders are placed automatically when all gates pass</li>
+</ol>
+<p class="warn">⚠ Minimum trade size: £12.00 GBP (≈ 15.24 USDT). Orders below this floor are rejected.</p>
+
+<h3>Step 5 · Watch the Intel Log</h3>
+<p>Press <code>Ctrl+L</code> to open the <b>Intel Log</b> dock. Every ML module, service, and trade
+action logs here in real time. Filter by level (DEBUG / INFO / WARNING / ERROR) or search by keyword.
+Use <b>Export</b> to save the log to a file.</p>
+
+<h3>Step 6 · Monitor Connection Health</h3>
+<p>Go to <code>Connections (Ctrl+8)</code>. The panel shows live status for Binance REST/WS,
+PostgreSQL, Redis, REST API server, voice alerts, and all <b>AI providers</b>.
+Unconfigured AI providers appear in <span style="color:{yellow}">amber</span> — they are
+disabled but the bot continues to run with fallback behaviour.</p>
+
+<h3>Step 7 · Review Trades and Tax</h3>
+<ol>
+  <li>Go to <code>Trade Journal (Ctrl+6)</code> — full history with entry/exit annotations on charts</li>
+  <li>UK CGT tax is calculated automatically under the Section 104 pool + 30-day rule</li>
+  <li>Monthly PDF reports are generated on the 1st of each month (optional email delivery)</li>
+  <li>Export a CSV for HMRC Self Assessment from the Trade Journal toolbar</li>
+</ol>
+
+<h2>AI PROVIDER REQUIREMENTS</h2>
+<p>All AI features degrade gracefully — the bot never crashes if a key is absent.
+Check live status in <code>Connections (Ctrl+8) → AI Providers</code>.</p>
+<table>
+  <tr><th>Provider</th><th>ML Features that use it</th><th>Fallback when disabled</th></tr>
+  <tr>
+    <td><span class="ok">Claude (Anthropic)</span></td>
+    <td>Sentiment scoring (primary) · Signal Council AI opinion</td>
+    <td>Tries OpenAI → Gemini → keyword scoring</td>
+  </tr>
+  <tr>
+    <td><span class="warn">ChatGPT (OpenAI)</span></td>
+    <td>Sentiment scoring (secondary fallback)</td>
+    <td>Tries Gemini → keyword scoring · <b>Sentiment still works</b></td>
+  </tr>
+  <tr>
+    <td><span class="warn">Gemini (Google)</span></td>
+    <td>Sentiment scoring (tertiary fallback)</td>
+    <td>Keyword-only sentiment scoring · <b>Sentiment still works</b></td>
+  </tr>
+  <tr>
+    <td><span class="warn">ElevenLabs TTS</span></td>
+    <td>High-quality voice alerts for trades, signals, whale events</td>
+    <td>macOS <code>say</code> / Linux <code>espeak</code> · <b>Voice alerts still work</b></td>
+  </tr>
+</table>
+<p class="warn">⚠ When ALL three sentiment providers are disabled, the Sentiment Analyser falls back to
+keyword-only scoring (bull/bear keyword counts). The signal pipeline continues to operate;
+only the AI-quality sentiment score is degraded.</p>
+
 <h2>GETTING STARTED</h2>
 
 <h3>1. Configure API Keys</h3>

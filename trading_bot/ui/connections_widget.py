@@ -272,6 +272,23 @@ class ConnectionsWidget(QWidget):
 
         root.addWidget(services_grp)
 
+        # ── AI Provider status ─────────────────────────────────────────
+        ai_grp = QGroupBox("AI Providers  (optional — features degrade gracefully when disabled)")
+        ai_layout = QVBoxLayout(ai_grp)
+        ai_layout.setSpacing(6)
+
+        self.row_claude     = ServiceRow("claude",      "bolt",  "Claude (Anthropic)")
+        self.row_openai     = ServiceRow("openai",      "bolt",  "ChatGPT (OpenAI)")
+        self.row_gemini     = ServiceRow("gemini",      "bolt",  "Gemini (Google)")
+        self.row_elevenlabs = ServiceRow("elevenlabs",  "bolt",  "ElevenLabs TTS")
+
+        for row in (self.row_claude, self.row_openai, self.row_gemini, self.row_elevenlabs):
+            row.action_btn.setText("Configure")
+            row.reconnect_requested.connect(self._on_reconnect)
+            ai_layout.addWidget(row)
+
+        root.addWidget(ai_grp)
+
         # ── API endpoint display ───────────────────────────────────────
         endpoint_grp = QGroupBox("API Endpoints")
         eg_layout = QGridLayout(endpoint_grp)
@@ -330,31 +347,41 @@ class ConnectionsWidget(QWidget):
     def _check_all(self) -> None:
         self.check_all_btn.setEnabled(False)
         for row in (self.row_binance, self.row_ws, self.row_postgres,
-                    self.row_redis, self.row_telegram, self.row_api, self.row_voice):
+                    self.row_redis, self.row_telegram, self.row_api, self.row_voice,
+                    self.row_claude, self.row_openai, self.row_gemini, self.row_elevenlabs):
             row.set_checking()
         threading.Thread(target=self._run_checks, daemon=True).start()
 
     def _run_checks(self) -> None:
         results = {}
-        results["binance"]  = self._check_binance()
-        results["ws"]       = self._check_ws()
-        results["postgres"] = self._check_postgres()
-        results["redis"]    = self._check_redis()
-        results["telegram"] = self._check_telegram()
-        results["api"]      = self._check_api_server()
-        results["voice"]    = self._check_voice()
+        results["binance"]     = self._check_binance()
+        results["ws"]          = self._check_ws()
+        results["postgres"]    = self._check_postgres()
+        results["redis"]       = self._check_redis()
+        results["telegram"]    = self._check_telegram()
+        results["api"]         = self._check_api_server()
+        results["voice"]       = self._check_voice()
+        results["claude"]      = self._check_ai_key("claude_api_key",      "Sentiment scoring · Signal Council")
+        results["openai"]      = self._check_ai_key("openai_api_key",      "Sentiment scoring (fallback)")
+        results["gemini"]      = self._check_ai_key("gemini_api_key",      "Sentiment scoring (fallback)")
+        results["elevenlabs"]  = self._check_ai_key("elevenlabs_api_key",  "Voice alerts TTS")
         QTimer.singleShot(0, lambda: self._apply_results(results))
 
     def _apply_results(self, results: dict) -> None:
         row_map = {
-            "binance":  self.row_binance,
-            "ws":       self.row_ws,
-            "postgres": self.row_postgres,
-            "redis":    self.row_redis,
-            "telegram": self.row_telegram,
-            "api":      self.row_api,
-            "voice":    self.row_voice,
+            "binance":    self.row_binance,
+            "ws":         self.row_ws,
+            "postgres":   self.row_postgres,
+            "redis":      self.row_redis,
+            "telegram":   self.row_telegram,
+            "api":        self.row_api,
+            "voice":      self.row_voice,
+            "claude":     self.row_claude,
+            "openai":     self.row_openai,
+            "gemini":     self.row_gemini,
+            "elevenlabs": self.row_elevenlabs,
         }
+        AI_PROVIDERS = {"claude", "openai", "gemini", "elevenlabs"}
         online = 0
         offline = 0
         latencies = []
@@ -365,6 +392,9 @@ class ConnectionsWidget(QWidget):
                 online += 1
                 if latency:
                     latencies.append(latency)
+            elif svc in AI_PROVIDERS:
+                # Unconfigured AI providers are amber (warning), not red
+                row.set_warning(msg)
             else:
                 row.set_disconnected(msg)
                 offline += 1
@@ -441,6 +471,18 @@ class ConnectionsWidget(QWidget):
 
     def _check_voice(self) -> tuple[bool, str, float | None]:
         return True, "Not monitored", None
+
+    def _check_ai_key(self, key_attr: str, features: str) -> tuple[bool, str, float | None]:
+        """Returns (configured, status_text, None). Uses warning dot when not configured."""
+        try:
+            from config import get_settings
+            ai = get_settings().ai
+            key = getattr(ai, key_attr, None)
+            if key:
+                return True, f"Configured  ·  {features}", None
+            return False, f"No API key  ·  {features}  ·  DISABLED", None
+        except Exception:
+            return False, "Config unavailable", None
 
     def _on_reconnect(self, service_id: str) -> None:
         from utils.logger import get_intel_logger

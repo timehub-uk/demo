@@ -169,7 +169,9 @@ class VoiceAlerts:
             from config import get_settings
             settings = get_settings()
             api_key = getattr(settings.ai, "elevenlabs_api_key", None)
-            if api_key:
+            if not api_key:
+                self._intel.system("VoiceAlerts", "ElevenLabs disabled — no API key configured")
+            else:
                 from elevenlabs import ElevenLabs
                 self._el_client = ElevenLabs(api_key=api_key)
                 self._intel.system("VoiceAlerts", "ElevenLabs TTS ready")

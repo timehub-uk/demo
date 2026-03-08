@@ -107,6 +107,26 @@ class AIScorer:
 
     def __init__(self) -> None:
         self._intel = get_intel_logger()
+        self._enabled: dict[str, bool] = self._check_providers()
+        active = [p for p, ok in self._enabled.items() if ok]
+        if active:
+            logger.info(f"AIScorer: active providers = {active}")
+        else:
+            logger.info("AIScorer: no AI keys configured — keyword-only sentiment scoring")
+
+    @staticmethod
+    def _check_providers() -> dict[str, bool]:
+        """Return which AI providers have keys configured."""
+        try:
+            from config import get_settings
+            ai = get_settings().ai
+            return {
+                "claude":     bool(ai.claude_api_key),
+                "openai":     bool(ai.openai_api_key),
+                "gemini":     bool(ai.gemini_api_key),
+            }
+        except Exception:
+            return {"claude": False, "openai": False, "gemini": False}
 
     def score(self, symbol: str, headlines: list[str]) -> tuple[float, float, str, str]:
         """
@@ -137,6 +157,8 @@ class AIScorer:
         return self._keyword_score(headlines), 0.5, self._label_from_score(self._keyword_score(headlines)), "keyword"
 
     def _try_claude(self, prompt: str) -> Optional[tuple[float, float, str]]:
+        if not self._enabled.get("claude"):
+            return None
         try:
             from config import get_settings
             settings = get_settings()
@@ -158,6 +180,8 @@ class AIScorer:
             return None
 
     def _try_openai(self, prompt: str) -> Optional[tuple[float, float, str]]:
+        if not self._enabled.get("openai"):
+            return None
         try:
             from config import get_settings
             settings = get_settings()
@@ -179,6 +203,8 @@ class AIScorer:
             return None
 
     def _try_gemini(self, prompt: str) -> Optional[tuple[float, float, str]]:
+        if not self._enabled.get("gemini"):
+            return None
         try:
             from config import get_settings
             settings = get_settings()
