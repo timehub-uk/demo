@@ -73,11 +73,16 @@ DOCS_HTML = """
   body  {{ font-family: 'JetBrains Mono', monospace; font-size: 12px;
           background: {bg2}; color: {fg0}; padding: 16px; }}
   h2    {{ color: {accent}; font-size: 14px; letter-spacing: 2px;
-          border-bottom: 1px solid {border}; padding-bottom: 6px; }}
-  h3    {{ color: {fg1}; font-size: 12px; margin-top: 16px; }}
+          border-bottom: 1px solid {border}; padding-bottom: 6px; margin-top: 20px; }}
+  h3    {{ color: {fg1}; font-size: 12px; margin-top: 14px; }}
   code  {{ background: {bg4}; color: {accent2}; padding: 2px 6px;
           border-radius: 3px; font-size: 11px; }}
   p, li {{ color: {fg0}; line-height: 1.6; }}
+  table {{ border-collapse: collapse; width: 100%; margin: 8px 0; }}
+  th    {{ color: {accent}; font-size: 11px; text-align: left;
+          border-bottom: 1px solid {border2}; padding: 4px 8px; }}
+  td    {{ color: {fg0}; font-size: 11px; padding: 3px 8px;
+          border-bottom: 1px solid {border}; }}
   .warn {{ color: {yellow}; }}
   .ok   {{ color: {green}; }}
 </style>
@@ -85,109 +90,156 @@ DOCS_HTML = """
 <h2>GETTING STARTED</h2>
 
 <h3>1. Configure API Keys</h3>
-<p>Open <code>Settings → System</code> and enter your Binance API Key and Secret.
-Enable <b>Testnet</b> while testing — this uses paper balances only.</p>
+<p>Open <code>Settings (Ctrl+9) → System</code> and enter your Binance API Key and Secret.
+Enable <b>Testnet</b> while testing — testnet keys use paper balances only.</p>
 
-<h3>2. Start the Trading Engine</h3>
-<p>From the <code>Trading</code> menu, select a mode:
+<h3>2. Choose a Trading Mode</h3>
 <ul>
-  <li><b>Manual</b> – You place every order manually</li>
-  <li><b>Auto</b> – ML signals trigger orders automatically</li>
-  <li><b>Hybrid</b> – ML recommends, you confirm</li>
-  <li><b>Paper</b> – Simulated execution, real prices</li>
+  <li><b>Manual</b> – You place every order in the Trading panel</li>
+  <li><b>Auto</b> – ML signals trigger orders automatically when confidence ≥ threshold</li>
+  <li><b>Hybrid</b> – ML recommends; you confirm with <b>🎯 Take Aim</b></li>
+  <li><b>Paper</b> – Simulated execution on real prices, no real money</li>
 </ul>
 
-<h3>3. AutoTrader</h3>
-<p>The AutoTrader scans all pairs (USDT, BTC, ETH, BNB, SOL) every 5 minutes
-using the full ML stack (LSTM + Transformer ensemble, MTF confluence, signal council,
-regime detector). In <code>SEMI_AUTO</code> mode, press <b>🎯 Take Aim</b> to approve
-the recommended trade. In <code>FULL_AUTO</code> mode, trades fire when confidence ≥ threshold.</p>
+<h3>3. Start the AutoTrader</h3>
+<p>Go to <code>AutoTrader (Ctrl+2)</code>. The scanner runs every 5 minutes across
+1 000+ USDT / BTC / ETH / BNB / SOL pairs, running the full ML stack.</p>
 <p class="warn">⚠ Minimum trade size: £12.00 GBP (≈ 15.24 USDT). Orders below this floor are rejected.</p>
 
-<h3>4. ML Training</h3>
-<p>Go to <code>ML → ML Training</code>. First run will take ~48h.
-Models are retrained automatically every 24h when new data is available.</p>
+<h3>4. Train the ML Model</h3>
+<p>Go to <code>ML Training (Ctrl+3)</code> → <b>Start 48h Training</b>.
+The initial training session downloads ~1 year of candle data for the top 100 pairs
+and trains an LSTM + Transformer ensemble. After that, models retrain automatically every 24h.</p>
 
 <h2>ML INTELLIGENCE STACK</h2>
 
-<h3>Core ML Models</h3>
-<ul>
-  <li><code>LSTM Predictor</code> – Per-bar sequence model (30-bar lookback)</li>
-  <li><code>Transformer</code> – Attention-based long-range pattern detection</li>
-  <li><code>Ensemble Aggregator</code> – Weighted vote with regime multipliers</li>
-  <li><code>MTF Confluence Filter</code> – 1h/4h/1d timeframe agreement</li>
-  <li><code>Signal Council</code> – Multi-model deliberation with veto power</li>
-  <li><code>Regime Detector</code> – Bull/Bear/Ranging/Volatile classification</li>
-  <li><code>Dynamic Risk Manager</code> – Kelly-based sizing + circuit breaker</li>
-</ul>
+<h3>Signal Pipeline (in order)</h3>
+<table>
+  <tr><th>Stage</th><th>Component</th><th>What it does</th></tr>
+  <tr><td>1</td><td>LSTM Predictor</td><td>Per-bar sequence model (60-bar lookback) → raw BUY/SELL/HOLD + confidence</td></tr>
+  <tr><td>2</td><td>Token ML</td><td>Per-symbol fine-tuned model adds a second opinion</td></tr>
+  <tr><td>3</td><td>Regime Detector</td><td>Blocks signals that don't suit current market regime (TRENDING/RANGING/VOLATILE)</td></tr>
+  <tr><td>4</td><td>MTF Confluence</td><td>1h / 4h / 1d timeframe agreement required to pass</td></tr>
+  <tr><td>5</td><td>Signal Council</td><td>Multi-model deliberation — can veto any signal</td></tr>
+  <tr><td>6</td><td>Dynamic Risk Manager</td><td>Kelly-based position sizing · circuit-breaker drawdown guard</td></tr>
+  <tr><td>7</td><td>Ensemble Aggregator</td><td>Weights adapt based on per-source historical accuracy</td></tr>
+</table>
 
-<h3>Pair Discovery &amp; Scanning (AutoTrader → Pairs tab)</h3>
+<h3>Pair Discovery &amp; Scanning (AutoTrader → tabs)</h3>
 <ul>
-  <li><code>Pair Scanner</code> – Scans 1000+ pairs across USDT/BTC/ETH/BNB/SOL quotes every 15 min.
-      Ranks by volume, activity, momentum → HIGH / MEDIUM / LOW priority.</li>
+  <li><code>Pair Scanner</code> – Scans 1 000+ pairs every 15 min, ranks by volume / activity /
+      momentum → <b>HIGH / MEDIUM / LOW</b> priority buckets.</li>
   <li><code>Multi-TF Trend Scanner</code> – Classifies every pair as UP / SIDEWAYS / DOWN
       across 7 timeframes: 15m, 30m, 1h, 12h, 24h, 7d, 30d.</li>
   <li><code>Pair ML Analyzer</code> – Cross-references all 6 ML tools per pair every 5 min
-      to compute a <b>Tradability Score</b> (0–1).</li>
-</ul>
-
-<h3>Advanced Detection (AutoTrader tabs)</h3>
-<ul>
-  <li><code>Accumulation Detector</code> (🕵 Accumulation tab) – Finds stealth accumulation:
-      tight price band + rising volume + taker-buy dominance over days/weeks.
-      Labels: NONE / WATCH / ALERT / STRONG. Scans LOW+MEDIUM pairs every 30 min.</li>
-  <li><code>Liquidity Depth Analyzer</code> (💧 Liquidity tab) – Grades order-book depth:
-      DEEP / ADEQUATE / THIN / ILLIQUID. Estimates slippage for £12 minimum trade size.
+      → <b>Tradability Score</b> (0–1).</li>
+  <li><code>Accumulation Detector</code> – Finds stealth accumulation: tight band + rising volume
+      + taker-buy dominance. Labels: NONE / WATCH / ALERT / STRONG. Scans every 30 min.</li>
+  <li><code>Liquidity Depth Analyzer</code> – Grades order-book depth:
+      DEEP / ADEQUATE / THIN / ILLIQUID. Estimates slippage for the £12 minimum trade size.
       Scans HIGH+MEDIUM pairs every 10 min.</li>
-  <li><code>Volume Breakout Detector</code> (💥 Breakouts tab) – Detects 4-stage patterns:
+  <li><code>Volume Breakout Detector</code> – Detects 4-stage patterns:
       <b>Stage 1 LAUNCH</b> → <b>Stage 2 PUMP</b> → <b>Stage 3 CONSOLIDATION</b>
-      → <b>Stage 4 BREAKOUT</b>. Uses 15m klines. Scans every 15 min.</li>
+      → <b>Stage 4 BREAKOUT</b>. Scans every 15 min.</li>
 </ul>
 
-<h3>Arbitrage (AutoTrader → Arbitrage tab)</h3>
-<p>Statistical arbitrage across correlated USDT pairs. Pair cooldown: 5 min after close.
-Minimum profit threshold: <b>£12 GBP</b>. Rate-limited to respect Binance API limits.</p>
+<h3>Whale Watcher &amp; Sentiment</h3>
+<ul>
+  <li><code>Whale Watcher</code> – Monitors L2 order book for block orders above threshold,
+      volume spikes &gt; 3σ, and smart-money accumulation / distribution patterns.</li>
+  <li><code>Sentiment Analyser</code> – News + social media scoring fed into Signal Council.</li>
+</ul>
 
-<h2>DATA FLOW</h2>
-<p><code>Pair Scanner</code> → <code>Trend / Accum / Liquidity / Breakout detectors</code>
-→ <code>Pair ML Analyzer</code> (tradability score) → <code>AutoTrader</code>
-→ <code>TradingEngine</code> → <code>Binance REST</code></p>
+<h3>Data Flow</h3>
+<p><code>Pair Scanner</code> → <code>Trend / Accum / Liquidity / Breakout</code>
+→ <code>Pair ML Analyzer</code> (tradability score)
+→ <code>AutoTrader</code> → <code>Signal Pipeline</code>
+→ <code>TradingEngine</code> → <code>Binance REST API</code></p>
+
+<h2>CHART FEATURES</h2>
+
+<h3>Overlays</h3>
+<p>EMA 9/20/50/200 · SMA 20/50 · Bollinger Bands · VWAP ±1σ/±2σ · Ichimoku Cloud</p>
+
+<h3>Sub-Panel Oscillators</h3>
+<p>Volume + OBV · RSI (14) · MACD (12,26,9) · Stochastic (14,3,3) · ATR (14) · ADX (14)</p>
+
+<h3>AI Forecast Overlay</h3>
+<p>Toggle <b>AI FORECAST</b> pill → choose 5b / 10b / 20b / 50b / 100b horizon.
+Green cone = bullish · Red cone = bearish. <b>ACC</b> badge shows historical accuracy.</p>
+
+<h3>Trade Markers</h3>
+<p>Toggle <b>TRADES</b> pill → yellow squares at every entry/exit, connected by a dotted line.
+Hover for full trade details (side, price, qty, gross P&amp;L, fees, tax, net).</p>
+
+<h2>REST API</h2>
+<p>Auto-starts at <code>http://127.0.0.1:8765</code>. Use Bearer token from Settings → API Keys.</p>
+<table>
+  <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+  <tr><td>GET</td><td>/health</td><td>Health check (no auth)</td></tr>
+  <tr><td>GET</td><td>/api/v1/status</td><td>Engine mode, uptime</td></tr>
+  <tr><td>GET</td><td>/api/v1/portfolio</td><td>Balances (USDT + GBP)</td></tr>
+  <tr><td>GET</td><td>/api/v1/signals</td><td>Latest ML signals</td></tr>
+  <tr><td>GET</td><td>/api/v1/trades</td><td>Recent trades (?limit=50&amp;symbol=BTCUSDT)</td></tr>
+  <tr><td>POST</td><td>/api/v1/order</td><td>Place a limit order</td></tr>
+  <tr><td>DELETE</td><td>/api/v1/order/{id}</td><td>Cancel an order</td></tr>
+  <tr><td>POST</td><td>/api/v1/ml/predict</td><td>On-demand prediction</td></tr>
+  <tr><td>GET</td><td>/api/v1/tax/monthly</td><td>Monthly CGT summary</td></tr>
+  <tr><td>POST</td><td>/api/v1/webhook/register</td><td>Register a webhook URL</td></tr>
+</table>
 
 <h2>METAMASK WALLET (Settings → MetaMask)</h2>
-<p>Optional profit-sweeping to a MetaMask wallet:</p>
+<p>Optional profit-sweeping to any EVM wallet:</p>
 <ul>
-  <li>Enter your MetaMask <b>0x…</b> EVM address</li>
-  <li>Select network: BSC (lowest fees), Ethereum, Polygon, Arbitrum</li>
-  <li>Enable <b>Auto-sweep</b> to automatically transfer profits when they exceed your threshold</li>
-  <li>Or request <b>Manual Transfers</b> which you approve in the transfers table</li>
+  <li>Enter your <b>0x…</b> EVM address</li>
+  <li>Select network: BSC (lowest fees) · Ethereum · Polygon · Arbitrum</li>
+  <li><b>Auto-sweep</b> — transfers profits automatically when they exceed your threshold</li>
+  <li><b>Manual Transfers</b> — approve each transfer individually in the transfers table</li>
   <li>Binance must have the address whitelisted for withdrawals</li>
 </ul>
-<p class="warn">⚠ Never share your private key. Auto-sweep uses Binance Withdrawal API only — no private key required.</p>
+<p class="warn">⚠ Auto-sweep uses the Binance Withdrawal API only — your private key is never required or stored.</p>
 
 <h2>RISK MANAGEMENT</h2>
 <p class="warn">⚠ Cryptocurrency trading involves substantial risk of loss.</p>
 <ul>
   <li>Minimum trade: <b>£12 GBP</b> (≈ 15.24 USDT)</li>
   <li>Default risk per trade: <b>1% of portfolio</b></li>
-  <li>Circuit breaker fires at <b>-5% daily drawdown</b></li>
+  <li>Circuit breaker fires at <b>−5% daily drawdown</b></li>
   <li>Pair cooldown after close: <b>5 minutes</b></li>
   <li>Max simultaneous AutoTrader positions: <b>1</b></li>
   <li>Cool-off after stop-loss hit: <b>15 minutes</b></li>
-  <li>API rate limit: <b>1,200 requests/min</b> (auto-throttled)</li>
+  <li>Binance API rate limit: <b>1,200 requests/min</b> (auto-throttled)</li>
 </ul>
 
-<h2>TAX REPORTING (UK)</h2>
-<p>BinanceML Pro calculates UK CGT using HMRC's
-<b>Section 104 pooling</b> method. Monthly PDF reports are
-generated on the 1st of each month and can be emailed automatically.</p>
-<p>Annual CGT allowance (2024/25): <code>£3,000</code></p>
+<h2>UK TAX REPORTING</h2>
+<p>BinanceML Pro calculates UK CGT using HMRC's rules (Section 104 pool,
+30-day bed-and-breakfast rule, same-day matching).</p>
+<ul>
+  <li>Monthly PDF reports generated on the 1st of each month (can be emailed)</li>
+  <li>Annual CGT allowance (2024/25): <code>£3,000</code></li>
+  <li>Basic rate: <code>10%</code> · Higher rate: <code>20%</code></li>
+  <li>Export trade history CSV for HMRC Self Assessment via Trade Journal</li>
+</ul>
 
-<h2>SUPPORT</h2>
-<p>Intel Log (<code>Ctrl+L</code>) shows all real-time activity from every ML module.
-Error logs are saved to <code>~/.binanceml/logs/</code>.</p>
+<h2>SIMULATION</h2>
+<ul>
+  <li><code>Live Simulation Twin (Ctrl+Shift+T)</code> – Shadows every live decision across
+      6 parallel variants (size_half, size_2x, delayed_5m, tighter_stop, wider_stop, skip).
+      Drift detection alerts if live accuracy deviates &gt;5% from backtested baseline.</li>
+  <li><code>Strategy Mutation Lab (Ctrl+Shift+M)</code> – Genetic evolution of strategy parameters:
+      initialise → evaluate → gate (Sharpe &lt; 0.5 rejected) → breed → promote champions.</li>
+  <li><code>Safety Scanner (Ctrl+Shift+F)</code> – Honeypot detection, liquidity lock check,
+      contract analysis, rug-pull scoring (0–100%).</li>
+</ul>
+
+<h2>SUPPORT &amp; LOGS</h2>
+<p>Intel Log (<code>Ctrl+L</code>) shows all real-time activity from every ML module and service.</p>
+<p>Log files are saved to <code>~/.binanceml/logs/</code>. Config is at
+<code>~/.binanceml/config.enc</code> (AES-256-GCM encrypted).</p>
+<p class="ok">● SQLAlchemy 3.0 compatible — all DB queries use the select() API.</p>
 """.format(
     bg2=BG2, fg0=FG0, fg1=FG1, accent=ACCENT, accent2=ACCENT2,
-    border=BORDER, bg4=BG4, yellow=YELLOW, green=GREEN,
+    border=BORDER, border2=BORDER2, bg4=BG4, yellow=YELLOW, green=GREEN,
 )
 
 
@@ -215,7 +267,7 @@ class HelpWidget(QWidget):
         title.setStyleSheet(f"color:{ACCENT}; font-size:13px; font-weight:700; letter-spacing:3px;")
         hdr_layout.addWidget(title)
         hdr_layout.addStretch()
-        version = QLabel("BinanceML Pro  v1.0.0")
+        version = QLabel("BinanceML Pro  v2.0")
         version.setStyleSheet(f"color:{FG2}; font-size:11px;")
         hdr_layout.addWidget(version)
         root.addWidget(hdr)
@@ -300,7 +352,7 @@ class HelpWidget(QWidget):
         name_lbl.setStyleSheet(f"color:{ACCENT}; font-size:22px; font-weight:700; letter-spacing:4px;")
         layout.addWidget(name_lbl)
 
-        ver_lbl = QLabel("Version 1.0.0  ·  Professional AI Trading Platform")
+        ver_lbl = QLabel("Version 2.0  ·  Professional AI Trading Platform")
         ver_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ver_lbl.setStyleSheet(f"color:{FG2}; font-size:12px; letter-spacing:1px;")
         layout.addWidget(ver_lbl)
@@ -311,21 +363,27 @@ class HelpWidget(QWidget):
         layout.addWidget(sep)
 
         features = [
-            (GREEN,  "LSTM + Transformer ensemble ML models"),
+            (GREEN,  "LSTM + Transformer ensemble ML models — MPS GPU accelerated"),
             (GREEN,  "Autonomous AutoTrader — SEMI/FULL-AUTO modes"),
-            (GREEN,  "1000+ pairs: USDT / BTC / ETH / BNB / SOL quotes"),
+            (GREEN,  "1 000+ pairs: USDT / BTC / ETH / BNB / SOL quotes"),
+            (GREEN,  "7-stage signal pipeline: Regime → MTF → Council → Risk"),
             (GREEN,  "Multi-TF Trend Scanner — 15m to 30d across all pairs"),
             (GREEN,  "Pair ML Analyzer — Tradability Score (6 ML tools)"),
             (GREEN,  "Stealth Accumulation Detector — WATCH / ALERT / STRONG"),
             (GREEN,  "Liquidity Depth Analyzer — DEEP / ADEQUATE / THIN / ILLIQUID"),
             (GREEN,  "Volume Breakout Detector — 4-stage LAUNCH → BREAKOUT"),
-            (GREEN,  "Arbitrage detector + auto-trader with £12 GBP floor"),
-            (GREEN,  "Dynamic risk management with Kelly sizing"),
-            (GREEN,  "UK HMRC CGT tax reporting & monthly emails"),
-            (GREEN,  "Continuous learning & walk-forward validation"),
-            (GREEN,  "MetaMask wallet — optional auto-sweep of profits"),
-            (GREEN,  "REST API + webhooks + Telegram alerts"),
-            (GREEN,  "Whale detection & sentiment analysis"),
+            (GREEN,  "Statistical + triangular arbitrage auto-trader"),
+            (GREEN,  "Ping-Pong range trader with consecutive-loss protection"),
+            (GREEN,  "Live Simulation Twin — 6 shadow variants + drift detection"),
+            (GREEN,  "Strategy Mutation Lab — genetic parameter evolution"),
+            (GREEN,  "Token safety scanner — honeypot, rug-pull, liquidity lock"),
+            (GREEN,  "Dynamic risk management with Kelly position sizing"),
+            (GREEN,  "UK HMRC CGT tax reporting · Section 104 pool · monthly PDFs"),
+            (GREEN,  "Continuous learning & walk-forward validation every 24 h"),
+            (GREEN,  "MetaMask wallet — optional auto-sweep of profits to EVM"),
+            (GREEN,  "REST API (15+ endpoints) + webhooks · Bearer token auth"),
+            (GREEN,  "Whale detection · sentiment analysis · AES-256-GCM security"),
+            (GREEN,  "SQLAlchemy 3.0-ready — all queries use select() API"),
         ]
         for col, feat in features:
             fl = QLabel(f"  ●  {feat}")

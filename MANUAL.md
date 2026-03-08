@@ -23,10 +23,11 @@
 15. [Connections & Health](#15-connections--health)
 16. [Settings & Layer Configuration](#16-settings--layer-configuration)
 17. [Simulation Panel](#17-simulation-panel)
-18. [Keyboard Shortcuts](#18-keyboard-shortcuts)
+18. [REST API Reference](#18-rest-api-reference)
 19. [UK Tax (CGT) Reporting](#19-uk-tax-cgt-reporting)
-20. [Troubleshooting](#20-troubleshooting)
-21. [Architecture Overview — 10-Layer Stack](#21-architecture-overview--10-layer-stack)
+20. [Keyboard Shortcuts](#20-keyboard-shortcuts)
+21. [Troubleshooting](#21-troubleshooting)
+22. [Architecture Overview — 10-Layer Stack](#22-architecture-overview--10-layer-stack)
 
 ---
 
@@ -57,54 +58,62 @@ cd demo
 ### 2.2 Create a Python Virtual Environment
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate          # Linux / macOS
-# venv\Scripts\activate.bat       # Windows
+python3 -m venv .venv
+source .venv/bin/activate          # Linux / macOS
+# .venv\Scripts\activate.bat       # Windows
 ```
 
 ### 2.3 Install Dependencies
 
 ```bash
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r trading_bot/requirements.txt
 ```
 
 Key packages installed:
-- `PyQt6` — desktop GUI framework
-- `pyqtgraph` — real-time charting
-- `numpy`, `scipy`, `scikit-learn` — ML and statistics
-- `torch` — LSTM / Transformer neural networks
-- `python-binance` — Binance REST + WebSocket client
-- `loguru` — structured logging
-- `redis`, `psycopg2-binary` — database clients
-- `aiohttp` — async REST API server
-- `cryptography` — config encryption
-- `pandas`, `matplotlib` — data analysis
+
+| Package | Purpose |
+|---|---|
+| `PyQt6`, `pyqtgraph` | Desktop UI and real-time charts |
+| `torch` | LSTM / Transformer neural networks (MPS on Apple Silicon) |
+| `numpy`, `scipy`, `scikit-learn` | ML and statistics |
+| `python-binance` | Binance REST + WebSocket client |
+| `sqlalchemy`, `psycopg2-binary` | PostgreSQL ORM (SQLAlchemy 3.0-ready) |
+| `redis` | Real-time caching |
+| `flask` | Embedded REST API server |
+| `loguru` | Structured logging |
+| `cryptography` | AES-256-GCM config encryption |
+| `pydantic`, `pydantic-settings` | Typed configuration models |
+| `pandas`, `optuna` | Data analysis and hyperparameter optimisation |
+| `web3` | Optional — on-chain gas fee estimation |
 
 ### 2.4 Optional: Install PostgreSQL and Redis
 
-PostgreSQL and Redis are **optional**.  The application runs in offline/demo mode without them.
+PostgreSQL and Redis are **optional**. The application runs in offline/demo mode without them.
 
 **Ubuntu:**
 ```bash
 sudo apt install postgresql redis-server
 sudo systemctl start postgresql redis-server
+sudo -u postgres createuser --superuser binanceml
+sudo -u postgres createdb binanceml
 ```
 
 **macOS (Homebrew):**
 ```bash
-brew install postgresql redis
-brew services start postgresql redis
+brew install postgresql@16 redis
+brew services start postgresql@16 redis
+createdb binanceml
 ```
 
 ### 2.5 Start the Application
 
 ```bash
-cd demo/trading_bot
-python main.py
+cd demo
+python trading_bot/main.py
 ```
 
-On first launch the Setup Wizard will open automatically.
+On first launch the **Setup Wizard** opens automatically.
 
 ---
 
@@ -112,28 +121,28 @@ On first launch the Setup Wizard will open automatically.
 
 The Setup Wizard guides you through initial configuration:
 
-1. **Binance API Keys** — Enter your Binance API Key and Secret.
+1. **Binance API Keys**
    - Create keys at: Binance → Account → API Management
    - Required permissions: **Read Info**, **Enable Spot & Margin Trading**
-   - **Do not** enable withdrawals
+   - Do **not** enable withdrawals
    - Tick **Testnet** if you want to start in paper-trading mode
 
-2. **Trading Mode** — Choose between:
-   - **Paper Trading** — simulates orders without real money (recommended to start)
+2. **Trading Mode**
+   - **Paper Trading** — simulates orders with no real money (recommended to start)
    - **Live Trading** — places real orders on Binance
 
-3. **Risk Settings** — Configure:
+3. **Risk Settings**
    - Maximum daily loss limit (default: 2% of portfolio)
    - Maximum position size (default: 5% per trade)
    - Circuit-breaker drawdown threshold (default: 5%)
 
-4. **Database** — Optionally enter PostgreSQL connection string.
-   If left blank the application uses SQLite.
+4. **Database** — optionally enter PostgreSQL connection details.
+   If left blank the application uses SQLite as a fallback.
 
-5. **Telegram Alerts** — Optional.  Enter your bot token and chat ID to
-   receive trade alerts on your phone.
+5. **AI Provider** — optionally enter a Claude / OpenAI / Gemini API key
+   for enhanced sentiment analysis and reasoning.
 
-6. **Complete** — Saves encrypted config to `~/.binanceml_pro/config.enc`
+6. **Complete** — saves encrypted config to `~/.binanceml/config.enc`
 
 ---
 
@@ -141,7 +150,7 @@ The Setup Wizard guides you through initial configuration:
 
 ### Navigation
 
-The left sidebar contains 10 navigation buttons:
+The left sidebar contains navigation buttons:
 
 | Button | Page | Shortcut |
 |--------|------|----------|
@@ -151,13 +160,14 @@ The left sidebar contains 10 navigation buttons:
 | RISK | Risk Dashboard | Ctrl+4 |
 | BT | Backtesting | Ctrl+5 |
 | JNL | Trade Journal | Ctrl+6 |
-| STRAT | Strategy Manager | Ctrl+7 |
+| STRAT | Strategy Builder | Ctrl+7 |
 | CONN | Connections | Ctrl+8 |
 | SET | Settings | Ctrl+9 |
 | HELP | Help | F1 |
+| SIM | Simulation | Ctrl+Shift+S |
 
 Hover any nav button for **5 seconds** to see a tooltip.
-Hover for **10 seconds** to see the full help popup for that panel.
+Hover for **10 seconds** to open contextual help for that panel.
 
 ### Intel Log
 
@@ -168,7 +178,7 @@ Toggle it with **Ctrl+L**.
 ### Status Bar
 
 The bottom status bar shows:
-- Trading mode (PAPER / LIVE)
+- Trading mode (PAPER / LIVE / AUTO / HYBRID)
 - AutoTrader state
 - Today's trade count and P&L
 - API, database, and Redis health indicators
@@ -177,6 +187,8 @@ The bottom status bar shows:
 ---
 
 ## 5. Trading Panel
+
+**Navigate:** TRADE (Ctrl+1)
 
 ### Charts
 
@@ -191,15 +203,18 @@ The bottom status bar shows:
 ### Order Entry
 
 Order types supported:
-- **LIMIT** — specify price and quantity
-- **MARKET** — fills immediately at best price
-- **STOP-LIMIT** — triggers when stop price is hit
-- **OCO** — One-Cancels-Other (limit + stop)
+
+| Type | Description |
+|------|-------------|
+| LIMIT | Specify price and quantity |
+| MARKET | Fills immediately at best available price |
+| STOP-LIMIT | Triggers a limit order when stop price is hit |
+| OCO | One-Cancels-Other (limit + stop-limit pair) |
 
 All orders include:
 - **Stop Loss** — automatic loss limit
 - **Take Profit** — automatic profit target
-- **Position sizing** — auto-calculated from risk %
+- **Position sizing** — auto-calculated from risk % of portfolio
 
 ### Active Orders Table
 
@@ -207,6 +222,11 @@ Shows all open orders with:
 - Symbol, type, side, price, quantity, status
 - One-click **Cancel** button per order
 - Binance order ID for reference
+
+### Daily P&L Chart
+
+The bottom-right chart shows daily realised P&L as green (profit) or red (loss) bars,
+updated on every refresh cycle.
 
 ---
 
@@ -249,7 +269,7 @@ When the **TRADES** pill is toggled on in the chart toolbar:
 | Auto-Scale ✓ | Toggle Y-axis auto-scaling |
 | Auto-Follow ✓ | Toggle auto-scroll to latest candle |
 
-**Mouse controls also work:**
+**Mouse controls:**
 - Scroll wheel — zoom in/out
 - Click + drag — pan
 - Right-click → View All — fit view
@@ -259,12 +279,14 @@ When the **TRADES** pill is toggled on in the chart toolbar:
 Toggle the **AI FORECAST** pill to show an ML price projection:
 - Choose horizon: 5b / 10b / 20b / 50b / 100b bars ahead
 - Cone width represents uncertainty (wider = less certain)
-- Green cone = bullish signal, Red cone = bearish
+- Green cone = bullish signal · Red cone = bearish
 - **ACC badge** shows historical forecast accuracy for this symbol + interval
 
 ---
 
 ## 7. AutoTrader Panel
+
+**Navigate:** AT (Ctrl+2)
 
 The AutoTrader automates the full scan → analyse → enter → monitor → exit cycle.
 
@@ -272,30 +294,36 @@ The AutoTrader automates the full scan → analyse → enter → monitor → exi
 
 | Mode | Behaviour |
 |------|-----------|
-| **SEMI_AUTO** | Recommends trades; press **Take Aim** to confirm |
-| **FULL_AUTO** | Executes automatically when confidence ≥ threshold |
+| **SEMI\_AUTO** | Recommends trades; press **Take Aim** to confirm |
+| **FULL\_AUTO** | Executes automatically when confidence ≥ threshold |
 | **PAUSED** | Monitoring only, no new trades |
+
+### Tabs
+
+| Tab | Content |
+|-----|---------|
+| **Pairs** | Pair scanner results and tradability scores |
+| **Trend** | Multi-timeframe trend scanner (15m → 30d) |
+| **Accumulation** | Stealth accumulation detector results |
+| **Liquidity** | Order-book depth grades per pair |
+| **Breakouts** | Volume breakout stage tracker |
+| **Arbitrage** | Statistical + triangular arb opportunities |
+| **Ping-Pong** | Range trader controls and status |
+| **Strategies** | ML strategy selector and override |
 
 ### Top Opportunities Table
 
 Displays the top 5 profit and top 5 R:R opportunities from the market scanner,
 updated every 5 minutes.
 
-### Active Trade Panel
-
-Shows currently open trades with:
-- Entry price, current price, unrealised P&L
-- Stop-loss and take-profit levels (green/red dotted reference lines)
-- Time in trade
-
 ### Signal Quality Indicators
 
 The AutoTrader uses multiple signal sources:
-- **LSTM Predictor** — recurrent neural network on OHLCV data
+- **LSTM Predictor** — recurrent neural network on OHLCV sequences
 - **Token ML** — per-symbol fine-tuned models
 - **Ensemble Aggregator** — votes weighted by historical accuracy
 - **Regime Detector** — adjusts strategy to market conditions
-- **MTF Confluence** — multi-timeframe confirmation
+- **MTF Confluence** — multi-timeframe confirmation (1h / 4h / 1d)
 - **Signal Council** — final deliberation (veto power)
 - **Whale Watcher** — large-order flow detection
 - **Sentiment Analyser** — news/social media scoring
@@ -303,8 +331,6 @@ The AutoTrader uses multiple signal sources:
 ---
 
 ## 8. Ping-Pong Range Trader
-
-The Ping-Pong trader buys at the low and sells at the high of a ranging market.
 
 **Activate:** AutoTrader panel → **Ping-Pong** tab
 
@@ -314,8 +340,8 @@ The Ping-Pong trader buys at the low and sells at the high of a ranging market.
 2. Calculates range high and low
 3. **Buy Zone** — bottom 25% of the range
 4. **Sell Zone** — top 25% of the range
-5. Opens BUY when price enters Buy Zone; closes BUY and opens SELL when price
-   reaches Sell Zone (or vice versa)
+5. Opens BUY when price enters Buy Zone; closes and opens SELL when price
+   reaches Sell Zone (and vice versa)
 6. Automatically **suspends** if the regime detector classifies the market as
    TRENDING (strong directional move)
 
@@ -337,9 +363,7 @@ to avoid trading a broken range.
 ### Status Indicators
 
 - **Range bar** — coloured progress bar showing price position within range
-  - Green = in Buy Zone
-  - Amber = middle of range
-  - Red = in Sell Zone
+  - Green = in Buy Zone · Amber = middle of range · Red = in Sell Zone
 - **Regime** — current market regime (RANGING / TRENDING / VOLATILE)
 - **Consecutive Losses** — count since last reset
 
@@ -347,21 +371,21 @@ to avoid trading a broken range.
 
 ## 9. ML Strategy Selector
 
+**Activate:** AutoTrader panel → **Strategies** tab
+
 The ML Strategy Selector automatically chooses the best-performing trading
 strategy for current market conditions.
-
-**Activate:** AutoTrader panel → **Strategies** tab
 
 ### Available Strategies
 
 | Strategy | Best Regime | Description |
 |----------|-------------|-------------|
-| trend_follow | TRENDING | EMA crossover + MACD momentum |
-| mean_revert | RANGING | Buy dips, sell rallies in a range |
-| ping_pong | RANGING / VOLATILE | Tight buy/sell between channel bounds |
+| trend\_follow | TRENDING | EMA crossover + MACD momentum |
+| mean\_revert | RANGING | Buy dips, sell rallies in a range |
+| ping\_pong | RANGING / VOLATILE | Tight buy/sell between channel bounds |
 | momentum | VOLATILE / TRENDING | Breakout + volume confirmation |
 | sentiment | ANY | News/social sentiment-driven trades |
-| ml_pure | ANY | Pure ML ensemble signal, no overlay |
+| ml\_pure | ANY | Pure ML ensemble signal, no overlay |
 
 ### Scoring Formula
 
@@ -387,33 +411,29 @@ Click **⟳ Force Re-Evaluate Now** to trigger an immediate scoring cycle.
 
 ## 10. Arbitrage Detector & Auto-Trader
 
-The arbitrage engine finds opportunities to simultaneously buy one asset and
-sell another for a near-instant profit.
-
 **Activate:** AutoTrader panel → **Arbitrage** tab
 
 ### Strategy Types
 
 #### Statistical Arbitrage
+
 Two assets that normally move together (cointegrated) have temporarily
 diverged. The engine:
+
 1. Computes a rolling **hedge ratio (β)** via OLS regression
 2. Measures how far the current spread is from its mean (z-score)
-3. When `|z| ≥ 2.0`: opens a position (BUY underpriced leg, SELL overpriced leg)
-4. When `|z| ≤ 0.5`: closes position (spread has reverted — profit taken)
+3. When `|z| ≥ 2.0` — opens a position (BUY underpriced leg, SELL overpriced leg)
+4. When `|z| ≤ 0.5` — closes position (spread has reverted — profit taken)
 5. Emergency close if `|z| ≥ 3.8` (spread still widening — stop loss)
 
-Default monitored pairs:
-- BTC/ETH, BTC/BNB, ETH/BNB, SOL/AVAX, XRP/ADA, DOGE/SHIB
+Default monitored pairs: BTC/ETH · BTC/BNB · ETH/BNB · SOL/AVAX · XRP/ADA · DOGE/SHIB
 
 #### Triangular Arbitrage
+
 Exploits price inconsistencies between three currency pairs.
-Example: BTC → ETH → BNB → BTC
-If this round-trip returns more than 100% + fees, a signal is emitted.
+Example: BTC → ETH → BNB → BTC. If this round-trip returns > 100% + fees, a signal is emitted.
 
 ### Opportunity Score
-
-Each opportunity is scored 0–1:
 
 ```
 score = z_magnitude   × 0.35
@@ -434,60 +454,54 @@ Only opportunities with `score ≥ 0.50` and `confidence ≥ 0.55` are shown.
 | Min score | Filter: only show opportunities above this score |
 | Add pair | Add a custom pair to the scanner |
 
-### Active Positions
-
-The **Active Positions** tab shows:
-- Both legs of each open arb trade
-- Live unrealised P&L per leg
-- Entry z-score and time held
-- **Close Selected** / **Close ALL** buttons
-
-### Pair Statistics
-
-The **Pair Statistics** tab shows per-pair ML learning:
-- Total trades, wins, losses
-- Win rate (used to adjust confidence for future signals)
-- Recent 10-trade win rate (faster adaptation)
-- Cumulative P&L
-
 ### Safety Rules
 
 - Maximum **1 position per pair** at any time
-- Hard stop if spread z-score reaches **3.8** (runaway position)
+- Hard stop if spread z-score reaches **3.8**
 - Force-close any position open longer than **1 hour**
-- Paper mode is enabled by default — toggle to Live only when confident
+- Paper mode is enabled by default
 
 ---
 
 ## 11. ML Training Panel
 
-The ML Training panel manages the neural network models that power price prediction.
-
 **Navigate:** ML (Ctrl+3)
 
 ### Model Types
 
-- **LSTM Predictor** — Long Short-Term Memory network trained on OHLCV sequences
-- **Transformer** — Attention-based model for pattern recognition
-- **Per-Token Models** — Individual fine-tuned models for each trading pair
+| Model | Description |
+|-------|-------------|
+| **LSTM Predictor** | Long Short-Term Memory network trained on OHLCV sequences (30-bar lookback) |
+| **Transformer** | Attention-based model for pattern recognition |
+| **Per-Token Models** | Individual fine-tuned models for each trading pair |
 
 ### Training Controls
 
 | Button | Action |
 |--------|--------|
-| Start 48h Training | Runs a full training session in background |
+| Start 48h Training | Runs a full training session in the background |
 | Stop | Halts training after current epoch |
-| Evaluate Model | Runs test set evaluation and shows accuracy |
+| Evaluate Model | Runs test-set evaluation and shows accuracy |
+
+### Training Phases
+
+| Phase | What Happens |
+|-------|-------------|
+| 1 — Archive | Downloads up to 1 year of 1m/5m/15m/1h/4h candles for top 100 USDT pairs |
+| 2 — Feature Engineering | Computes 18+ indicators: RSI, MACD, ATR, BB, OBV, VWAP, etc. |
+| 3 — LSTM Training | Trains LSTM + Transformer with Optuna HPO · Apple Silicon MPS acceleration |
+| 4 — Per-Token | Fine-tunes individual models for each active trading pair |
 
 ### Continuous Learning
 
 The **Continuous Learner** automatically retrains models every 24 hours using
-the latest market data.  This keeps models adapted to changing conditions.
+the latest market data. A **data integrity check** runs every 25 minutes —
+detecting gaps, OHLC violations, and stale data.
 
 ### Signal Stream
 
 The live signal feed shows:
-- **Source** — which model emitted the signal (LSTM, TokenML, Whale, etc.)
+- **Source** — which model emitted the signal (LSTM, TokenML, Whale, Ensemble…)
 - **Symbol** — trading pair
 - **Signal** — BUY / SELL / HOLD
 - **Confidence** — 0.0 to 1.0
@@ -496,8 +510,8 @@ The live signal feed shows:
 ### Whale Watcher
 
 Large order detection monitors the Binance order book for:
-- Block buy/sell orders > threshold USD value
-- Volume spikes > 3σ above average
+- Block buy/sell orders above threshold USD value
+- Volume spikes > 3σ above rolling average
 - Smart money accumulation / distribution patterns
 
 ---
@@ -515,16 +529,17 @@ Automatically halts all trading if daily drawdown exceeds threshold (default: 5%
 ### Position Sizing
 
 Kelly Criterion-based position sizing:
+
 ```
 size = (win_rate × avg_win − loss_rate × avg_loss) / avg_win
 ```
+
 Capped at the maximum position size setting (default: 5% of portfolio).
 
 ### Monte Carlo Simulation
 
-Runs 1,000 simulated portfolio paths based on historical trade statistics.
-Shows:
-- Expected portfolio value range at 30/60/90 days
+Runs 1,000 simulated portfolio paths based on historical trade statistics:
+- Expected portfolio value range at 30 / 60 / 90 days
 - 5th percentile (worst case) and 95th percentile (best case)
 - Probability of reaching target return
 
@@ -536,11 +551,14 @@ Shows actual vs expected accuracy to detect model overfitting.
 ### Regime Detector
 
 Classifies current market regime every 60 seconds:
-- **TRENDING_UP** — strong upward momentum
-- **TRENDING_DOWN** — strong downward momentum
-- **RANGING** — price bouncing within a range
-- **VOLATILE** — high volatility, no clear direction
-- **UNKNOWN** — insufficient data
+
+| Regime | Meaning |
+|--------|---------|
+| **TRENDING\_UP** | Strong upward momentum |
+| **TRENDING\_DOWN** | Strong downward momentum |
+| **RANGING** | Price bouncing within a range |
+| **VOLATILE** | High volatility, no clear direction |
+| **UNKNOWN** | Insufficient data |
 
 ---
 
@@ -551,10 +569,8 @@ Classifies current market regime every 60 seconds:
 ### Overview Stats
 
 The top bar shows:
-- Trades today / total
-- P&L today / total
-- Win rate (all time)
-- Average trade duration
+- Trades today / total · P&L today / total
+- Win rate (all time) · Average trade duration
 - Open positions count
 
 ### Open Trades Table
@@ -565,7 +581,7 @@ Shows all currently open positions:
 
 ### Closed Trades Table
 
-Full history of completed trades with:
+Full history of completed trades:
 - Entry and exit prices and times
 - Gross P&L, net P&L (after fees and tax)
 - Exit reason (SL / TP / Signal / Manual)
@@ -574,13 +590,12 @@ Full history of completed trades with:
 
 ### Signal Attribution
 
-Shows win rate per ML signal source:
-- Which models predicted correctly
-- Used to auto-adjust ensemble weights
+Shows win rate per ML signal source — which models predicted correctly.
+Results feed back to auto-adjust ensemble weights.
 
 ### Export
 
-Click **Export CSV** to download the trade history for external analysis
+Click **Export CSV** to download trade history for external analysis
 or HMRC tax reporting.
 
 ---
@@ -622,26 +637,23 @@ or HMRC tax reporting.
 
 Shows live health status for all external dependencies:
 
-| Service | Status Indicators |
-|---------|-------------------|
+| Service | Indicators |
+|---------|-----------|
 | Binance REST API | Ping latency, last successful call |
 | Binance WebSocket | Connected / Reconnecting, message count |
 | PostgreSQL | Connected, query latency |
 | Redis | Connected, ping latency |
-| Telegram Bot | Online / Offline |
 | REST API Server | Port, uptime |
 
-Click **Check All** to force an immediate health check.
-
-Auto-checks run every **30 seconds**.
+Click **Check All** to force an immediate health check. Auto-checks run every **30 seconds**.
 
 ---
 
-## 16. Settings
+## 16. Settings & Layer Configuration
 
 **Navigate:** SET (Ctrl+9)
 
-### API Keys
+### 16.1 API Keys
 
 ```
 Binance API Key:    [your API key]
@@ -649,222 +661,60 @@ Binance Secret:     [your API secret]
 □ Use Testnet       (paper trading on testnet.binance.vision)
 ```
 
-**Never share your API secret.**  Keys are stored encrypted on disk.
+**Never share your API secret.** Keys are stored AES-256-GCM encrypted on disk.
 
-### Trading
+### 16.2 Trading Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | Max daily loss | 2% | Circuit-breaker threshold |
-| Max position size | 5% | Per-trade maximum |
-| Execution mode | SEMI_AUTO | Autonomy level |
-| Confidence threshold | 0.70 | Minimum to auto-execute |
-| Cooldown after SL | 15 min | Pause after stop-loss |
+| Max position size | 5% | Per-trade maximum as % of portfolio |
+| Execution mode | SEMI\_AUTO | Autonomy level |
+| Confidence threshold | 0.72 | Minimum confidence to auto-execute |
+| Cooldown after SL | 15 min | Pause after a stop-loss hit |
+| Order type | LIMIT | Default order type (LIMIT / MARKET) |
 
-### ML
+### 16.3 ML Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| LSTM sequence length | 60 | Input bars for LSTM |
+| LSTM lookback window | 60 | Input candles for LSTM |
 | LSTM layers | 3 | Network depth |
 | Learning rate | 0.001 | Training speed |
-| Retrain interval | 24h | Continuous learner frequency |
+| Retrain interval | 24 h | Continuous learner frequency |
 | Training hours | 48 | Full training session duration |
+| Confidence threshold | 0.72 | Minimum to emit a signal |
+| Top tokens | 100 | Pairs to include in training |
 
-### Tax
+### 16.4 Tax Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Tax year start | April 6 | UK tax year |
-| CGT rate | 20% | Capital gains tax rate |
-| Annual exempt amount | £3,000 | CGT annual allowance |
-| Report currency | GBP | Report currency for HMRC |
+| Tax year start | 6 April | UK tax year |
+| CGT rate (basic) | 10% | Capital gains rate for basic rate taxpayers |
+| CGT rate (higher) | 20% | Capital gains rate for higher rate taxpayers |
+| Annual exempt amount | £3,000 | CGT annual allowance (2024/25) |
+| Report currency | GBP | Currency for HMRC reports |
+| Email reports | On | Email monthly PDF on the 1st |
 
-### UI
+### 16.5 UI Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | Theme | Dark | Dark / Light |
-| Accent colour | Cyan #00D4FF | Highlight colour |
-| Font size | 13px | Base font size |
+| Accent colour | Cyan `#00D4FF` | Highlight colour |
+| Font size | 13 px | Base font size |
+| Default interval | 1m | Default chart timeframe |
+| Chart candle count | 200 | Visible candles on chart |
 
----
+### 16.6 Layer Configuration Panel
 
-## 17. Keyboard Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| Ctrl+1 | Trading Panel |
-| Ctrl+2 | AutoTrader |
-| Ctrl+3 | ML Training |
-| Ctrl+4 | Risk Dashboard |
-| Ctrl+5 | Backtesting |
-| Ctrl+6 | Trade Journal |
-| Ctrl+7 | Strategy Manager |
-| Ctrl+8 | Connections |
-| Ctrl+9 | Settings |
-| F1 | Help |
-| Ctrl+L | Toggle Intel Log |
-| Ctrl+, | Settings (alias) |
-| Ctrl+N | New chart tab |
-| Ctrl+W | Close chart tab |
-| Ctrl+Q | Quit application |
-| Ctrl+Space | Toggle AutoTrader |
-| Escape | Close dialogs |
-
----
-
-## 18. UK Tax (CGT) Reporting
-
-BinanceML Pro calculates UK Capital Gains Tax using HMRC rules:
-
-### Same-Day Rule
-If you buy and sell the same asset on the same day, those are matched first.
-
-### Bed-and-Breakfast Rule
-Buy within 30 days of a sale → matched to that sale before the pool.
-
-### Section 104 Pool
-Remaining shares are pooled; average cost basis used for gains.
-
-### Reports
-
-The Trade Journal generates:
-- **Gain/Loss Summary** — per-disposal breakdown with cost basis
-- **Annual Report** — total gains/losses for the tax year
-- **HMRC Section 104 Pool** — running pool balance per asset
-
-Reports export to CSV for use with HMRC's online self-assessment.
-
-### CGT Allowance (2025/26)
-
-Annual CGT exempt amount: **£3,000**
-Basic rate taxpayer: **10%** on gains within basic rate band
-Higher rate taxpayer: **20%** on all gains
-
-*The application defaults to 20% — adjust in Settings for your situation.*
-
----
-
-## 19. Troubleshooting
-
-### Application Won't Start
-
-```bash
-# Check Python version
-python3 --version    # must be 3.10+
-
-# Reinstall dependencies
-pip install --upgrade -r requirements.txt
-
-# Check for PyQt6
-python -c "from PyQt6.QtWidgets import QApplication; print('OK')"
-```
-
-### "No module named X" Error
-
-```bash
-pip install <module_name>
-```
-
-### Binance Connection Failed
-
-1. Check API key permissions in Binance account settings
-2. Verify testnet toggle matches your key type
-3. Check internet connectivity
-4. Binance IP whitelisting: add your IP or disable IP restriction
-5. Check **Connections** panel for specific error
-
-### PostgreSQL Not Available
-
-The application runs without PostgreSQL (uses SQLite instead).
-To use PostgreSQL:
-```bash
-sudo -u postgres createdb binanceml_pro
-# Then set DB URL in Settings
-```
-
-### Redis Not Available
-
-Caching and Redis-backed features are disabled automatically.
-The application continues to function without Redis.
-
-### ML Model Not Loading
-
-If no trained model exists, the predictor runs with default weights.
-Go to **ML Training** → **Start 48h Training** to build the initial model.
-
-### Chart Not Updating
-
-1. Check Binance WebSocket connection in Connections panel
-2. Try changing symbol and back
-3. Restart the application
-
-### High CPU Usage
-
-The ML training and continuous learner are CPU-intensive.
-Go to **ML Training** → **Stop** to halt background training temporarily.
-
----
-
-## 20. Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    PyQt6 UI Layer                        │
-│  MainWindow → TradingPanel, AutoTrader, MLPage, Risk    │
-│              Chart, PingPong, Strategy, Arbitrage, etc. │
-└─────────────────────┬───────────────────────────────────┘
-                      │  signals / callbacks
-┌─────────────────────▼───────────────────────────────────┐
-│                  Core Services                           │
-│  TradingEngine ← OrderManager ← BinanceClient           │
-│  PortfolioManager  RiskManager  DynamicRiskManager       │
-│  TradeJournal  AutoTrader  PingPongTrader                │
-│  StrategyManager  ArbitrageDetector  ArbitrageAutoTrader│
-└──────────────┬──────────────────┬───────────────────────┘
-               │                  │
-┌──────────────▼──────┐  ┌───────▼────────────────────────┐
-│    ML / AI Layer    │  │       Data Layer                │
-│  MLPredictor        │  │  PostgreSQL (trade history)     │
-│  ContinuousLearner  │  │  Redis (real-time cache)        │
-│  EnsembleAggregator │  │  SQLite (fallback)              │
-│  RegimeDetector     │  │  JSON backup (trade journal)    │
-│  MTFConfluence      │  └────────────────────────────────┘
-│  SignalCouncil      │
-│  WhaleWatcher       │
-│  SentimentAnalyser  │
-│  ForecastTracker    │
-│  ArbitrageDetector  │
-└─────────────────────┘
-```
-
-### Data Flow
-
-1. **Binance WebSocket** → streams live price, order book, and trade data
-2. **TradingEngine** → caches data, fires signal events
-3. **ML Pipeline** → predictor → ensemble → council → final signal
-4. **AutoTrader** → receives signal, checks risk, places order via OrderManager
-5. **TradingEngine** → confirms fill, updates portfolio
-6. **TradeJournal** → records everything with full context
-7. **UI** → refreshes from data every 5 seconds, shows live state
-
----
-
----
-
-## 16. Settings & Layer Configuration
-
-### 16.1 Opening the Layer Configuration Panel
-
-Navigate to **Settings (Ctrl+9)** and click the **🧩 Layers** tab,
+Navigate to **Settings (Ctrl+9)** → **🧩 Layers** tab,
 or use **Simulation > ⚙ Layer Settings** in the menu bar.
 
-Each layer has its own tab with sub-tabs for every module.
+Each of the 10 layers has its own tab with controls for every module.
 
-### 16.2 Layer Keyboard Shortcuts
-
-Jump directly to any layer's settings with:
+**Layer keyboard shortcuts:**
 
 | Shortcut | Layer |
 |----------|-------|
@@ -879,37 +729,38 @@ Jump directly to any layer's settings with:
 | `Shift+Alt+9` | Layer 9 – Monitoring & Reporting |
 | `Shift+Alt+0` | Layer 10 – Governance & Oversight |
 
-### 16.3 Module Controls
-
-Each module panel provides:
-- **Enabled toggle** — turn the module on/off at runtime without restart
-- **Parameter sliders/spinners** — tune thresholds, periods, and limits
-- **API key fields** — enter credentials securely (masked input)
-- **Dependency notification** — when a module requires another module to be
-  active, enabling it will automatically activate dependencies and show a
-  yellow notification: *"⚡ Auto-activated: module_name"*
+**Module controls** per panel:
+- **Enabled toggle** — turn any module on/off without restart
+- **Parameter sliders** — tune thresholds, periods, limits live
+- **API key fields** — enter credentials securely (masked)
+- **Dependency notification** — auto-activates required dependencies
+  and shows *"⚡ Auto-activated: module\_name"*
 
 ---
 
 ## 17. Simulation Panel
 
-Access via **Simulation** menu (`Ctrl+Shift+S`) or nav sidebar item **SIM**.
+**Navigate:** Simulation menu (`Ctrl+Shift+S`) or nav sidebar **SIM**
 
 ### 17.1 Live Simulation Twin (`Ctrl+Shift+T`)
 
-A shadow engine running beside production:
+A shadow engine running beside production — every live decision is replayed
+across 6 parallel variants:
 
-| Feature | Description |
-|---------|-------------|
-| **Shadow decisions** | Every live decision replayed across 6 parallel variants |
-| **Variants** | size_half, size_2x, delayed_5m, tighter_stop, wider_stop, skip |
-| **Drift detection** | Alerts when live accuracy deviates >5% from backtested baseline |
-| **Opportunity cost** | Tracks PnL missed by passing on trades |
-| **Variant leaderboard** | Shows which alternative consistently beats live |
+| Variant | Behaviour |
+|---------|-----------|
+| **size\_half** | Half position size |
+| **size\_2x** | Double position size |
+| **delayed\_5m** | Entry delayed 5 minutes |
+| **tighter\_stop** | Stop loss 50% tighter |
+| **wider\_stop** | Stop loss 50% wider |
+| **skip** | Trade skipped entirely |
 
-**Drift severities:**
-- **Minor** — >5% deviation from baseline accuracy
-- **Severe** — >15% deviation (model retraining recommended)
+**Drift detection** alerts when live accuracy deviates from backtested baseline:
+- **Minor drift** — > 5% deviation (monitor closely)
+- **Severe drift** — > 15% deviation (model retraining recommended)
+
+The **variant leaderboard** shows which alternative consistently beats live.
 
 ### 17.2 Strategy Mutation Lab (`Ctrl+Shift+M`)
 
@@ -918,29 +769,25 @@ Automated genetic evolution of strategy parameters:
 | Stage | Description |
 |-------|-------------|
 | **Initialise** | Seed population from current strategy parameters |
-| **Evaluate** | Backtest + walk-forward + regime stability in parallel threads |
+| **Evaluate** | Backtest + walk-forward + regime stability in parallel |
 | **Gate** | Hard reject: Sharpe < 0.5 OR drawdown > 20% OR < 30 trades |
 | **Select** | Tournament selection from passed variants |
 | **Breed** | Crossover + mutation of surviving parameter sets |
 | **Promote** | Auto-register champions (fitness ≥ 0.65, regime stability ≥ 0.7) |
 
-**Configuration:**
-- Population size: 5–100
-- Mutation rate: 5–50%
-- Max drawdown gate: 5–50%
-- All settings configurable from Settings >> Layer 4 >> Module 34
+Configuration: population 5–100 · mutation rate 5–50% · max drawdown gate 5–50%
 
 ### 17.3 Safety Scanner (`Ctrl+Shift+F`)
 
-Token & contract safety analysis for new launches:
+Token & contract safety analysis for new token launches:
 
 | Module | What It Checks |
-|--------|---------------|
-| **Contract Analyzer** | Mint authority, blacklist, pausability, fee mutability |
+|--------|----------------|
+| **Contract Analyzer** | Mint authority, blacklist function, pausability, fee mutability |
 | **Honeypot Detector** | Simulates buy + sell to confirm token is sellable |
 | **Liquidity Lock** | Lock percentage, duration, verified locker contract |
-| **Wallet Graph** | Deployer relationships, fresh wallets, multi-deployers |
-| **Rug-Pull Score** | Composite 0–100% probability with risk level classification |
+| **Wallet Graph** | Deployer relationships, fresh wallets, multi-deployer patterns |
+| **Rug-Pull Scorer** | Composite 0–100% probability with risk classification |
 
 **Risk levels:**
 - 🟢 Low (0–20%) — proceed with normal caution
@@ -950,7 +797,129 @@ Token & contract safety analysis for new launches:
 
 ---
 
-## 18. Keyboard Shortcuts
+## 18. REST API Reference
+
+The embedded REST API starts automatically on `http://127.0.0.1:8765`.
+
+All endpoints except `/health` require:
+
+```
+Authorization: Bearer <api_key_prefix>
+```
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Service health — no auth required |
+| GET | `/api/v1/status` | System status, engine mode, uptime |
+| GET | `/api/v1/portfolio` | Portfolio snapshot (USDT + GBP values, per-asset breakdown) |
+| GET | `/api/v1/signals` | Latest ML signals from all sources |
+| GET | `/api/v1/trades` | Recent trades (`?limit=50&symbol=BTCUSDT`) |
+| GET | `/api/v1/orderbook/{symbol}` | Live L1/L2 order book |
+| GET | `/api/v1/ticker/{symbol}` | Live ticker (price, 24h change, volume) |
+| POST | `/api/v1/order` | Place a limit order |
+| DELETE | `/api/v1/order/{id}` | Cancel an open order |
+| GET | `/api/v1/ml/status` | ML training status, model version, accuracy |
+| POST | `/api/v1/ml/predict` | On-demand prediction for a symbol |
+| GET | `/api/v1/tax/monthly` | Monthly CGT tax summary |
+| GET | `/api/v1/log` | Recent Intel Log entries (`?limit=100`) |
+| POST | `/api/v1/webhook/register` | Register a webhook endpoint |
+
+### Example Requests
+
+```bash
+# Health check
+curl http://localhost:8765/health
+
+# Portfolio (GBP + USDT)
+curl -H "Authorization: Bearer mytoken123" \
+     http://localhost:8765/api/v1/portfolio
+
+# Place a BTCUSDT limit buy
+curl -X POST http://localhost:8765/api/v1/order \
+  -H "Authorization: Bearer mytoken123" \
+  -H "Content-Type: application/json" \
+  -d '{"symbol":"BTCUSDT","side":"BUY","quantity":0.001,"price":65000}'
+
+# On-demand ML prediction
+curl -X POST http://localhost:8765/api/v1/ml/predict \
+  -H "Authorization: Bearer mytoken123" \
+  -H "Content-Type: application/json" \
+  -d '{"symbol":"ETHUSDT"}'
+
+# Register webhook for all trade events
+curl -X POST http://localhost:8765/api/v1/webhook/register \
+  -H "Authorization: Bearer mytoken123" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://your-app.com/hook","events":["TRADE","SIGNAL","ERROR"]}'
+```
+
+### Webhook Payload (example)
+
+```json
+{
+  "event": "TRADE",
+  "timestamp": 1735900800.123,
+  "data": {
+    "symbol": "BTCUSDT",
+    "side": "BUY",
+    "price": 65000,
+    "quantity": 0.001,
+    "status": "FILLED",
+    "is_automated": true,
+    "ml_signal": "BUY",
+    "ml_confidence": 0.84
+  }
+}
+```
+
+---
+
+## 19. UK Tax (CGT) Reporting
+
+BinanceML Pro calculates UK Capital Gains Tax using HMRC rules:
+
+### Matching Rules (applied in this order)
+
+1. **Same-Day Rule** — if you buy and sell the same asset on the same day,
+   those are matched against each other first.
+
+2. **Bed-and-Breakfast Rule** — if you buy within 30 days after a sale,
+   that purchase is matched to the sale (not the pool) to prevent tax avoidance.
+
+3. **Section 104 Pool** — remaining acquisitions and disposals are pooled.
+   The pool maintains a running average cost basis per asset.
+
+### CGT Allowance (2024/25 onwards)
+
+| Rate | Threshold |
+|------|-----------|
+| Annual exempt amount | £3,000 |
+| Basic rate (gains within basic-rate band) | 10% |
+| Higher/additional rate | 20% |
+
+*The application defaults to 20% — adjust in Settings → Tax for your situation.*
+
+### Reports
+
+The Trade Journal generates:
+- **Gain/Loss Summary** — per-disposal breakdown with cost basis shown
+- **Annual Report** — total gains/losses for the full tax year
+- **Section 104 Pool Statement** — running pool balance per asset
+
+Reports are exported to CSV for use with HMRC's online Self Assessment.
+Monthly PDF summaries can be emailed automatically on the 1st of each month.
+
+### HMRC Filing
+
+The annual CGT summary is designed to match the format required for
+HMRC's Self Assessment (SA100 / SA108 forms). Consult a tax adviser
+for your specific situation.
+
+---
+
+## 20. Keyboard Shortcuts
 
 ### Navigation
 
@@ -967,67 +936,152 @@ Token & contract safety analysis for new launches:
 | `Ctrl+9` | Settings |
 | `F1` | Help |
 | `Ctrl+Shift+S` | Simulation Panel |
+| `Ctrl+L` | Toggle Intel Log dock |
+| `Ctrl+B` | Toggle Order Book dock |
 
-### Simulation
-
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+Shift+T` | Live Simulation Twin tab |
-| `Ctrl+Shift+M` | Strategy Mutation Lab tab |
-| `Ctrl+Shift+F` | Safety Scanner tab |
-
-### Layer Settings
+### Trading
 
 | Shortcut | Action |
 |----------|--------|
-| `Shift+Alt+1` | Layer 1 settings |
-| `Shift+Alt+2` | Layer 2 settings |
-| … | … |
-| `Shift+Alt+0` | Layer 10 settings |
-
-### AutoTrader
-
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+Shift+A` | Take Aim (place trade) |
-| `Ctrl+Shift+E` | Exit Trade |
-| `Ctrl+Shift+N` | Scan Now |
+| `Ctrl+Shift+B` | Market BUY current symbol |
+| `Ctrl+Shift+X` | Cancel ALL open orders |
+| `Ctrl+Shift+E` | Manual Exit (AutoTrader) |
+| `Ctrl+Shift+A` | Take Aim — confirm recommended trade |
+| `Ctrl+Shift+N` | Scan market now |
 
 ### ML & Data
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+T` | Start Training |
-| `Ctrl+Shift+T` | Stop Training |
-| `Ctrl+R` | Reload Model |
-| `Ctrl+I` | Data Integrity Check |
+| `Ctrl+T` | Start ML training session |
+| `Ctrl+Shift+T` | Stop ML training |
+| `Ctrl+R` | Reload ML model |
+| `Ctrl+I` | Run data integrity check |
 
-### Window
+### Simulation
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+L` | Toggle Intel Log |
-| `Ctrl+B` | Toggle Order Book |
-| `Ctrl++` | Add Chart Tab |
-| `F11` | Toggle Fullscreen |
-| `Ctrl+,` | Settings |
-| `Ctrl+Q` | Exit |
+| `Ctrl+Shift+T` | Open Simulation Twin tab |
+| `Ctrl+Shift+M` | Open Mutation Lab tab |
+| `Ctrl+Shift+F` | Open Safety Scanner tab |
+
+### Layer Settings
+
+| Shortcut | Layer |
+|----------|-------|
+| `Shift+Alt+1` | Layer 1 – Infrastructure |
+| `Shift+Alt+2` | Layer 2 – Market Data |
+| `Shift+Alt+3` | Layer 3 – Data Engineering |
+| `Shift+Alt+4` | Layer 4 – Research & Quant |
+| `Shift+Alt+5` | Layer 5 – Alpha & Signal |
+| `Shift+Alt+6` | Layer 6 – Risk |
+| `Shift+Alt+7` | Layer 7 – Execution |
+| `Shift+Alt+8` | Layer 8 – Token Safety |
+| `Shift+Alt+9` | Layer 9 – Monitoring |
+| `Shift+Alt+0` | Layer 10 – Governance |
+
+### Charts & Window
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl++` | Add chart tab |
+| `Ctrl+W` | Close current chart tab |
+| `Ctrl+Tab` | Next chart tab |
+| `F11` | Toggle fullscreen |
+| `Ctrl+,` | Open Settings |
+| `Ctrl+Q` | Quit application |
 
 ---
 
-## 19. UK Tax (CGT) Reporting
+## 21. Troubleshooting
 
-*(Previously section 18 — content unchanged)*
+### Application Won't Start
+
+```bash
+# Check Python version (must be 3.10+)
+python3 --version
+
+# Reinstall dependencies
+pip install --upgrade -r trading_bot/requirements.txt
+
+# Check PyQt6 is available
+python -c "from PyQt6.QtWidgets import QApplication; print('PyQt6 OK')"
+
+# Check torch
+python -c "import torch; print('torch', torch.__version__)"
+```
+
+### "No module named X" Error
+
+```bash
+pip install <module_name>
+# or
+pip install -r trading_bot/requirements.txt
+```
+
+### Binance Connection Failed
+
+1. Check API key permissions in Binance account settings
+2. Verify the **Testnet** toggle matches your key type (testnet keys ≠ mainnet keys)
+3. Check internet connectivity
+4. Add your IP to the Binance IP whitelist, or disable IP restriction
+5. Check the **Connections** panel for the specific error message
+
+### PostgreSQL Not Available
+
+The application runs without PostgreSQL (falls back to SQLite automatically).
+To set up PostgreSQL:
+
+```bash
+# Create the database
+sudo -u postgres createdb binanceml
+# Then set DB host/port/name in Settings → Database
+```
+
+### Redis Not Available
+
+Redis-backed features (real-time ticker cache, order-book cache) are disabled
+automatically. The application continues to function without Redis.
+
+### ML Model Not Loading
+
+If no trained model exists, the predictor runs with uninitialised weights.
+Go to **ML Training (Ctrl+3)** → **Start 48h Training** to build the initial model.
+
+A training session requires at least 6 hours and 50 MB of downloaded historical data.
+
+### Chart Not Updating
+
+1. Check Binance WebSocket connection in the Connections panel
+2. Try removing and re-adding the symbol
+3. Restart the application
+
+### GBP Values Look Wrong
+
+Ensure the application has completed at least one portfolio refresh cycle
+(30 seconds after startup). The GBP/USD rate is fetched live from
+the `GBPUSDT` pair — before the first fetch it uses a default of £0.79 per USD.
+
+### High CPU Usage
+
+ML training and the continuous learner are CPU-intensive. To reduce load:
+- Go to **ML Training** → **Stop** to halt background training temporarily
+- In Settings → ML, increase the retrain interval (default: 24 h)
+- Disable per-token model training in Layer 4 settings
+
+### Config File Corruption
+
+If the encrypted config is corrupted, delete it and restart:
+
+```bash
+rm ~/.binanceml/config.enc
+python trading_bot/main.py    # Setup Wizard will open again
+```
 
 ---
 
-## 20. Troubleshooting
-
-*(Previously section 19 — content unchanged)*
-
----
-
-## 21. Architecture Overview — 10-Layer Stack
+## 22. Architecture Overview — 10-Layer Stack
 
 BinanceML Pro v2.0 implements a full institutional-grade trading stack
 organised into 10 functional layers with 77 modules:
@@ -1078,25 +1132,34 @@ organised into 10 functional layers with 77 modules:
 │  AccessControl · DisasterRecovery                               │
 └─────────────────────────────────────────────────────────────────┘
               ↑
-    Evolution Layer (above all)
+    Evolution Layer (above all layers)
     LiveSimulationTwin · StrategyMutationLab
 ```
 
-### Data Flow (v2.0)
+### Data Flow
 
-1. **Market Data** → Exchange MDC / DEX MDC / Mempool Collector
+1. **Market Data** → ExchangeMDC / DEXMDC / MempoolCollector stream live data
 2. **Data Engineering** → Time normalisation → Symbol mapping → Cleaning → Feature Store
 3. **Research** → Regime detection → Factor research → Signal generation
 4. **Signal Council** → Ensemble weighting → Conflict resolution → Final signal
-5. **Risk** → Exposure check → Position sizing → Drawdown guard → Kill switch check
+5. **Risk** → Exposure check → Kelly position sizing → Drawdown guard → Kill switch check
 6. **Execution** → Smart routing → Algo execution → MEV protection → Reconciliation
 7. **Simulation Twin** → Shadows every decision → Drift detection → Variant comparison
 8. **Governance** → Compliance log → Approval workflow → Access control
+
+### Key Technical Properties
+
+| Property | Detail |
+|---|---|
+| ORM compatibility | SQLAlchemy 2.0 `select()` API — ready for SQLAlchemy 3.0 |
+| GBP conversion | Live GBPUSDT rate, correct USD→GBP multiplier (1/GBPUSDT ≈ 0.79) |
+| Thread safety | Named locks on `_candle_cache`, `_open_trade_ids`, `_active_symbols` |
+| Gas estimation | web3 RPC with graceful fallback to jittered default gwei values |
+| Config | AES-256-GCM encrypted · PBKDF2 master key · 600 000 iterations |
 
 ---
 
 *BinanceML Pro is provided for educational and research purposes.
 Trading cryptocurrencies involves significant financial risk.
 Past performance does not guarantee future results.
-Always start with Paper Trading mode and understand the risks before
-using real funds.*
+Always start with Paper Trading mode and understand the risks before using real funds.*
