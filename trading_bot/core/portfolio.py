@@ -56,7 +56,7 @@ class PortfolioManager:
         self._lock = threading.RLock()
         self._positions: dict[str, Position] = {}
         self._balances: dict[str, dict] = {}
-        self._gbp_rate: Decimal = Decimal("1.27")  # USD/GBP default
+        self._gbp_rate: Decimal = Decimal("0.79")  # USD→GBP multiplier default (1/1.27)
         self._snapshot = PortfolioSnapshot()
         self._callbacks: list = []
 

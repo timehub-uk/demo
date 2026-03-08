@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
 CONFIG_DIR = Path.home() / ".binanceml"

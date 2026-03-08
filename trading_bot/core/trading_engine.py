@@ -92,6 +92,8 @@ class TradingEngine:
         # Candle cache per symbol for ATR computation (last 30 candles)
         self._candle_cache: dict[str, list[dict]] = {}
         self._open_trade_ids: dict[str, str] = {}   # symbol → journal trade_id
+        self._cache_lock = threading.Lock()
+        self._symbols_lock = threading.Lock()
 
     # ── Lifecycle ──────────────────────────────────────────────────────
     def start(self) -> None:
@@ -131,16 +133,18 @@ class TradingEngine:
 
     # ── Symbol management ──────────────────────────────────────────────
     def add_symbol(self, symbol: str) -> None:
-        if symbol in self._active_symbols:
-            return
-        self._active_symbols.add(symbol)
+        with self._symbols_lock:
+            if symbol in self._active_symbols:
+                return
+            self._active_symbols.add(symbol)
         self._client.subscribe_kline(symbol, "1m", self._on_kline)
         self._client.subscribe_depth(symbol, self._on_depth)
         self._client.subscribe_ticker(symbol, self._on_ticker)
         logger.debug(f"Subscribed to {symbol}")
 
     def remove_symbol(self, symbol: str) -> None:
-        self._active_symbols.discard(symbol)
+        with self._symbols_lock:
+            self._active_symbols.discard(symbol)
 
     # ── Pluggable service injection ────────────────────────────────────
     def set_whale_watcher(self, watcher) -> None:
@@ -430,7 +434,8 @@ class TradingEngine:
                     source_signals=signal.get("_sources", {}),
                     size_mult=size_mult,
                 )
-                self._open_trade_ids[symbol] = trade_id
+                with self._cache_lock:
+                    self._open_trade_ids[symbol] = trade_id
 
     # ── Intelligence pipeline ──────────────────────────────────────────
     def _run_intelligence_pipeline(
@@ -522,7 +527,8 @@ class TradingEngine:
     def _get_candles_df(self, symbol: str):
         """Return a small DataFrame of recent candles for ATR computation."""
         try:
-            cache = self._candle_cache.get(symbol, [])
+            with self._cache_lock:
+                cache = list(self._candle_cache.get(symbol, []))
             if len(cache) >= 20:
                 import pandas as pd
                 return pd.DataFrame(cache[-50:])
@@ -561,10 +567,11 @@ class TradingEngine:
                 "low": float(k.get("l", 0)), "close": float(k.get("c", 0)),
                 "volume": float(k.get("v", 0)),
             }
-            cache = self._candle_cache.setdefault(symbol, [])
-            cache.append(candle_row)
-            if len(cache) > 200:
-                self._candle_cache[symbol] = cache[-200:]
+            with self._cache_lock:
+                cache = self._candle_cache.setdefault(symbol, [])
+                cache.append(candle_row)
+                if len(cache) > 200:
+                    self._candle_cache[symbol] = cache[-200:]
 
         if k.get("x"):   # candle closed
             self._emit("signal", {
