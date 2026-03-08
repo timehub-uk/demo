@@ -502,7 +502,10 @@ class MLTrainingWidget(QWidget):
             from db.postgres import get_db
             from db.models import MLModel
             with get_db() as db:
-                m = db.query(MLModel).filter_by(is_active=True).order_by(MLModel.created_at.desc()).first()
+                from sqlalchemy import select
+                m = db.execute(
+                    select(MLModel).filter_by(is_active=True).order_by(MLModel.created_at.desc())
+                ).scalar_one_or_none()
                 if m:
                     vals = [
                         f"{(m.accuracy or 0):.2%}",

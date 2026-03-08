@@ -142,7 +142,6 @@ class AlertPanel(QWidget):
                            border-radius:3px; font-size:10px; padding:0 8px; }}
             QPushButton:hover {{ background:{BG3}; }}
         """)
-        clear_btn.clicked.connect(self.table.setRowCount)
         clear_btn.clicked.connect(lambda: self.table.setRowCount(0))
         hg_layout.addWidget(clear_btn)
         root.addWidget(hist_grp, 1)

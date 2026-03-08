@@ -357,11 +357,42 @@ class TradingPanel(QWidget):
 
     def _refresh(self) -> None:
         try:
+            import pyqtgraph as pg
+            from sqlalchemy import select
             from db.postgres import get_db
-            from db.models import Trade, Portfolio
+            from db.models import Trade
             with get_db() as db:
-                trades = db.query(Trade).order_by(Trade.created_at.desc()).limit(100).all()
+                trades = db.execute(
+                    select(Trade).order_by(Trade.created_at.desc()).limit(100)
+                ).scalars().all()
                 self.history_tbl.refresh_trades(trades)
+
+            # Populate daily P&L chart from trade history (FILLED trades only)
+            filled = [t for t in reversed(trades) if getattr(t, "status", "") == "FILLED"]
+            if filled:
+                import time as _time
+                from datetime import datetime, timezone, date
+                from collections import defaultdict
+                daily: dict = defaultdict(float)
+                for t in filled:
+                    ts = t.created_at
+                    if ts:
+                        d = ts.date() if hasattr(ts, "date") else date.today()
+                        pnl_val = float(t.realized_pnl or 0)
+                        daily[d] += pnl_val
+                if daily:
+                    sorted_days = sorted(daily)
+                    xs = [
+                        int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp())
+                        for d in sorted_days
+                    ]
+                    ys = [daily[d] for d in sorted_days]
+                    bars = pg.BarGraphItem(
+                        x=xs, height=ys, width=86_000,
+                        brushes=[GREEN if v >= 0 else RED for v in ys],
+                    )
+                    self.pnl_plot.clear()
+                    self.pnl_plot.addItem(bars)
         except Exception:
             pass
 
