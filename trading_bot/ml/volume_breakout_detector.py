@@ -523,10 +523,11 @@ class VolumeBreakoutDetector:
     def _persist(self, result: BreakoutResult) -> None:
         """Update breakout_stage and breakout_score in pair_registry."""
         try:
+            from sqlalchemy import select
             from db.postgres import get_db
             from db.models import PairRegistry
             with get_db() as db:
-                row = db.query(PairRegistry).filter_by(symbol=result.symbol).first()
+                row = db.execute(select(PairRegistry).filter_by(symbol=result.symbol)).scalar_one_or_none()
                 if row:
                     row.breakout_stage = result.stage
                     row.breakout_score = result.breakout_score

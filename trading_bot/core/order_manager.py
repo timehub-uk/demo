@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Callable, Optional
 
 from loguru import logger
+from sqlalchemy import select
 
 from config import get_settings
 from db.postgres import get_db
@@ -164,7 +165,7 @@ class OrderManager:
             with self._lock:
                 self._open_orders.pop(order_id, None)
             with get_db() as db:
-                order = db.query(Order).filter_by(binance_order_id=order_id).first()
+                order = db.execute(select(Order).filter_by(binance_order_id=order_id)).scalar_one_or_none()
                 if order:
                     order.status = "CANCELLED"
             return True

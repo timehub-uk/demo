@@ -692,10 +692,11 @@ def start_background_services(services: dict, settings) -> None:
 
     # Check if first training is needed
     try:
+        from sqlalchemy import select
         from db.postgres import get_db
         from db.models import MLModel
         with get_db() as db:
-            has_model = db.query(MLModel).filter_by(is_active=True).first()
+            has_model = db.execute(select(MLModel).filter_by(is_active=True)).scalar_one_or_none()
         if not has_model and settings.ml.training_hours > 0:
             intel.ml("Startup", "No trained model found – scheduling initial 48h training session…")
             def _deferred_training():

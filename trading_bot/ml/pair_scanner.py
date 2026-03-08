@@ -342,11 +342,12 @@ class PairScanner:
     def _persist_to_db(self, pairs: list[PairInfo]) -> None:
         """Upsert all pair market stats into the pair_registry table."""
         try:
+            from sqlalchemy import select
             from db.postgres import get_db
             from db.models import PairRegistry
             with get_db() as db:
                 for p in pairs:
-                    row = db.query(PairRegistry).filter_by(symbol=p.symbol).first()
+                    row = db.execute(select(PairRegistry).filter_by(symbol=p.symbol)).scalar_one_or_none()
                     if row is None:
                         row = PairRegistry(symbol=p.symbol, base=p.base, quote=p.quote)
                         db.add(row)

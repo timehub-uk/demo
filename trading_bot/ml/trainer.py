@@ -26,6 +26,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset, random_split
 from loguru import logger
 from sklearn.metrics import accuracy_score, classification_report
+from sqlalchemy import select
 
 from config import get_settings
 from db.postgres import get_db
@@ -151,7 +152,7 @@ class MLTrainer:
                 )
                 db.add(ml_model)
                 if session_row_id:
-                    s = db.query(TrainingSession).filter_by(id=session_row_id).first()
+                    s = db.execute(select(TrainingSession).filter_by(id=session_row_id)).scalar_one_or_none()
                     if s:
                         s.status = "COMPLETE"
                         s.progress_pct = 100.0
@@ -490,7 +491,7 @@ class MLTrainer:
             return
         try:
             with get_db() as db:
-                s = db.query(TrainingSession).filter_by(id=session_id).first()
+                s = db.execute(select(TrainingSession).filter_by(id=session_id)).scalar_one_or_none()
                 if s:
                     s.epoch = epoch
                     s.total_epochs = total

@@ -17,6 +17,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from loguru import logger
+from sqlalchemy import select
 
 from config import get_settings
 from db.postgres import get_db
@@ -219,14 +220,14 @@ class UKTaxCalculator:
     def _load_trades(start: datetime, end: datetime, user_id: str | None) -> list[Trade]:
         try:
             with get_db() as db:
-                q = db.query(Trade).filter(
+                q = select(Trade).where(
                     Trade.created_at >= start,
                     Trade.created_at <= end,
                     Trade.status == "FILLED",
                 )
                 if user_id:
-                    q = q.filter(Trade.user_id == user_id)
-                return q.order_by(Trade.created_at).all()
+                    q = q.where(Trade.user_id == user_id)
+                return db.execute(q.order_by(Trade.created_at)).scalars().all()
         except Exception as exc:
             logger.error(f"Failed to load trades: {exc}")
             return []

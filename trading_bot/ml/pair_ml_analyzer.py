@@ -376,6 +376,7 @@ class PairMLAnalyzer:
     def _persist(self, rec: dict) -> None:
         """Write/update PairRegistry and insert a PairMLSnapshot row."""
         try:
+            from sqlalchemy import select
             from db.postgres import get_db
             from db.models import PairRegistry, PairMLSnapshot
             import sqlalchemy as sa
@@ -385,7 +386,7 @@ class PairMLAnalyzer:
 
             with get_db() as db:
                 # Upsert PairRegistry row
-                row = db.query(PairRegistry).filter_by(symbol=sym).first()
+                row = db.execute(select(PairRegistry).filter_by(symbol=sym)).scalar_one_or_none()
                 if row is None:
                     row = PairRegistry(symbol=sym, base=sym[:-4] if sym.endswith("USDT") else sym, quote="USDT")
                     db.add(row)

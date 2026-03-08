@@ -28,6 +28,7 @@ from typing import Any, Callable, Optional
 
 from flask import Flask, jsonify, request, abort
 from loguru import logger
+from sqlalchemy import select
 
 from config import get_settings
 from db.redis_client import RedisClient
@@ -116,10 +117,10 @@ def create_app(engine=None, portfolio=None, predictor=None,
         symbol = request.args.get("symbol")
         try:
             with get_db() as db:
-                q = db.query(Trade).order_by(Trade.created_at.desc()).limit(limit)
+                q = select(Trade).order_by(Trade.created_at.desc()).limit(limit)
                 if symbol:
-                    q = q.filter(Trade.symbol == symbol)
-                trades = q.all()
+                    q = q.where(Trade.symbol == symbol)
+                trades = db.execute(q).scalars().all()
             rows = [
                 {
                     "id": str(t.id),

@@ -16,6 +16,8 @@ import torch
 import numpy as np
 from loguru import logger
 
+from sqlalchemy import select
+
 from config import get_settings
 from db.postgres import get_db
 from db.models import MLModel
@@ -154,12 +156,9 @@ class MLPredictor:
     def _load_active_model(self) -> bool:
         try:
             with get_db() as db:
-                ml_model = (
-                    db.query(MLModel)
-                    .filter_by(is_active=True)
-                    .order_by(MLModel.created_at.desc())
-                    .first()
-                )
+                ml_model = db.execute(
+                    select(MLModel).filter_by(is_active=True).order_by(MLModel.created_at.desc())
+                ).scalar_one_or_none()
             if ml_model and ml_model.model_path:
                 path = Path(ml_model.model_path)
                 if path.exists():
