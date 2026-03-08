@@ -913,6 +913,9 @@ def main() -> int:
         wallet_graph_analyzer=services.get("wallet_graph_analyzer"),
         rugpull_scorer=services.get("rugpull_scorer"),
         launch_signal=services.get("launch_signal"),
+        discord=services.get("discord"),
+        slack=services.get("slack"),
+        email_notifier=services.get("email_notifier"),
     )
     splash.finish(window)
     window.showMaximized()

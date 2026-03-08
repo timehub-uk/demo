@@ -328,6 +328,7 @@ _NAV_ITEMS = [
     (8,  "settings",     "CFG"),
     (9,  "help",         "HELP"),
     (10, "simulation",   "SIM"),
+    (11, "reports",      "RPT"),
 ]
 
 
@@ -855,6 +856,9 @@ class MainWindow(QMainWindow):
         wallet_graph_analyzer=None,
         rugpull_scorer=None,
         launch_signal=None,
+        discord=None,
+        slack=None,
+        email_notifier=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -907,6 +911,10 @@ class MainWindow(QMainWindow):
         self._accumulation_detector  = accumulation_detector
         self._liquidity_analyzer     = liquidity_analyzer
         self._breakout_detector      = breakout_detector
+
+        self._discord        = discord
+        self._slack          = slack
+        self._email_notifier = email_notifier
 
         self._settings       = get_settings()
         self._intel          = get_intel_logger()
@@ -974,6 +982,7 @@ class MainWindow(QMainWindow):
         self._build_settings_page()      # 8
         self._build_help_page()          # 9
         self._build_simulation_page()    # 10
+        self._build_reports_page()       # 11
 
         # Toast notification overlay (floats over the window)
         self._toast = ToastOverlay(central)
@@ -1307,6 +1316,22 @@ class MainWindow(QMainWindow):
         self.help_page = HelpWidget()
         self.stack.addWidget(self.help_page)
 
+    def _build_reports_page(self) -> None:
+        try:
+            from ui.reports_widget import ReportsWidget
+            self.reports_page = ReportsWidget(
+                trade_journal=self._trade_journal,
+                tax_calc=self._tax_calc,
+                forecast_tracker=self._forecast_tracker,
+                dynamic_risk=self._dynamic_risk,
+                email_notifier=getattr(self, "_email_notifier", None),
+                discord=getattr(self, "_discord", None),
+                slack=getattr(self, "_slack", None),
+            )
+        except Exception as exc:
+            self.reports_page = _placeholder("Reports", f"Not available: {exc}")
+        self.stack.addWidget(self.reports_page)
+
     # ──────────────────────────────────────────────────────────────────
     # Menu
     # ──────────────────────────────────────────────────────────────────
@@ -1330,6 +1355,7 @@ class MainWindow(QMainWindow):
         for i, lbl in enumerate(labels):
             sc = f"Ctrl+{i+1}" if i < 9 else ""
             vm.addAction(self._act(lbl, lambda _, idx=i: self._navigate_to(idx), sc))
+        vm.addAction(self._act("Reports", lambda: self._navigate_to(11), "F2"))
         vm.addSeparator()
         vm.addAction(self._act("Toggle Intel Log",   self._toggle_intel_log,   "Ctrl+L"))
         vm.addAction(self._act("Toggle Order Book",  self._toggle_order_book,  "Ctrl+B"))
