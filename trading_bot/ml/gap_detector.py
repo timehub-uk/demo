@@ -5,16 +5,17 @@ A "gap" occurs when a candle's open price is significantly different from the
 prior candle's close price, creating a visible gap on the chart.
 
 Gap Types and Trading Logic:
-  GAP UP   — Current open > prior close by ≥ gap_threshold %
-             → Action: BUY to sell when gap fills (mean-reversion trade)
-             → Entry: current market price
-             → Target: prior close price (the gap fill level)
-             → Stop-loss: below the gap open or ATR-based
-
   GAP DOWN — Current open < prior close by ≥ gap_threshold %
-             → Action: WATCH (monitor for fill or continuation)
-             → No automatic trade entry
-             → Alert only: gap down detected, watch for reversal
+             → Action: BUY (mean-reversion fill trade)
+             → Entry: current market price (discounted open)
+             → Target: prior close price (the gap fill level — ABOVE entry)
+             → Stop-loss: ATR-based below the gap open
+             → Edge: buying cheap, target is above entry → positive R:R
+
+  GAP UP   — Current open > prior close by ≥ gap_threshold %
+             → Action: WATCH (monitor only — gap fill requires a short)
+             → No buy entry on spot platform
+             → Alert only: gap up detected, watch for reversal/fill
 
 Algorithm (computed on 1d and 4h klines, last 90 bars):
 
@@ -41,7 +42,7 @@ Scan Timeframes:
 Results:
   - Stored in _results keyed by (symbol, timeframe, gap_bar_index)
   - Exposed via get_gap_ups(), get_gap_downs(), get_all_open()
-  - Callbacks fired for new GAP UP signals (BUY action)
+  - Callbacks fired for new GAP DOWN signals (BUY action)
   - Intel log entries for all notable gaps
 
 Refresh: SCAN_INTERVAL_SEC (default 900 s / 15 min).
@@ -272,10 +273,10 @@ class GapDetector:
                         new_ids.add(gap.gap_id)
                         # Detect newly discovered gaps (not seen last scan)
                         if gap.gap_id not in self._prev_gap_ids and gap.state == "OPEN":
-                            if gap.gap_type == "UP":
-                                new_gap_ups.append(gap)
+                            if gap.gap_type == "DOWN":
+                                new_gap_ups.append(gap)    # DOWN = BUY signal
                             else:
-                                new_gap_downs.append(gap)
+                                new_gap_downs.append(gap)  # UP = WATCH signal
                 except Exception as exc:
                     logger.debug(f"GapDetector: {sym}/{tf} failed: {exc!r}")
 
@@ -290,7 +291,7 @@ class GapDetector:
         self._intel.ml(
             "GapDetector",
             f"Scan complete — {len(new_results)} gaps found  "
-            f"GAP_UP(BUY)={up_open}  GAP_DOWN(WATCH)={down_open}"
+            f"GAP_DOWN(BUY)={down_open}  GAP_UP(WATCH)={up_open}"
         )
 
         # Fire callbacks for new signals
@@ -364,7 +365,7 @@ class GapDetector:
 
             # ── Gap type ──────────────────────────────────────────────────────
             gap_type   = "UP" if gap_pct > 0 else "DOWN"
-            action     = "BUY" if gap_type == "UP" else "WATCH"
+            action     = "BUY" if gap_type == "DOWN" else "WATCH"
             fill_target = prev_close   # gap fills when price returns to prev_close
 
             # ── Gap state (has it filled?) ─────────────────────────────────────

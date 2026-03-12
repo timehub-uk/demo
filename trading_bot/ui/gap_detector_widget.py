@@ -2,8 +2,8 @@
 Gap Detector Widget — Displays price gap signals from the GapDetector ML tool.
 
 Two action types:
-  GAP UP   ↑ — green rows  — Action: BUY (buy now, target = gap fill level)
-  GAP DOWN ↓ — gold rows   — Action: WATCH (monitor, no auto-trade)
+  GAP DOWN ↓ — green rows  — Action: BUY (buy cheap, target = prior close above = profit)
+  GAP UP   ↑ — gold rows   — Action: WATCH (gap fill needs a short; spot platform = monitor only)
 
 Columns:
   Type | Symbol | TF | State | Action | Gap% | Fill% | Fill Target | Distance | Score | Age | VolX | RSI | Note
@@ -36,12 +36,12 @@ except Exception:
 
 # ── Color maps ────────────────────────────────────────────────────────────────
 _GAP_TYPE_COLOR = {
-    "UP":   "#00CC66",   # green  — BUY opportunity
-    "DOWN": "#FFD700",   # gold   — WATCH
+    "DOWN": "#00CC66",   # green  — BUY opportunity (cheap entry, target above)
+    "UP":   "#FFD700",   # gold   — WATCH (gap fill needs short; spot only = monitor)
 }
 _GAP_TYPE_BG = {
-    "UP":   "#0A1A0A",
-    "DOWN": "#1A1800",
+    "DOWN": "#0A1A0A",
+    "UP":   "#1A1800",
 }
 _STATE_COLOR = {
     "OPEN":    "#00D4FF",   # cyan  — active signal
@@ -87,8 +87,8 @@ class GapSummaryBar(QFrame):
         layout.setContentsMargins(12, 0, 12, 0)
         layout.setSpacing(20)
 
-        self._lbl_ups   = self._make_stat("GAP UP (BUY)", "0", GREEN)
-        self._lbl_downs = self._make_stat("GAP DOWN (WATCH)", "0", YELLOW)
+        self._lbl_ups   = self._make_stat("GAP DOWN (BUY)", "0", GREEN)
+        self._lbl_downs = self._make_stat("GAP UP (WATCH)", "0", YELLOW)
         self._lbl_total = self._make_stat("Total Open", "0", FG1)
 
         for w in (self._lbl_ups, self._lbl_downs, self._lbl_total):
@@ -109,15 +109,15 @@ class GapSummaryBar(QFrame):
         )
         return lbl
 
-    def update(self, ups: int, downs: int, ts: str) -> None:
-        total = ups + downs
+    def update(self, downs_buy: int, ups_watch: int, ts: str) -> None:
+        total = downs_buy + ups_watch
         self._lbl_ups.setText(
-            f"<span style='color:{FG2}; font-size:10px;'>GAP UP (BUY): </span>"
-            f"<span style='color:{GREEN}; font-size:14px; font-weight:bold;'>{ups}</span>"
+            f"<span style='color:{FG2}; font-size:10px;'>GAP DOWN (BUY): </span>"
+            f"<span style='color:{GREEN}; font-size:14px; font-weight:bold;'>{downs_buy}</span>"
         )
         self._lbl_downs.setText(
-            f"<span style='color:{FG2}; font-size:10px;'>GAP DOWN (WATCH): </span>"
-            f"<span style='color:{YELLOW}; font-size:14px; font-weight:bold;'>{downs}</span>"
+            f"<span style='color:{FG2}; font-size:10px;'>GAP UP (WATCH): </span>"
+            f"<span style='color:{YELLOW}; font-size:14px; font-weight:bold;'>{ups_watch}</span>"
         )
         self._lbl_total.setText(
             f"<span style='color:{FG2}; font-size:10px;'>Total Open: </span>"
@@ -183,7 +183,7 @@ class GapDetectorWidget(QWidget):
         )
         tb_layout.addWidget(title_lbl)
 
-        desc = QLabel("↑ Gap Up → BUY to fill  |  ↓ Gap Down → WATCH")
+        desc = QLabel("↓ Gap Down → BUY (cheap entry, target = prior close above)  |  ↑ Gap Up → WATCH")
         desc.setStyleSheet(f"color:{FG2}; font-size:11px;")
         tb_layout.addWidget(desc)
         tb_layout.addStretch()
@@ -261,8 +261,8 @@ class GapDetectorWidget(QWidget):
         leg_layout.setSpacing(20)
 
         for text, color in [
-            ("↑ GAP UP — BUY (target = gap fill)",     GREEN),
-            ("↓ GAP DOWN — WATCH (no trade)",           YELLOW),
+            ("↓ GAP DOWN — BUY (entry below target)",   GREEN),
+            ("↑ GAP UP — WATCH (no spot trade)",        YELLOW),
             ("⬤ OPEN",   "#00D4FF"),
             ("◑ PARTIAL", "#FFB347"),
             ("✓ FILLED",  "#888888"),
@@ -370,11 +370,11 @@ class GapDetectorWidget(QWidget):
 
         # ── Summary counts ────────────────────────────────────────────────────
         all_open = self._results if self._results else []
-        ups_open   = sum(1 for r in all_open if r.gap_type == "UP"   and r.state == "OPEN")
-        downs_open = sum(1 for r in all_open if r.gap_type == "DOWN" and r.state == "OPEN")
+        downs_open = sum(1 for r in all_open if r.gap_type == "DOWN" and r.state == "OPEN")  # BUY
+        ups_open   = sum(1 for r in all_open if r.gap_type == "UP"   and r.state == "OPEN")  # WATCH
         from datetime import datetime, timezone
         ts_str = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-        self._summary.update(ups_open, downs_open, ts_str)
+        self._summary.update(downs_open, ups_open, ts_str)
 
         # ── Populate table ────────────────────────────────────────────────────
         self._table.setSortingEnabled(False)

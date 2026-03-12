@@ -1163,7 +1163,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-            # Gap detector tab (gap up = BUY to fill, gap down = WATCH)
+            # Gap detector tab (gap down = BUY mean-reversion fill, gap up = WATCH)
             try:
                 from ui.gap_detector_widget import GapDetectorWidget
                 self.gap_detector_widget = GapDetectorWidget(
