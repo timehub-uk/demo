@@ -855,6 +855,7 @@ class MainWindow(QMainWindow):
         accumulation_detector=None,
         liquidity_analyzer=None,
         breakout_detector=None,
+        gap_detector=None,
         metamask_wallet=None,
         sim_twin=None,
         mutation_lab=None,
@@ -919,6 +920,7 @@ class MainWindow(QMainWindow):
         self._accumulation_detector  = accumulation_detector
         self._liquidity_analyzer     = liquidity_analyzer
         self._breakout_detector      = breakout_detector
+        self._gap_detector           = gap_detector
 
         self._discord        = discord
         self._slack          = slack
@@ -1158,6 +1160,17 @@ class MainWindow(QMainWindow):
                     breakout_detector=self._breakout_detector,
                 )
                 tabs.addTab(self.breakout_widget, "💥  Breakouts")
+            except Exception:
+                pass
+
+            # Gap detector tab (gap up = BUY to fill, gap down = WATCH)
+            try:
+                from ui.gap_detector_widget import GapDetectorWidget
+                self.gap_detector_widget = GapDetectorWidget(
+                    gap_detector=self._gap_detector,
+                )
+                self.gap_detector_widget.symbol_selected.connect(self._on_symbol_changed)
+                tabs.addTab(self.gap_detector_widget, "↕  Gaps")
             except Exception:
                 pass
 

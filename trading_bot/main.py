@@ -337,6 +337,13 @@ def build_services(settings):
         pair_scanner=pair_scanner,
     )
 
+    intel.system("Startup", "Initialising gap detector (gap up/down ML scanner)…")
+    from ml.gap_detector import GapDetector
+    gap_detector = GapDetector(
+        binance_client=binance,
+        pair_scanner=pair_scanner,
+    )
+
     intel.system("Startup", "Initialising auto-trader…")
     from core.auto_trader import AutoTrader
     auto_trader = AutoTrader(
@@ -455,6 +462,7 @@ def build_services(settings):
         "accumulation_detector": accumulation_detector,
         "liquidity_analyzer":  liquidity_analyzer,
         "breakout_detector":   breakout_detector,
+        "gap_detector":        gap_detector,
         "metamask_wallet":     metamask_wallet,
         "contract_analyzer":   contract_analyzer,
         "honeypot_detector":   honeypot_detector,
@@ -687,6 +695,12 @@ def start_background_services(services: dict, settings) -> None:
         brk_det.start()
         intel.system("Startup", "Volume breakout detector started (4-stage breakout patterns)")
 
+    # Gap detector (gap up/down ML scanner — scans HIGH+MEDIUM every 15 min)
+    gap_det = services.get("gap_detector")
+    if gap_det:
+        gap_det.start()
+        intel.system("Startup", "Gap detector started (gap up=BUY, gap down=WATCH on 1d+4h)")
+
     # Market pulse broad monitor
     market_pulse = services.get("market_pulse")
     if market_pulse:
@@ -904,6 +918,7 @@ def main() -> int:
         accumulation_detector=services.get("accumulation_detector"),
         liquidity_analyzer=services.get("liquidity_analyzer"),
         breakout_detector=services.get("breakout_detector"),
+        gap_detector=services.get("gap_detector"),
         metamask_wallet=services.get("metamask_wallet"),
         sim_twin=services.get("sim_twin"),
         mutation_lab=services.get("mutation_lab"),
