@@ -1,38 +1,45 @@
 """
-Pair Scanner Widget — Browsable table of all discovered Binance USDT pairs
+Pair Scanner Widget — Browsable table of all discovered Binance trading pairs
 ranked by volume, activity, and ML priority score.
 
-Columns:
-  Priority | Symbol | Price | 24h Change | Volume (USDT) | Trades | Volatility | Score
+Tabs:
+  Trading — All TRADING pairs ranked by score (HIGH / MEDIUM / LOW)
+  Upcoming — PRE_TRADING / BREAK / HALT pairs (listed but not yet live)
 
-Filtering:
+Columns (Trading tab):
+  Priority | Symbol | Price | 24h Change | Volume | Trades | Vol% | Score | Tradability
+
+Columns (Upcoming tab):
+  Status | Symbol | Base | Quote | Permissions | Listed | Note
+
+Filtering (Trading tab):
   - Priority pill buttons (ALL / HIGH / MEDIUM / LOW)
   - Text search box (filters by symbol)
 
 Actions:
-  - Double-click row → adds symbol to watched charts
-  - "Add to Arbitrage" button → adds pair to ArbitrageDetector
-  - "Watch Trends" button → adds symbol to TrendScanner
+  - Double-click Trading row → follows symbol on chart
+  - "Add to Arbitrage" / "Watch Trends" buttons
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer, QSortFilterProxyModel, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QLineEdit,
-    QAbstractItemView, QFrame, QSizePolicy,
+    QAbstractItemView, QFrame, QTabWidget,
 )
 from loguru import logger
 
 try:
-    from ml.pair_scanner import PairScanner, PairInfo
+    from ml.pair_scanner import PairScanner, PairInfo, PreTradingPair
 except Exception:
-    PairScanner = None   # type: ignore[assignment, misc]
-    PairInfo    = None   # type: ignore[assignment, misc]
+    PairScanner    = None   # type: ignore[assignment, misc]
+    PairInfo       = None   # type: ignore[assignment, misc]
+    PreTradingPair = None   # type: ignore[assignment, misc]
 
 from ui.styles import (
     ACCENT, BG1, BG2, BG3, BG4, BORDER, BORDER2,
@@ -48,9 +55,35 @@ _PRIORITY_COLORS = {
 }
 
 
+_TABLE_STYLE = f"""
+    QTableWidget {{
+        background:{BG1};
+        color:{FG0};
+        gridline-color:{BORDER};
+        border:1px solid {BORDER2};
+        border-radius:6px;
+        font-size:12px;
+        alternate-background-color:{BG2};
+    }}
+    QHeaderView::section {{
+        background:{BG3};
+        color:{FG1};
+        border:none;
+        border-bottom:1px solid {BORDER2};
+        padding:5px 8px;
+        font-size:12px;
+        font-weight:bold;
+    }}
+    QTableWidget::item {{ padding:3px 6px; }}
+    QTableWidget::item:selected {{ background:{BG4}; color:{FG0}; }}
+"""
+
+
 class PairScannerWidget(QWidget):
     """
-    Ranked pair discovery widget.
+    Ranked pair discovery widget with two tabs:
+      Trading  — all TRADING pairs ranked by score
+      Upcoming — PRE_TRADING / BREAK / HALT pairs (announced but not live)
 
     Pass ``pair_scanner``, optionally ``arb_detector`` and ``trend_scanner``
     to enable cross-module actions.
@@ -58,8 +91,8 @@ class PairScannerWidget(QWidget):
 
     symbol_selected = pyqtSignal(str)   # double-click → chart follows
 
-    # Table columns
-    _COLS = ["", "Symbol", "Price", "24h %", "Volume USDT", "Trades", "Vol%", "Score", "Tradability"]
+    _TRADING_COLS  = ["", "Symbol", "Price", "24h %", "Volume", "Trades", "Vol%", "Score", "Tradability"]
+    _UPCOMING_COLS = ["Status", "Symbol", "Base", "Quote", "Permissions", "Detected", "Note"]
 
     def __init__(
         self,
@@ -74,19 +107,19 @@ class PairScannerWidget(QWidget):
         self._arb_detector   = arb_detector
         self._trend_scanner  = trend_scanner
         self._ml_analyzer    = pair_ml_analyzer
-        self._ml_results: dict[str, dict] = {}   # symbol → analyzer result
+        self._ml_results: dict[str, dict] = {}
 
-        self._all_pairs: list = []    # current full list from scanner
+        self._all_pairs: list = []
+        self._pre_trading_pairs: list = []
         self._filter_priority = "ALL"
         self._filter_text     = ""
 
         self._build_ui()
         self._connect_scanner()
 
-        # Fallback refresh timer
         self._timer = QTimer(self)
         self._timer.setInterval(60_000)
-        self._timer.timeout.connect(self._refresh_table)
+        self._timer.timeout.connect(self._refresh_all)
         self._timer.start()
 
     # ── UI ─────────────────────────────────────────────────────────────────────
@@ -94,29 +127,14 @@ class PairScannerWidget(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(4)
 
-        # ── Top bar ────────────────────────────────────────────────────────────
+        # Title bar
         top = QHBoxLayout()
-        top.setSpacing(8)
-
-        title = QLabel("Pair Discovery — All USDT Markets")
+        title = QLabel("Pair Discovery — All Markets")
         title.setStyleSheet(f"color:{FG0}; font-size:14px; font-weight:bold;")
         top.addWidget(title)
         top.addStretch()
-
-        # Search
-        self._search = QLineEdit()
-        self._search.setPlaceholderText("Search symbol…")
-        self._search.setFixedWidth(130)
-        self._search.setStyleSheet(
-            f"QLineEdit {{ background:{BG3}; color:{FG0}; border:1px solid {BORDER}; "
-            f"border-radius:4px; padding:2px 6px; }}"
-        )
-        self._search.textChanged.connect(self._on_search_changed)
-        top.addWidget(self._search)
-
-        # Refresh
         ref_btn = QPushButton("↻")
         ref_btn.setFixedWidth(32)
         ref_btn.setToolTip("Force refresh")
@@ -125,21 +143,26 @@ class PairScannerWidget(QWidget):
             f"border-radius:4px; font-size:14px; }}"
             f"QPushButton:hover {{ color:{ACCENT}; border-color:{ACCENT}; }}"
         )
-        ref_btn.clicked.connect(self._refresh_table)
+        ref_btn.clicked.connect(self._refresh_all)
         top.addWidget(ref_btn)
-
         layout.addLayout(top)
 
-        # ── Priority filter pills ───────────────────────────────────────────────
+        # Tabs
+        self._tabs = QTabWidget()
+        self._tabs.setStyleSheet("QTabBar::tab { padding:4px 12px; font-size:11px; }")
+        layout.addWidget(self._tabs)
+
+        # ── Tab 1: Trading ─────────────────────────────────────────────────────
+        trading_tab = QWidget()
+        t_layout = QVBoxLayout(trading_tab)
+        t_layout.setContentsMargins(0, 4, 0, 0)
+        t_layout.setSpacing(4)
+
+        # Filter row
         pill_row = QHBoxLayout()
         pill_row.setSpacing(6)
         self._pills: dict[str, QPushButton] = {}
-        for label, color in [
-            ("ALL",    ACCENT),
-            ("HIGH",   GREEN),
-            ("MEDIUM", YELLOW),
-            ("LOW",    FG2),
-        ]:
+        for label, color in [("ALL", ACCENT), ("HIGH", GREEN), ("MEDIUM", YELLOW), ("LOW", FG2)]:
             btn = QPushButton(label)
             btn.setFixedHeight(24)
             btn.setCheckable(True)
@@ -153,9 +176,17 @@ class PairScannerWidget(QWidget):
             self._pills[label] = btn
             pill_row.addWidget(btn)
 
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Search…")
+        self._search.setFixedWidth(120)
+        self._search.setStyleSheet(
+            f"QLineEdit {{ background:{BG3}; color:{FG0}; border:1px solid {BORDER}; "
+            f"border-radius:4px; padding:2px 6px; }}"
+        )
+        self._search.textChanged.connect(self._on_search_changed)
+        pill_row.addWidget(self._search)
         pill_row.addStretch()
 
-        # Action buttons
         add_arb_btn = QPushButton("+ Arbitrage")
         add_arb_btn.setFixedHeight(24)
         add_arb_btn.setStyleSheet(
@@ -163,7 +194,6 @@ class PairScannerWidget(QWidget):
             f"border-radius:4px; padding:2px 10px; font-size:11px; }}"
             f"QPushButton:hover {{ background:{ACCENT}; color:#000; }}"
         )
-        add_arb_btn.setToolTip("Add selected pair to Arbitrage Detector")
         add_arb_btn.clicked.connect(self._on_add_to_arb)
         pill_row.addWidget(add_arb_btn)
 
@@ -174,21 +204,17 @@ class PairScannerWidget(QWidget):
             f"border-radius:4px; padding:2px 10px; font-size:11px; }}"
             f"QPushButton:hover {{ background:{GREEN}; color:#000; }}"
         )
-        add_trend_btn.setToolTip("Add selected symbol to Trend Scanner")
         add_trend_btn.clicked.connect(self._on_add_to_trend)
         pill_row.addWidget(add_trend_btn)
+        t_layout.addLayout(pill_row)
 
-        layout.addLayout(pill_row)
-
-        # ── Table ──────────────────────────────────────────────────────────────
-        n_cols = len(self._COLS)
-        self._table = QTableWidget(0, n_cols)
-        self._table.setHorizontalHeaderLabels(self._COLS)
+        # Trading table
+        self._table = QTableWidget(0, len(self._TRADING_COLS))
+        self._table.setHorizontalHeaderLabels(self._TRADING_COLS)
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        for i in range(2, n_cols):
+        for i in range(2, len(self._TRADING_COLS)):
             self._table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
-
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.verticalHeader().setVisible(False)
@@ -196,35 +222,51 @@ class PairScannerWidget(QWidget):
         self._table.setSortingEnabled(True)
         self._table.setMinimumHeight(300)
         self._table.doubleClicked.connect(self._on_row_double_clicked)
+        self._table.setStyleSheet(_TABLE_STYLE)
+        t_layout.addWidget(self._table)
 
-        self._table.setStyleSheet(f"""
-            QTableWidget {{
-                background:{BG1};
-                color:{FG0};
-                gridline-color:{BORDER};
-                border:1px solid {BORDER2};
-                border-radius:6px;
-                font-size:12px;
-                alternate-background-color:{BG2};
-            }}
-            QHeaderView::section {{
-                background:{BG3};
-                color:{FG1};
-                border:none;
-                border-bottom:1px solid {BORDER2};
-                padding:5px 8px;
-                font-size:12px;
-                font-weight:bold;
-            }}
-            QTableWidget::item {{ padding:3px 6px; }}
-            QTableWidget::item:selected {{ background:{BG4}; color:{FG0}; }}
-        """)
-        layout.addWidget(self._table)
-
-        # ── Status bar ─────────────────────────────────────────────────────────
         self._status = QLabel("Waiting for pair data…")
         self._status.setStyleSheet(f"color:{FG2}; font-size:11px;")
-        layout.addWidget(self._status)
+        t_layout.addWidget(self._status)
+
+        self._tabs.addTab(trading_tab, "📊  Trading")
+
+        # ── Tab 2: Upcoming ────────────────────────────────────────────────────
+        upcoming_tab = QWidget()
+        u_layout = QVBoxLayout(upcoming_tab)
+        u_layout.setContentsMargins(0, 4, 0, 0)
+        u_layout.setSpacing(4)
+
+        u_desc = QLabel(
+            "Pairs listed on Binance but NOT yet tradeable  ·  "
+            "PRE_TRADING = upcoming launch  ·  BREAK/HALT = temporarily suspended"
+        )
+        u_desc.setStyleSheet(f"color:{FG2}; font-size:11px;")
+        u_layout.addWidget(u_desc)
+
+        self._upcoming_table = QTableWidget(0, len(self._UPCOMING_COLS))
+        self._upcoming_table.setHorizontalHeaderLabels(self._UPCOMING_COLS)
+        for i in range(len(self._UPCOMING_COLS)):
+            self._upcoming_table.horizontalHeader().setSectionResizeMode(
+                i, QHeaderView.ResizeMode.ResizeToContents
+            )
+        self._upcoming_table.horizontalHeader().setSectionResizeMode(
+            len(self._UPCOMING_COLS) - 1, QHeaderView.ResizeMode.Stretch
+        )
+        self._upcoming_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._upcoming_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._upcoming_table.verticalHeader().setVisible(False)
+        self._upcoming_table.setAlternatingRowColors(True)
+        self._upcoming_table.setSortingEnabled(True)
+        self._upcoming_table.setMinimumHeight(300)
+        self._upcoming_table.setStyleSheet(_TABLE_STYLE)
+        u_layout.addWidget(self._upcoming_table)
+
+        self._upcoming_status = QLabel("Scanning for upcoming pairs…")
+        self._upcoming_status.setStyleSheet(f"color:{FG2}; font-size:11px;")
+        u_layout.addWidget(self._upcoming_status)
+
+        self._tabs.addTab(upcoming_tab, "🔜  Upcoming")
 
     # ── Scanner integration ────────────────────────────────────────────────────
 
@@ -234,6 +276,10 @@ class PairScannerWidget(QWidget):
                 self._scanner.on_update(self._on_scanner_update)
             except Exception as exc:
                 logger.warning(f"PairScannerWidget: scanner connect failed: {exc!r}")
+            try:
+                self._scanner.on_pre_trading(self._on_pre_trading_update)
+            except Exception as exc:
+                logger.warning(f"PairScannerWidget: pre_trading connect failed: {exc!r}")
         if self._ml_analyzer:
             try:
                 self._ml_analyzer.on_update(self._on_ml_update)
@@ -241,16 +287,92 @@ class PairScannerWidget(QWidget):
                 logger.warning(f"PairScannerWidget: ML analyzer connect failed: {exc!r}")
 
     def _on_ml_update(self, results: list) -> None:
-        """Called from analyzer thread — store and refresh."""
         self._ml_results = {r["symbol"]: r for r in results}
         QTimer.singleShot(0, self._refresh_table)
 
     def _on_scanner_update(self, pairs: list) -> None:
-        """Called from scanner background thread — defer to Qt thread."""
         self._all_pairs = list(pairs)
         QTimer.singleShot(0, self._refresh_table)
 
+    def _on_pre_trading_update(self, pairs: list) -> None:
+        """Called from scanner background thread when new PRE_TRADING pairs appear."""
+        # Merge with full list from scanner
+        QTimer.singleShot(0, self._refresh_upcoming)
+
+    def _refresh_all(self) -> None:
+        self._refresh_table()
+        self._refresh_upcoming()
+
     # ── Table rendering ────────────────────────────────────────────────────────
+
+    def _refresh_upcoming(self) -> None:
+        """Refresh the Upcoming (pre-trading) tab."""
+        pairs: list = []
+        if self._scanner:
+            try:
+                pairs = self._scanner.get_pre_trading_pairs()
+            except Exception:
+                pass
+
+        _STATUS_COLORS = {
+            "PRE_TRADING":  "#00CCFF",
+            "BREAK":        "#FFB347",
+            "HALT":         "#FF4444",
+            "END_OF_DAY":   "#AAAAAA",
+            "POST_TRADING": "#888888",
+        }
+
+        self._upcoming_table.setSortingEnabled(False)
+        self._upcoming_table.setRowCount(len(pairs))
+
+        for row, p in enumerate(pairs):
+            col = _STATUS_COLORS.get(p.status, FG2)
+
+            def _item(text: str, fg: str = FG1) -> QTableWidgetItem:
+                it = QTableWidgetItem(str(text))
+                it.setForeground(QColor(fg))
+                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+                return it
+
+            # Status badge
+            badge = QTableWidgetItem(f"{p.status_emoji} {p.status}")
+            badge.setForeground(QColor(col))
+            badge.setFont(QFont("monospace", 10, QFont.Weight.Bold))
+            badge.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+            self._upcoming_table.setItem(row, 0, badge)
+
+            # Symbol
+            sym_item = QTableWidgetItem(p.symbol)
+            sym_item.setFont(QFont("monospace", 11, QFont.Weight.Bold))
+            sym_item.setForeground(QColor(FG0))
+            self._upcoming_table.setItem(row, 1, sym_item)
+
+            self._upcoming_table.setItem(row, 2, _item(p.base,  FG1))
+            self._upcoming_table.setItem(row, 3, _item(p.quote, FG2))
+
+            # Permissions
+            perms = ", ".join(p.permissions) if p.permissions else "—"
+            self._upcoming_table.setItem(row, 4, _item(perms, FG2))
+
+            # Detected at
+            detected = p.detected_at[:19].replace("T", " ") if p.detected_at else "—"
+            self._upcoming_table.setItem(row, 5, _item(detected, FG2))
+
+            # Note
+            orders = ", ".join(p.order_types[:3]) if p.order_types else "—"
+            self._upcoming_table.setItem(row, 6, _item(f"Orders: {orders}", FG2))
+
+            self._upcoming_table.setRowHeight(row, 28)
+
+        self._upcoming_table.setSortingEnabled(True)
+
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+        self._upcoming_status.setText(
+            f"{len(pairs)} upcoming / suspended pairs  ·  Updated {ts}"
+        )
+        # Update tab badge
+        self._tabs.setTabText(1, f"🔜  Upcoming ({len(pairs)})")
 
     def _refresh_table(self) -> None:
         pairs = list(self._all_pairs)
@@ -339,11 +461,19 @@ class PairScannerWidget(QWidget):
 
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-        total = len(self._all_pairs)
+        total_tradable = 0
+        if self._scanner:
+            try:
+                total_tradable = len(self._scanner.get_all_tradable_symbols())
+            except Exception:
+                total_tradable = len(self._all_pairs)
         showing = len(pairs)
+        total   = len(self._all_pairs)
         self._status.setText(
-            f"Showing {showing} of {total} USDT pairs  ·  Updated {ts}"
+            f"Showing {showing} of {total} ranked  ·  "
+            f"Total tradable on Binance: {total_tradable:,}  ·  Updated {ts}"
         )
+        self._tabs.setTabText(0, f"📊  Trading ({total:,})")
 
     @staticmethod
     def _num_item(text: str) -> QTableWidgetItem:

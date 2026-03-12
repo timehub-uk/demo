@@ -1,20 +1,27 @@
 """
-Pair Scanner ML — Discovers, ranks, and monitors all Binance trading pairs.
+Pair Scanner ML — Discovers, ranks, and monitors ALL Binance trading pairs.
 
-Scans all quote assets: USDT, BTC, ETH, BNB, SOL.
+Scans all quote assets: USDT, FDUSD, BUSD, BTC, ETH, BNB, SOL, TRX, EUR, GBP.
 
-The scanner's sole job is to:
+The scanner's job is to:
 
-  1. Fetch the full USDT universe from Binance 24h ticker (every 15 min)
-  2. Score each pair on three axes:
+  1. Fetch the FULL exchange info from Binance (every 15 min) — ALL symbols
+     regardless of volume, including PRE_TRADING (upcoming / not yet live)
+  2. Fetch 24h ticker stats for all actively TRADING pairs
+  3. Score each TRADING pair on three axes:
        - Volume     : 24h quote volume in USDT (liquidity)
        - Activity   : 24h trade count + price-change magnitude (participation)
        - Momentum   : directional price-change strength (trending vs flat)
-  3. Compute a composite Priority Score and label pairs HIGH / MEDIUM / LOW
-  4. Log the ranked list and broadcast it to any registered callbacks
-  5. Expose get_all_pairs() / get_top_pairs(n) so every other module
-     (ArbitrageDetector, TrendScanner, MarketScanner, UI selectors) can pull
-     a fresh, pre-ranked symbol list at any time
+  4. Compute a composite Priority Score and label pairs HIGH / MEDIUM / LOW
+  5. Log ranked list and broadcast it to registered callbacks
+  6. Track PRE_TRADING pairs (upcoming listings not yet live):
+       - Fire on_pre_trading(cb) when new PRE_TRADING symbols appear
+       - Fire on_new_listing(cb) when a symbol transitions to TRADING (goes live)
+  7. Expose full universe APIs:
+       - get_all_pairs()           → ranked TRADING pairs (all, no volume cap)
+       - get_all_tradable_symbols()→ set of ALL currently TRADING symbols
+       - get_pre_trading_pairs()   → list of PRE_TRADING (upcoming) pairs
+       - get_all_symbols_by_status()→ dict mapping status → list[symbol]
 
 Priority labels:
   HIGH   — top 20 % by priority score  (most liquid, active, trending)
@@ -36,6 +43,7 @@ Integration:
   - ArbitrageDetector.add_pair() is called for the top 20 HIGH pairs
   - MainWindow symbol dropdowns reload from get_top_pairs()
   - MarketScanner receives the top-50 list via set_universe()
+  - NewTokenWatcher deduplicates using get_all_tradable_symbols()
 """
 
 from __future__ import annotations
@@ -54,12 +62,15 @@ from utils.logger import get_intel_logger
 
 REFRESH_INTERVAL_SEC = 900   # 15-minute full refresh cycle
 
-# Quote assets to scan — USDT is primary; others included for cross-pair coverage
-QUOTE_ASSETS: list[str] = ["USDT", "BTC", "ETH", "BNB", "SOL"]
+# All quote assets — broad coverage across Binance universe
+QUOTE_ASSETS: list[str] = [
+    "USDT", "FDUSD", "BUSD", "BTC", "ETH", "BNB",
+    "SOL", "TRX", "EUR", "GBP", "DAI", "TUSD",
+]
 
-MAX_PAIRS   = 1000           # Hard cap across all quote assets
-MIN_VOLUME_USDT = 100_000    # Drop pairs with < $100k equivalent daily volume
-                             # (non-USDT pairs use last_price × quoteVolume proxy)
+MAX_PAIRS   = 5000           # Hard cap across all quote assets (raised from 1000)
+MIN_VOLUME_USDT = 0          # No volume floor — include ALL pairs (sorted by volume)
+                             # LOW-priority pairs will naturally score at the bottom
 
 # Priority thresholds (percentile cutoffs)
 HIGH_THRESHOLD   = 0.80   # top 20 %
@@ -103,6 +114,41 @@ class PairInfo:
         return {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "⚪"}.get(self.priority, "⚪")
 
 
+@dataclass
+class PreTradingPair:
+    """
+    A symbol that exists on Binance but is NOT yet actively trading.
+
+    status examples:
+      PRE_TRADING   — listed, trading not yet open (most common for upcoming tokens)
+      BREAK         — temporarily halted
+      HALT          — indefinitely halted
+      END_OF_DAY    — end-of-day settlement
+      POST_TRADING  — post-session, not accepting new orders
+    """
+    symbol:       str
+    base:         str
+    quote:        str
+    status:       str            # Exchange status (PRE_TRADING, BREAK, HALT, …)
+    permissions:  list[str]     # e.g. ["SPOT", "MARGIN"]
+    order_types:  list[str]     # e.g. ["LIMIT", "MARKET"]
+    is_spot:      bool = True
+    is_margin:    bool = False
+    detected_at:  str  = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+    @property
+    def status_emoji(self) -> str:
+        return {
+            "PRE_TRADING":  "🔜",
+            "BREAK":        "⏸",
+            "HALT":         "🛑",
+            "END_OF_DAY":   "🌙",
+            "POST_TRADING": "🔒",
+        }.get(self.status, "❓")
+
+
 # ── Main scanner ──────────────────────────────────────────────────────────────
 
 class PairScanner:
@@ -127,17 +173,46 @@ class PairScanner:
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
-        # Ranked pair list (best first)
+        # Ranked TRADING pair list (best first)
         self._pairs: list[PairInfo] = []
         self._last_refresh: float = 0.0
 
-        self._callbacks: list[Callable[[list[PairInfo]], None]] = []
+        # All tradable symbols (status == TRADING, all quotes, no volume filter)
+        self._all_tradable_symbols: set[str] = set()
+
+        # Pre-trading (upcoming) pairs — listed but not yet live
+        self._pre_trading_pairs: list[PreTradingPair] = []
+        self._known_pre_trading: set[str] = set()    # detect new additions
+        self._known_trading:     set[str] = set()    # detect PRE_TRADING → TRADING
+
+        # All symbols grouped by exchange status
+        self._symbols_by_status: dict[str, list[str]] = {}
+
+        # Callbacks
+        self._callbacks:           list[Callable[[list[PairInfo]], None]]      = []
+        self._pre_trading_cbs:     list[Callable[[list[PreTradingPair]], None]] = []
+        self._new_listing_cbs:     list[Callable[[list[str]], None]]            = []
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def on_update(self, cb: Callable[[list[PairInfo]], None]) -> None:
         """Register callback — invoked after every refresh with ranked PairInfo list."""
         self._callbacks.append(cb)
+
+    def on_pre_trading(self, cb: Callable[[list[PreTradingPair]], None]) -> None:
+        """
+        Register callback — invoked when NEW pre-trading (upcoming) pairs are detected.
+        Fires when a symbol appears with status PRE_TRADING for the first time.
+        """
+        self._pre_trading_cbs.append(cb)
+
+    def on_new_listing(self, cb: Callable[[list[str]], None]) -> None:
+        """
+        Register callback — invoked when a symbol transitions from PRE_TRADING to TRADING.
+        Receives a list of newly-live symbol strings (e.g. ["NEWCOINUSDT"]).
+        This fires BEFORE the first tick data is available.
+        """
+        self._new_listing_cbs.append(cb)
 
     def get_all_pairs(self) -> list[PairInfo]:
         """Return full ranked pair list (snapshot, ordered best→worst)."""
@@ -165,6 +240,31 @@ class PairScanner:
                 if p.symbol == symbol:
                     return p
         return None
+
+    def get_all_tradable_symbols(self) -> set[str]:
+        """
+        Return the complete set of all currently TRADING symbols across ALL quote
+        assets, with no volume filter.  Includes thin markets and cross-pairs.
+        Updated every refresh cycle.
+        """
+        with self._lock:
+            return set(self._all_tradable_symbols)
+
+    def get_pre_trading_pairs(self) -> list[PreTradingPair]:
+        """
+        Return all pairs currently in PRE_TRADING (or BREAK / HALT) state.
+        These are announced/listed but not yet actively tradeable.
+        """
+        with self._lock:
+            return list(self._pre_trading_pairs)
+
+    def get_all_symbols_by_status(self) -> dict[str, list[str]]:
+        """
+        Return a dict mapping exchange status string → list of symbol strings.
+        e.g. {"TRADING": ["BTCUSDT", ...], "PRE_TRADING": ["NEWCOINUSDT", ...]}
+        """
+        with self._lock:
+            return {k: list(v) for k, v in self._symbols_by_status.items()}
 
     def start(self) -> None:
         if self._running:
@@ -194,7 +294,16 @@ class PairScanner:
             time.sleep(sleep_for)
 
     def _refresh(self) -> None:
-        """Fetch all tickers, score, rank, label, and broadcast."""
+        """
+        Full refresh cycle:
+        1. Fetch exchange_info → discover ALL symbols (TRADING + PRE_TRADING + others)
+        2. Fetch 24h tickers → score + rank TRADING pairs
+        3. Fire pre_trading / new_listing callbacks for status changes
+        """
+        # ── Step 1: Exchange info (full universe) ──────────────────────────────
+        self._exchange_info_scan()
+
+        # ── Step 2: 24h ticker data for TRADING pairs ─────────────────────────
         raw = self._fetch_tickers()
         if not raw:
             logger.warning("PairScanner: no ticker data received")
@@ -214,22 +323,132 @@ class PairScanner:
         high_n   = sum(1 for p in pairs if p.priority == "HIGH")
         medium_n = sum(1 for p in pairs if p.priority == "MEDIUM")
         low_n    = sum(1 for p in pairs if p.priority == "LOW")
+        pre_n    = len(self._pre_trading_pairs)
+        total_n  = len(self._all_tradable_symbols)
         self._intel.ml(
             "PairScanner",
-            f"Ranked {len(pairs)} USDT pairs  "
-            f"HIGH={high_n}  MEDIUM={medium_n}  LOW={low_n}  "
+            f"Ranked {len(pairs)} pairs  HIGH={high_n}  MEDIUM={medium_n}  LOW={low_n}  "
+            f"| Total tradable={total_n}  Upcoming(PRE)={pre_n}  "
             f"(top: {pairs[0].symbol if pairs else 'n/a'})"
         )
 
         # Persist market stats to pair_registry table
         self._persist_to_db(pairs)
 
-        # Broadcast
+        # Broadcast ranked pairs
         for cb in self._callbacks:
             try:
                 cb(list(pairs))
             except Exception as exc:
                 logger.warning(f"PairScanner callback error: {exc!r}")
+
+    # ── Exchange info scan ────────────────────────────────────────────────────
+
+    def _exchange_info_scan(self) -> None:
+        """
+        Fetch full exchange info to discover ALL symbols and their trading status.
+        Updates:
+          - _all_tradable_symbols  (all currently TRADING symbols, no volume filter)
+          - _pre_trading_pairs     (PRE_TRADING / BREAK / HALT pairs)
+          - _symbols_by_status     (dict: status → [symbols])
+        Fires:
+          - _pre_trading_cbs   when new PRE_TRADING symbols appear
+          - _new_listing_cbs   when PRE_TRADING → TRADING transition detected
+        """
+        info = self._fetch_exchange_info()
+        if not info:
+            return
+
+        symbols: list[dict] = info.get("symbols", [])
+
+        # Group all symbols by their exchange status
+        by_status: dict[str, list[str]] = {}
+        all_trading: set[str] = set()
+        new_pre: list[PreTradingPair] = []
+        new_pre_symbols: set[str] = set()
+
+        for s in symbols:
+            sym    = s.get("symbol", "")
+            status = s.get("status", "")
+            base   = s.get("baseAsset", "")
+            quote  = s.get("quoteAsset", "")
+            if not sym:
+                continue
+
+            by_status.setdefault(status, []).append(sym)
+
+            if status == "TRADING":
+                all_trading.add(sym)
+            elif status in ("PRE_TRADING", "BREAK", "HALT", "END_OF_DAY", "POST_TRADING"):
+                new_pre_symbols.add(sym)
+                perms  = s.get("permissions", [])
+                orders = [ot.get("type", ot) if isinstance(ot, dict) else ot
+                          for ot in s.get("orderTypes", [])]
+                new_pre.append(PreTradingPair(
+                    symbol      = sym,
+                    base        = base,
+                    quote       = quote,
+                    status      = status,
+                    permissions = perms if isinstance(perms, list) else [],
+                    order_types = orders,
+                    is_spot     = "SPOT"   in (perms if isinstance(perms, list) else []),
+                    is_margin   = "MARGIN" in (perms if isinstance(perms, list) else []),
+                ))
+
+        # Detect: NEW pre-trading symbols (not seen before)
+        truly_new_pre = new_pre_symbols - self._known_pre_trading
+        new_pre_items = [p for p in new_pre if p.symbol in truly_new_pre]
+
+        # Detect: PRE_TRADING → TRADING transitions (new listings going live!)
+        newly_live = self._known_pre_trading & all_trading
+        # Also catch: symbols that were PRE_TRADING and are now TRADING
+        newly_live_list = sorted(newly_live)
+
+        with self._lock:
+            self._all_tradable_symbols  = all_trading
+            self._pre_trading_pairs     = new_pre
+            self._known_pre_trading     = new_pre_symbols
+            self._known_trading         = all_trading
+            self._symbols_by_status     = by_status
+
+        # Fire callbacks for new pre-trading pairs
+        if new_pre_items:
+            syms_str = ", ".join(p.symbol for p in new_pre_items[:5])
+            extra    = f"…+{len(new_pre_items) - 5}" if len(new_pre_items) > 5 else ""
+            self._intel.ml(
+                "PairScanner",
+                f"NEW UPCOMING PAIRS detected ({len(new_pre_items)}): {syms_str}{extra}",
+            )
+            for cb in self._pre_trading_cbs:
+                try:
+                    cb(new_pre_items)
+                except Exception as exc:
+                    logger.warning(f"PairScanner pre_trading callback error: {exc!r}")
+
+        # Fire callbacks for newly live pairs
+        if newly_live_list:
+            self._intel.ml(
+                "PairScanner",
+                f"NEW LISTINGS NOW LIVE ({len(newly_live_list)}): "
+                + ", ".join(newly_live_list[:5]),
+            )
+            for cb in self._new_listing_cbs:
+                try:
+                    cb(newly_live_list)
+                except Exception as exc:
+                    logger.warning(f"PairScanner new_listing callback error: {exc!r}")
+
+    def _fetch_exchange_info(self) -> dict:
+        """Fetch GET /api/v3/exchangeInfo from Binance or return empty dict."""
+        if not self._client:
+            return {}
+        try:
+            info = self._client.get_exchange_info()
+            if isinstance(info, dict) and "symbols" in info:
+                return info
+        except Exception as exc:
+            logger.debug(f"PairScanner: exchange_info fetch failed: {exc!r}")
+        return {}
 
     # ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -269,11 +488,6 @@ class PairScanner:
                 if not base:
                     continue
                 vol = float(t.get("quoteVolume", 0))
-                # Apply volume floor only for USDT; for other quotes use a
-                # lower absolute threshold so liquid cross-pairs aren't dropped
-                min_vol = MIN_VOLUME_USDT if quote == "USDT" else 10
-                if vol < min_vol:
-                    continue
                 pairs.append(PairInfo(
                     symbol           = sym,
                     base             = base,

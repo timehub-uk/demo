@@ -681,8 +681,56 @@ def start_background_services(services: dict, settings) -> None:
 
     if pair_scanner:
         pair_scanner.on_update(_on_pairs_updated)
+
+        # Wire pre-trading callback — log and broadcast new upcoming pair announcements
+        def _on_pre_trading(pre_pairs):
+            """Called when Binance lists new PRE_TRADING (upcoming) pairs."""
+            try:
+                syms = [p.symbol for p in pre_pairs]
+                intel.ml(
+                    "PairScanner",
+                    f"UPCOMING PAIRS announced ({len(syms)}): "
+                    + ", ".join(syms[:8]) + ("…" if len(syms) > 8 else ""),
+                )
+            except Exception as exc:
+                logger.warning(f"Pre-trading callback error: {exc!r}")
+
+        pair_scanner.on_pre_trading(_on_pre_trading)
+
+        # Wire new-listing callback — fires when PRE_TRADING → TRADING (token goes live)
+        _ntw_ref = services.get("new_token_watcher")
+
+        def _on_new_listing(symbols):
+            """
+            Called by PairScanner when a symbol transitions PRE_TRADING → TRADING.
+            This fires before the first tick data is available — earliest possible signal.
+            """
+            try:
+                intel.ml(
+                    "PairScanner",
+                    f"NEW LISTING LIVE ({len(symbols)}): " + ", ".join(symbols[:8]),
+                )
+                # Kick off launch tracking in NewTokenWatcher for each new listing
+                if _ntw_ref:
+                    import threading as _thr
+                    for sym in symbols:
+                        try:
+                            t = _thr.Thread(
+                                target=_ntw_ref._track_launch,
+                                args=(sym,),
+                                daemon=True,
+                                name=f"launch-{sym}",
+                            )
+                            t.start()
+                        except Exception:
+                            pass
+            except Exception as exc:
+                logger.warning(f"New listing callback error: {exc!r}")
+
+        pair_scanner.on_new_listing(_on_new_listing)
+
         pair_scanner.start()
-        intel.system("Startup", "Pair scanner started (auto-populates all modules)")
+        intel.system("Startup", "Pair scanner started (all pairs + upcoming detection)")
 
     # Pair ML cross-reference analyzer (every 5 min after pair scanner warms up)
     pair_ml_ana = services.get("pair_ml_analyzer")
