@@ -856,6 +856,8 @@ class MainWindow(QMainWindow):
         liquidity_analyzer=None,
         breakout_detector=None,
         gap_detector=None,
+        large_candle_watcher=None,
+        ml_central=None,
         metamask_wallet=None,
         sim_twin=None,
         mutation_lab=None,
@@ -921,6 +923,8 @@ class MainWindow(QMainWindow):
         self._liquidity_analyzer     = liquidity_analyzer
         self._breakout_detector      = breakout_detector
         self._gap_detector           = gap_detector
+        self._large_candle_watcher   = large_candle_watcher
+        self._ml_central             = ml_central
 
         self._discord        = discord
         self._slack          = slack
@@ -1078,6 +1082,17 @@ class MainWindow(QMainWindow):
             tabs.addTab(self.at_widget,    "🤖  AutoTrader")
             tabs.addTab(self.alert_widget, "🔔  Alerts")
 
+            # ML Central Command tab (unified signal pipeline — first intelligence tab)
+            try:
+                from ui.ml_central_command_widget import MLCentralCommandWidget
+                self.ml_central_widget = MLCentralCommandWidget(
+                    central_command=self._ml_central,
+                )
+                self.ml_central_widget.symbol_selected.connect(self._on_symbol_changed)
+                tabs.addTab(self.ml_central_widget, "⚡  ML Command")
+            except Exception:
+                pass
+
             # Ping-Pong range trader tab
             try:
                 from ui.ping_pong_widget import PingPongWidget
@@ -1171,6 +1186,17 @@ class MainWindow(QMainWindow):
                 )
                 self.gap_detector_widget.symbol_selected.connect(self._on_symbol_changed)
                 tabs.addTab(self.gap_detector_widget, "↕  Gaps")
+            except Exception:
+                pass
+
+            # Large candle watch tab (rapid candle expansion alerts)
+            try:
+                from ui.large_candle_widget import LargeCandleWidget
+                self.large_candle_widget = LargeCandleWidget(
+                    large_candle_watcher=self._large_candle_watcher,
+                )
+                self.large_candle_widget.symbol_selected.connect(self._on_symbol_changed)
+                tabs.addTab(self.large_candle_widget, "🕯  Candles")
             except Exception:
                 pass
 

@@ -344,6 +344,17 @@ def build_services(settings):
         pair_scanner=pair_scanner,
     )
 
+    intel.system("Startup", "Initialising large candle watcher (rapid expansion alerts)…")
+    from ml.large_candle_watcher import LargeCandleWatcher
+    large_candle_watcher = LargeCandleWatcher(
+        binance_client=binance,
+        pair_scanner=pair_scanner,
+    )
+
+    intel.system("Startup", "Initialising ML central command (unified signal pipeline)…")
+    from ml.ml_central_command import MLCentralCommand
+    ml_central = MLCentralCommand()
+
     intel.system("Startup", "Initialising auto-trader…")
     from core.auto_trader import AutoTrader
     auto_trader = AutoTrader(
@@ -463,6 +474,8 @@ def build_services(settings):
         "liquidity_analyzer":  liquidity_analyzer,
         "breakout_detector":   breakout_detector,
         "gap_detector":        gap_detector,
+        "large_candle_watcher": large_candle_watcher,
+        "ml_central":           ml_central,
         "metamask_wallet":     metamask_wallet,
         "contract_analyzer":   contract_analyzer,
         "honeypot_detector":   honeypot_detector,
@@ -701,6 +714,133 @@ def start_background_services(services: dict, settings) -> None:
         gap_det.start()
         intel.system("Startup", "Gap detector started (gap up=BUY, gap down=WATCH on 1d+4h)")
 
+        # Broadcast GAP UP events to the entire ML pipeline for elevated monitoring.
+        # When a gap up is detected the symbol is tagged so other tools increase attention.
+        _gap_ensemble_ref   = services.get("ensemble")
+        _gap_signal_council = services.get("signal_council")
+        _gap_trend_ref      = trend_scanner
+        _gap_predictor_ref  = predictor_ref
+        _gap_engine_ref     = engine_ref2
+        _gap_market_scanner = services.get("market_scanner")
+
+        def _on_gap_up_watch(gaps):
+            """
+            Called by GapDetector whenever new GAP UP (WATCH) signals are found.
+            Tags affected symbols for elevated attention across the whole ML pipeline.
+            """
+            try:
+                open_gaps = [g for g in gaps if g.state == "OPEN"]
+                if not open_gaps:
+                    return
+                symbols = list({g.symbol for g in open_gaps})
+
+                intel.ml(
+                    "GapDetector",
+                    f"GAP UP watch broadcast → elevated monitoring on {len(symbols)} symbol(s): "
+                    + ", ".join(symbols[:8]) + ("…" if len(symbols) > 8 else ""),
+                )
+
+                # Trend scanner — add symbols for multi-TF momentum tracking
+                if _gap_trend_ref:
+                    for sym in symbols:
+                        try:
+                            _gap_trend_ref.add_symbol(sym)
+                        except Exception:
+                            pass
+
+                # Predictor — add symbols so ML model generates fresh signals
+                if _gap_predictor_ref:
+                    for sym in symbols:
+                        try:
+                            _gap_predictor_ref.add_symbol(sym)
+                        except Exception:
+                            pass
+
+                # Engine — subscribe live WS feed for order-book + tick data
+                if _gap_engine_ref:
+                    for sym in symbols:
+                        try:
+                            _gap_engine_ref.add_symbol(sym)
+                        except Exception:
+                            pass
+
+                # Ensemble — feed gap-up signals so confidence weighting increases
+                if _gap_ensemble_ref:
+                    for g in open_gaps:
+                        try:
+                            _gap_ensemble_ref.feed("gap_up_watch", {
+                                "symbol":     g.symbol,
+                                "signal":     "WATCH",
+                                "confidence": g.gap_score,
+                                "note": (
+                                    f"GAP_UP {g.gap_pct:+.2f}%  tf={g.timeframe}  "
+                                    f"fill_prob={g.fill_probability:.2f}"
+                                ),
+                            })
+                        except Exception:
+                            pass
+
+                # Signal council — register as a watch signal for vote weighting
+                if _gap_signal_council:
+                    for g in open_gaps:
+                        try:
+                            _gap_signal_council.register_signal(
+                                source="gap_up_watch",
+                                symbol=g.symbol,
+                                signal="WATCH",
+                                confidence=g.gap_score,
+                            )
+                        except Exception:
+                            pass
+
+            except Exception as exc:
+                logger.warning(f"Gap-up watch broadcast error: {exc!r}")
+
+        gap_det.on_gap_up_watch(_on_gap_up_watch)
+
+    # Large candle watcher (1m/5m/15m rapid expansion alerts — scans every 60 s)
+    lcw = services.get("large_candle_watcher")
+    if lcw:
+        lcw.start()
+        intel.system("Startup", "Large candle watcher started (expansion alerts on 1m/5m/15m)")
+
+        # Feed STRONG/ALERT candle events into the ML pipeline for elevated attention
+        _lcw_ensemble = services.get("ensemble")
+        _lcw_council  = services.get("signal_council")
+
+        def _on_large_candle(results):
+            try:
+                for r in results:
+                    if r.label == "NONE":
+                        continue
+                    if _lcw_ensemble:
+                        try:
+                            _lcw_ensemble.feed("large_candle_watch", {
+                                "symbol":     r.symbol,
+                                "signal":     "WATCH",
+                                "confidence": r.candle_score,
+                                "note": (
+                                    f"LARGE_CANDLE {r.label} {r.direction} "
+                                    f"×{r.expansion_ratio:.1f} on {r.timeframe}"
+                                ),
+                            })
+                        except Exception:
+                            pass
+                    if _lcw_council and r.label in ("ALERT", "STRONG"):
+                        try:
+                            _lcw_council.register_signal(
+                                source="large_candle_watch",
+                                symbol=r.symbol,
+                                signal="WATCH",
+                                confidence=r.candle_score,
+                            )
+                        except Exception:
+                            pass
+            except Exception as exc:
+                logger.warning(f"Large candle broadcast error: {exc!r}")
+
+        lcw.on_alert(_on_large_candle)
+
     # Market pulse broad monitor
     market_pulse = services.get("market_pulse")
     if market_pulse:
@@ -734,6 +874,149 @@ def start_background_services(services: dict, settings) -> None:
     # Token launch signal engine (event-driven, no background thread needed)
     if services.get("launch_signal"):
         intel.system("Startup", "Token launch signal engine ready (event-driven)")
+
+    # ── ML Central Command ──────────────────────────────────────────────────────
+    # Wire all ML tools to feed their signals into the central pipeline aggregator.
+    ml_central = services.get("ml_central")
+    if ml_central:
+        ml_central.start()
+        intel.system("Startup", "ML central command started (unified signal pipeline)")
+
+        _central = ml_central   # closure capture
+
+        # 1. Predictor (LSTM/Transformer) signals
+        pred_ref = services.get("predictor")
+        if pred_ref:
+            try:
+                pred_ref.on_signal(lambda s: _central.feed(
+                    "lstm_predictor",
+                    symbol     = s.get("symbol", ""),
+                    signal     = s.get("action", "HOLD"),
+                    confidence = s.get("confidence", 0.5),
+                    note       = s.get("note", ""),
+                ))
+            except Exception:
+                pass
+
+        # 2. Ensemble aggregator signals
+        ens_ref = services.get("ensemble")
+        if ens_ref:
+            try:
+                ens_ref.on_signal(lambda s: _central.feed(
+                    "ensemble",
+                    symbol     = s.get("symbol", ""),
+                    signal     = s.get("signal", "HOLD"),
+                    confidence = s.get("confidence", 0.5),
+                    note       = s.get("note", ""),
+                ))
+            except Exception:
+                pass
+
+        # 3. Signal council votes
+        sc_ref = services.get("signal_council")
+        if sc_ref:
+            try:
+                sc_ref.on_decision(lambda s: _central.feed(
+                    "signal_council",
+                    symbol     = s.get("symbol", ""),
+                    signal     = s.get("signal", "HOLD"),
+                    confidence = s.get("confidence", 0.5),
+                    note       = s.get("note", ""),
+                ))
+            except Exception:
+                pass
+
+        # 4. Gap detector — both BUY and WATCH signals
+        gap_ref = services.get("gap_detector")
+        if gap_ref:
+            try:
+                gap_ref.on_gap_up(lambda gaps: [
+                    _central.feed(
+                        "gap_down_buy",
+                        symbol     = g.symbol,
+                        signal     = "BUY",
+                        confidence = g.gap_score,
+                        note       = f"GAP_DOWN {g.gap_pct:+.2f}% tf={g.timeframe}",
+                    ) for g in gaps
+                ])
+            except Exception:
+                pass
+            try:
+                gap_ref.on_gap_up_watch(lambda gaps: [
+                    _central.feed(
+                        "gap_up_watch",
+                        symbol     = g.symbol,
+                        signal     = "WATCH",
+                        confidence = g.gap_score,
+                        note       = f"GAP_UP {g.gap_pct:+.2f}% tf={g.timeframe}",
+                    ) for g in gaps
+                ])
+            except Exception:
+                pass
+
+        # 5. Accumulation detector signals
+        accum_ref = services.get("accumulation_detector")
+        if accum_ref:
+            try:
+                accum_ref.on_alert(lambda results: [
+                    _central.feed(
+                        "accumulation",
+                        symbol     = r.symbol,
+                        signal     = "BUY" if r.label in ("ALERT", "STRONG") else "WATCH",
+                        confidence = r.accumulation_score,
+                        note       = f"ACCUM {r.label}",
+                    ) for r in results if r.label != "NONE"
+                ])
+            except Exception:
+                pass
+
+        # 6. Volume breakout detector signals
+        brk_ref = services.get("breakout_detector")
+        if brk_ref:
+            try:
+                brk_ref.on_breakout(lambda results: [
+                    _central.feed(
+                        "breakout",
+                        symbol     = r.symbol,
+                        signal     = "BUY" if r.stage >= 3 else "WATCH",
+                        confidence = r.breakout_score,
+                        note       = f"BREAKOUT stage={r.stage}",
+                    ) for r in results if r.stage >= 2
+                ])
+            except Exception:
+                pass
+
+        # 7. Large candle watcher signals
+        lcw_ref = services.get("large_candle_watcher")
+        if lcw_ref:
+            try:
+                lcw_ref.on_alert(lambda results: [
+                    _central.feed(
+                        "large_candle_watch",
+                        symbol     = r.symbol,
+                        signal     = "WATCH",
+                        confidence = r.candle_score,
+                        note       = f"LARGE_CANDLE {r.label} {r.direction} ×{r.expansion_ratio:.1f}",
+                    ) for r in results if r.label != "NONE"
+                ])
+            except Exception:
+                pass
+
+        # 8. Whale watcher events
+        whale_ref = services.get("whale_watcher")
+        if whale_ref:
+            try:
+                whale_ref.on_event(lambda ev: _central.feed(
+                    "whale_watcher",
+                    symbol     = getattr(ev, "symbol", ""),
+                    signal     = "WATCH",
+                    confidence = getattr(ev, "confidence", 0.5),
+                    note       = f"WHALE {getattr(ev, 'event_type', '')}",
+                ))
+            except Exception:
+                pass
+
+        intel.system("Startup", "ML central command fully wired to all ML sources")
 
     # Start REST API server
     try:
@@ -919,6 +1202,8 @@ def main() -> int:
         liquidity_analyzer=services.get("liquidity_analyzer"),
         breakout_detector=services.get("breakout_detector"),
         gap_detector=services.get("gap_detector"),
+        large_candle_watcher=services.get("large_candle_watcher"),
+        ml_central=services.get("ml_central"),
         metamask_wallet=services.get("metamask_wallet"),
         sim_twin=services.get("sim_twin"),
         mutation_lab=services.get("mutation_lab"),

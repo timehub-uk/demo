@@ -43,6 +43,8 @@ Results:
   - Stored in _results keyed by (symbol, timeframe, gap_bar_index)
   - Exposed via get_gap_ups(), get_gap_downs(), get_all_open()
   - Callbacks fired for new GAP DOWN signals (BUY action)
+  - Callbacks fired for new GAP UP signals (WATCH action) — broadcast to ML pipeline
+  - get_gap_up_watch_symbols() returns current set of symbols with open gap-up events
   - Intel log entries for all notable gaps
 
 Refresh: SCAN_INTERVAL_SEC (default 900 s / 15 min).
@@ -170,6 +172,12 @@ class GapDetector:
         self._gap_up_callbacks:   list[Callable[[list[GapResult]], None]] = []
         self._gap_down_callbacks: list[Callable[[list[GapResult]], None]] = []
 
+        # Dedicated callbacks for GAP UP / WATCH signals — broadcast to ML pipeline
+        self._watch_callbacks: list[Callable[[list[GapResult]], None]] = []
+
+        # Set of symbols currently carrying an OPEN gap-up event (queried by other tools)
+        self._gap_up_watch_symbols: set[str] = set()
+
         # Kline cache: (symbol, interval) → {"data": list, "ts": float}
         self._cache: dict[tuple[str, str], dict] = {}
 
@@ -185,6 +193,25 @@ class GapDetector:
     def on_gap_down(self, cb: Callable[[list[GapResult]], None]) -> None:
         """Register callback — called with new GAP DOWN (WATCH) results after each scan."""
         self._gap_down_callbacks.append(cb)
+
+    def on_gap_up_watch(self, cb: Callable[[list[GapResult]], None]) -> None:
+        """
+        Register callback — called with new GAP UP (WATCH) results after each scan.
+
+        Use this to broadcast gap-up symbols to other ML tools so they increase
+        their attention on those symbols (elevated monitoring mode).
+
+        Callback receives a list of GapResult with gap_type=="UP", action=="WATCH".
+        """
+        self._watch_callbacks.append(cb)
+
+    def get_gap_up_watch_symbols(self) -> set[str]:
+        """
+        Return the set of symbols that currently have an OPEN gap-up event.
+        Other ML tools can query this to decide whether to apply elevated attention.
+        """
+        with self._lock:
+            return set(self._gap_up_watch_symbols)
 
     def get_all_open(self) -> list[GapResult]:
         """Return all OPEN gaps sorted by score descending."""
@@ -280,9 +307,14 @@ class GapDetector:
                 except Exception as exc:
                     logger.debug(f"GapDetector: {sym}/{tf} failed: {exc!r}")
 
+        # Refresh the gap-up watch symbol set (all OPEN gap-up symbols)
+        watch_syms = {r.symbol for r in new_results.values()
+                      if r.gap_type == "UP" and r.state == "OPEN"}
+
         with self._lock:
             self._results.clear()
             self._results.update(new_results)
+            self._gap_up_watch_symbols = watch_syms
 
         self._prev_gap_ids = new_ids
 
@@ -310,6 +342,13 @@ class GapDetector:
                     cb(sorted_downs)
                 except Exception as exc:
                     logger.warning(f"GapDetector gap_down callback error: {exc!r}")
+
+            # Fire dedicated watch callbacks so other ML tools can elevate attention
+            for cb in self._watch_callbacks:
+                try:
+                    cb(sorted_downs)
+                except Exception as exc:
+                    logger.warning(f"GapDetector watch callback error: {exc!r}")
 
     # ── Per-symbol / per-timeframe analysis ────────────────────────────────────
 
