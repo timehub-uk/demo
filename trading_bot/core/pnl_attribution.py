@@ -142,10 +142,13 @@ class PnLAttributionEngine:
 
 # Singleton
 _pnl: Optional[PnLAttributionEngine] = None
+_pnl_lock = threading.Lock()
 
 
 def get_pnl_attribution() -> PnLAttributionEngine:
     global _pnl
     if _pnl is None:
-        _pnl = PnLAttributionEngine()
+        with _pnl_lock:
+            if _pnl is None:
+                _pnl = PnLAttributionEngine()
     return _pnl

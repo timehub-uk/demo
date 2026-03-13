@@ -57,6 +57,7 @@ class DrawdownGuard:
         self._kill_switch = kill_switch
         self._levels = list(self.DEFAULT_LEVELS)
         self._equity_peaks: Dict[str, float] = {}
+        self._equity_current: Dict[str, float] = {}
         self._paused_until: Dict[str, float] = {}
         self._events: List[DrawdownEvent] = []
         self._callbacks: List[Callable[[DrawdownEvent], None]] = []
@@ -79,6 +80,7 @@ class DrawdownGuard:
             if equity > peak:
                 self._equity_peaks[strategy_id] = equity
                 peak = equity
+            self._equity_current[strategy_id] = equity
 
             if peak <= 0:
                 return None
@@ -118,7 +120,10 @@ class DrawdownGuard:
         """Current drawdown from peak for a strategy."""
         with self._lock:
             peak = self._equity_peaks.get(strategy_id, 0)
-            return 0.0  # Would need current equity passed in
+            current = self._equity_current.get(strategy_id, peak)
+            if peak <= 0:
+                return 0.0
+            return max(0.0, (peak - current) / peak * 100)
 
     def get_events(self, strategy_id: Optional[str] = None) -> List[DrawdownEvent]:
         with self._lock:
@@ -132,14 +137,11 @@ class DrawdownGuard:
 
     def configure(self, **kwargs) -> None:
         """Update thresholds from dict (for UI settings panel)."""
-        if "l1_pct" in kwargs:
-            self._levels[0].threshold_pct = float(kwargs["l1_pct"])
-        if "l2_pct" in kwargs:
-            self._levels[1].threshold_pct = float(kwargs["l2_pct"])
-        if "l3_pct" in kwargs:
-            self._levels[2].threshold_pct = float(kwargs["l3_pct"])
-        if "l4_pct" in kwargs:
-            self._levels[3].threshold_pct = float(kwargs["l4_pct"])
+        with self._lock:
+            mapping = {"l1_pct": 0, "l2_pct": 1, "l3_pct": 2, "l4_pct": 3}
+            for key, idx in mapping.items():
+                if key in kwargs and idx < len(self._levels):
+                    self._levels[idx].threshold_pct = float(kwargs[key])
 
     def _execute_action(self, strategy_id: str, level: DrawdownLevel,
                          evt: DrawdownEvent) -> None:

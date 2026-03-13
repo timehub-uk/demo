@@ -126,7 +126,7 @@ class TradeReconciliationEngine:
         fee_diff = abs(fill.fee - expected_fee)
 
         # Determine status
-        if abs(qty_diff / intent.qty) < 0.001:
+        if intent.qty == 0 or abs(qty_diff / intent.qty) < 0.001:
             status = ReconcileStatus.MATCHED
         elif fill.filled_qty < intent.qty:
             status = ReconcileStatus.PARTIAL_FILL

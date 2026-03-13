@@ -191,14 +191,15 @@ class StrategyRegistry:
         chain = []
         current_id: Optional[str] = id
         visited = set()
-        while current_id and current_id not in visited:
-            visited.add(current_id)
-            s = self._strategies.get(current_id)
-            if s:
-                chain.insert(0, s)
-                current_id = s.parent_id
-            else:
-                break
+        with self._lock:
+            while current_id and current_id not in visited:
+                visited.add(current_id)
+                s = self._strategies.get(current_id)
+                if s:
+                    chain.insert(0, s)
+                    current_id = s.parent_id
+                else:
+                    break
         return chain
 
     def get_children(self, id: str) -> List[StrategyRecord]:

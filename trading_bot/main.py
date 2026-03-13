@@ -1055,27 +1055,27 @@ def start_background_services(services: dict, settings) -> None:
         gap_ref = services.get("gap_detector")
         if gap_ref:
             try:
-                gap_ref.on_gap_up(lambda gaps: [
-                    _central.feed(
-                        "gap_down_buy",
-                        symbol     = g.symbol,
-                        signal     = "BUY",
-                        confidence = g.gap_score,
-                        note       = f"GAP_DOWN {g.gap_pct:+.2f}% tf={g.timeframe}",
-                    ) for g in gaps
-                ])
+                def _on_gap_down_buy(gaps):
+                    for g in gaps:
+                        try:
+                            _central.feed("gap_down_buy", symbol=g.symbol, signal="BUY",
+                                          confidence=g.gap_score,
+                                          note=f"GAP_DOWN {g.gap_pct:+.2f}% tf={g.timeframe}")
+                        except Exception:
+                            pass
+                gap_ref.on_gap_up(_on_gap_down_buy)
             except Exception:
                 pass
             try:
-                gap_ref.on_gap_up_watch(lambda gaps: [
-                    _central.feed(
-                        "gap_up_watch",
-                        symbol     = g.symbol,
-                        signal     = "WATCH",
-                        confidence = g.gap_score,
-                        note       = f"GAP_UP {g.gap_pct:+.2f}% tf={g.timeframe}",
-                    ) for g in gaps
-                ])
+                def _on_gap_up_watch(gaps):
+                    for g in gaps:
+                        try:
+                            _central.feed("gap_up_watch", symbol=g.symbol, signal="WATCH",
+                                          confidence=g.gap_score,
+                                          note=f"GAP_UP {g.gap_pct:+.2f}% tf={g.timeframe}")
+                        except Exception:
+                            pass
+                gap_ref.on_gap_up_watch(_on_gap_up_watch)
             except Exception:
                 pass
 
@@ -1083,15 +1083,18 @@ def start_background_services(services: dict, settings) -> None:
         accum_ref = services.get("accumulation_detector")
         if accum_ref:
             try:
-                accum_ref.on_alert(lambda results: [
-                    _central.feed(
-                        "accumulation",
-                        symbol     = r.symbol,
-                        signal     = "BUY" if r.label in ("ALERT", "STRONG") else "WATCH",
-                        confidence = r.accumulation_score,
-                        note       = f"ACCUM {r.label}",
-                    ) for r in results if r.label != "NONE"
-                ])
+                def _on_accum(results):
+                    for r in results:
+                        if r.label == "NONE":
+                            continue
+                        try:
+                            _central.feed("accumulation", symbol=r.symbol,
+                                          signal="BUY" if r.label in ("ALERT", "STRONG") else "WATCH",
+                                          confidence=r.accumulation_score,
+                                          note=f"ACCUM {r.label}")
+                        except Exception:
+                            pass
+                accum_ref.on_alert(_on_accum)
             except Exception:
                 pass
 
@@ -1099,15 +1102,18 @@ def start_background_services(services: dict, settings) -> None:
         brk_ref = services.get("breakout_detector")
         if brk_ref:
             try:
-                brk_ref.on_breakout(lambda results: [
-                    _central.feed(
-                        "breakout",
-                        symbol     = r.symbol,
-                        signal     = "BUY" if r.stage >= 3 else "WATCH",
-                        confidence = r.breakout_score,
-                        note       = f"BREAKOUT stage={r.stage}",
-                    ) for r in results if r.stage >= 2
-                ])
+                def _on_breakout(results):
+                    for r in results:
+                        if r.stage < 2:
+                            continue
+                        try:
+                            _central.feed("breakout", symbol=r.symbol,
+                                          signal="BUY" if r.stage >= 3 else "WATCH",
+                                          confidence=r.breakout_score,
+                                          note=f"BREAKOUT stage={r.stage}")
+                        except Exception:
+                            pass
+                brk_ref.on_breakout(_on_breakout)
             except Exception:
                 pass
 
@@ -1115,15 +1121,17 @@ def start_background_services(services: dict, settings) -> None:
         lcw_ref = services.get("large_candle_watcher")
         if lcw_ref:
             try:
-                lcw_ref.on_alert(lambda results: [
-                    _central.feed(
-                        "large_candle_watch",
-                        symbol     = r.symbol,
-                        signal     = "WATCH",
-                        confidence = r.candle_score,
-                        note       = f"LARGE_CANDLE {r.label} {r.direction} ×{r.expansion_ratio:.1f}",
-                    ) for r in results if r.label != "NONE"
-                ])
+                def _on_lcw(results):
+                    for r in results:
+                        if r.label == "NONE":
+                            continue
+                        try:
+                            _central.feed("large_candle_watch", symbol=r.symbol,
+                                          signal="WATCH", confidence=r.candle_score,
+                                          note=f"LARGE_CANDLE {r.label} {r.direction} ×{r.expansion_ratio:.1f}")
+                        except Exception:
+                            pass
+                lcw_ref.on_alert(_on_lcw)
             except Exception:
                 pass
 
@@ -1166,7 +1174,7 @@ def start_background_services(services: dict, settings) -> None:
         from db.models import MLModel
         with get_db() as db:
             has_model = db.execute(select(MLModel).filter_by(is_active=True)).scalar_one_or_none()
-        if not has_model and settings.ml.training_hours > 0:
+        if not has_model and settings.ml.training_hours > 0 and services.get("trainer"):
             intel.ml("Startup", "No trained model found – scheduling initial 48h training session…")
             def _deferred_training():
                 time.sleep(5)   # Let UI load first

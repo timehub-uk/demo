@@ -205,8 +205,8 @@ class TradingEngine:
         if not pos:
             return {}
         qty = pos["qty"]
-        proceeds = price * qty * 0.999  # fee simulation
-        pnl = proceeds - pos["entry_price"] * qty
+        proceeds = price * qty * 0.999    # sell-side fee simulation
+        pnl = proceeds - pos["entry_price"] * qty * 1.001  # include buy-side fee in cost basis
         self._paper_capital += proceeds
         trade = {"symbol": symbol, "side": "SELL", "price": price, "qty": qty,
                  "pnl": pnl, "time": time.time(), "paper": True}
