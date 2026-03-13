@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QWizard, QWizardPage, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QGroupBox, QFormLayout, QCheckBox,
     QComboBox, QWidget, QProgressBar, QMessageBox, QFrame,
+    QDialog, QDialogButtonBox,
 )
 
 from config import get_settings
@@ -385,3 +386,261 @@ class SetupWizard(QWizard):
             enc.store_api_key("claude_key", settings.ai.claude_api_key)
 
         self.setup_complete.emit({"status": "complete"})
+
+
+# ── Runtime credential recovery dialog ───────────────────────────────────────
+
+class DbCredentialsDialog(QDialog):
+    """
+    Shown at startup when PostgreSQL rejects the configured user/password.
+    The user can:
+      (a) Enter different credentials for an existing PG account, OR
+      (b) Enable the superuser section to have the app CREATE the user and
+          GRANT it full access to the database automatically.
+    """
+
+    def __init__(self, host: str, port: int, db_name: str,
+                 failed_user: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Database Credentials Required")
+        self.setMinimumWidth(520)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
+
+        self._host      = host
+        self._port      = port
+        self._db_name   = db_name
+        self._ok_user   = None   # set after successful test
+        self._ok_pass   = None
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        # ── Error banner ──────────────────────────────────────────────
+        banner = QLabel(
+            f"<b>Cannot connect to PostgreSQL database '{db_name}'</b><br>"
+            f"User <code>{failed_user}</code> does not exist, has the wrong "
+            f"password, or lacks the required privileges."
+        )
+        banner.setWordWrap(True)
+        banner.setTextFormat(Qt.TextFormat.RichText)
+        banner.setStyleSheet(
+            f"background:{RED}22; color:{RED}; padding:10px; "
+            f"border:1px solid {RED}66; border-radius:4px;"
+        )
+        layout.addWidget(banner)
+
+        # ── New credentials ───────────────────────────────────────────
+        creds_box = QGroupBox(f"Credentials for database '{db_name}'")
+        creds_form = QFormLayout(creds_box)
+        creds_form.setSpacing(8)
+
+        self.user_edit = QLineEdit(failed_user)
+        creds_form.addRow("Username:", self.user_edit)
+
+        self.pass_edit = QLineEdit()
+        self.pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pass_edit.setPlaceholderText("Password")
+        creds_form.addRow("Password:", self.pass_edit)
+
+        layout.addWidget(creds_box)
+
+        # ── Optional: create user via superuser ───────────────────────
+        self.su_group = QGroupBox(
+            "Create / Grant this user (requires a PostgreSQL superuser)"
+        )
+        self.su_group.setCheckable(True)
+        self.su_group.setChecked(False)
+        su_layout = QVBoxLayout(self.su_group)
+
+        hint = QLabel(
+            "If the user does not exist yet, provide a superuser account "
+            "(e.g. 'postgres') and the app will CREATE the user, create the "
+            f"database if needed, and GRANT ALL PRIVILEGES on '{db_name}'."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color:{FG2}; font-size:11px;")
+        su_layout.addWidget(hint)
+
+        su_form = QFormLayout()
+        su_form.setSpacing(8)
+
+        self.su_user_edit = QLineEdit("postgres")
+        su_form.addRow("Superuser name:", self.su_user_edit)
+
+        self.su_pass_edit = QLineEdit()
+        self.su_pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.su_pass_edit.setPlaceholderText("Superuser password")
+        su_form.addRow("Superuser password:", self.su_pass_edit)
+
+        su_layout.addLayout(su_form)
+        layout.addWidget(self.su_group)
+
+        # ── Test button + status ──────────────────────────────────────
+        test_btn = QPushButton("Test & Connect")
+        test_btn.setObjectName("btn_primary")
+        test_btn.clicked.connect(self._test_and_connect)
+        layout.addWidget(test_btn)
+
+        self.status_lbl = QLabel("")
+        self.status_lbl.setWordWrap(True)
+        self.status_lbl.setMinimumHeight(36)
+        layout.addWidget(self.status_lbl)
+
+        # ── Buttons ───────────────────────────────────────────────────
+        self.ok_btn = QPushButton("Save && Continue")
+        self.ok_btn.setEnabled(False)
+        self.ok_btn.clicked.connect(self.accept)
+        skip_btn = QPushButton("Skip (offline mode)")
+        skip_btn.clicked.connect(self.reject)
+
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(self.ok_btn)
+        btn_row.addWidget(skip_btn)
+        layout.addLayout(btn_row)
+
+    # ── Helpers ───────────────────────────────────────────────────────
+
+    def accepted_credentials(self) -> tuple[str, str]:
+        """Return (user, password) after dialog accepted."""
+        return self._ok_user, self._ok_pass
+
+    def _set_status(self, text: str, ok: bool) -> None:
+        colour = GREEN if ok else RED
+        self.status_lbl.setText(text)
+        self.status_lbl.setStyleSheet(f"color:{colour};")
+
+    def _test_and_connect(self) -> None:
+        user     = self.user_edit.text().strip()
+        password = self.pass_edit.text()
+
+        if not user:
+            self._set_status("Username cannot be empty.", ok=False)
+            return
+
+        # Step 1: optionally create / grant via superuser
+        if self.su_group.isChecked():
+            ok = self._setup_via_superuser(user, password)
+            if not ok:
+                return   # error already shown in status_lbl
+
+        # Step 2: test the target connection
+        url = (
+            f"postgresql+psycopg2://{user}:{password}"
+            f"@{self._host}:{self._port}/{self._db_name}"
+        )
+        try:
+            from sqlalchemy import create_engine
+            engine = create_engine(
+                url,
+                pool_pre_ping=True,
+                connect_args={"connect_timeout": 5},
+            )
+            with engine.connect():
+                pass
+            engine.dispose()
+
+            self._ok_user = user
+            self._ok_pass = password
+            self.ok_btn.setEnabled(True)
+            self._set_status(
+                f"Connected successfully as '{user}'. Click Save & Continue.",
+                ok=True,
+            )
+        except Exception as exc:
+            self.ok_btn.setEnabled(False)
+            self._set_status(f"Connection failed: {str(exc)[:140]}", ok=False)
+
+    def _setup_via_superuser(self, new_user: str, new_pass: str) -> bool:
+        """
+        Connect as superuser and:
+          1. CREATE the target database if it doesn't exist
+          2. CREATE USER (or ALTER PASSWORD) for new_user
+          3. GRANT ALL PRIVILEGES ON DATABASE to new_user
+          4. GRANT ALL ON SCHEMA public to new_user (PostgreSQL 15+)
+        Returns True on success, False on failure (status_lbl updated).
+        """
+        from sqlalchemy import create_engine, text
+
+        su_user = self.su_user_edit.text().strip()
+        su_pass = self.su_pass_edit.text()
+        db_name = self._db_name
+
+        if not su_user:
+            self._set_status("Superuser name cannot be empty.", ok=False)
+            return False
+
+        # ── Connect to postgres system DB as superuser ────────────────
+        sys_url = (
+            f"postgresql+psycopg2://{su_user}:{su_pass}"
+            f"@{self._host}:{self._port}/postgres"
+        )
+        try:
+            sys_engine = create_engine(
+                sys_url,
+                isolation_level="AUTOCOMMIT",
+                connect_args={"connect_timeout": 5},
+            )
+            with sys_engine.connect() as conn:
+                # Create database if missing
+                db_exists = conn.execute(
+                    text("SELECT 1 FROM pg_database WHERE datname = :n"),
+                    {"n": db_name},
+                ).fetchone()
+                if not db_exists:
+                    conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+
+                # Create or update the application user
+                role_exists = conn.execute(
+                    text("SELECT 1 FROM pg_roles WHERE rolname = :n"),
+                    {"n": new_user},
+                ).fetchone()
+                if role_exists:
+                    conn.execute(
+                        text(f'ALTER USER "{new_user}" WITH PASSWORD :pw'),
+                        {"pw": new_pass},
+                    )
+                else:
+                    conn.execute(
+                        text(f'CREATE USER "{new_user}" WITH PASSWORD :pw'),
+                        {"pw": new_pass},
+                    )
+
+                # Grant database-level privileges
+                conn.execute(text(
+                    f'GRANT ALL PRIVILEGES ON DATABASE "{db_name}" TO "{new_user}"'
+                ))
+
+            sys_engine.dispose()
+
+            # ── Connect to the target DB as superuser to grant schema ─
+            tgt_url = (
+                f"postgresql+psycopg2://{su_user}:{su_pass}"
+                f"@{self._host}:{self._port}/{db_name}"
+            )
+            tgt_engine = create_engine(
+                tgt_url,
+                isolation_level="AUTOCOMMIT",
+                connect_args={"connect_timeout": 5},
+            )
+            with tgt_engine.connect() as conn:
+                conn.execute(text(
+                    f'GRANT ALL ON SCHEMA public TO "{new_user}"'
+                ))
+                conn.execute(text(
+                    f'ALTER DEFAULT PRIVILEGES IN SCHEMA public '
+                    f'GRANT ALL ON TABLES TO "{new_user}"'
+                ))
+            tgt_engine.dispose()
+
+            self._set_status(
+                f"User '{new_user}' created/updated with full access to '{db_name}'.",
+                ok=True,
+            )
+            return True
+
+        except Exception as exc:
+            self._set_status(
+                f"Superuser setup failed: {str(exc)[:160]}",
+                ok=False,
+            )
+            return False

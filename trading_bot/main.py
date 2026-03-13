@@ -61,7 +61,7 @@ def create_splash(app: QApplication) -> QSplashScreen:
 
 
 def init_databases() -> tuple[bool, str]:
-    """Initialise PostgreSQL and Redis connections."""
+    """Initialise PostgreSQL and Redis connections (no UI retry)."""
     from config import get_settings
     settings = get_settings()
     try:
@@ -91,6 +91,57 @@ def init_databases() -> tuple[bool, str]:
         intel.warning("Startup", f"Redis unavailable: {exc} – caching disabled")
 
     return True, ""
+
+
+def _init_postgres_with_retry(app, settings) -> bool:
+    """
+    Try to connect to PostgreSQL.  On authentication / privilege failures,
+    show DbCredentialsDialog so the user can correct (or create) credentials.
+    Retries up to 3 times.  Returns True if a connection was established.
+    """
+    from db.postgres import init_db, _is_auth_error
+
+    for attempt in range(3):
+        try:
+            init_db(
+                settings.db_url,
+                pool_size=settings.database.pool_size,
+                max_overflow=settings.database.max_overflow,
+            )
+            intel.system("Startup", "PostgreSQL connected.")
+            return True
+
+        except Exception as exc:
+            if not _is_auth_error(exc):
+                # Network error, server down etc. — fall through to offline mode
+                logger.warning(f"PostgreSQL unavailable ({exc}) – offline mode")
+                intel.warning("Startup", f"PostgreSQL unavailable: {exc}")
+                return False
+
+            # Auth/privilege failure → ask the user for credentials
+            logger.warning(f"PostgreSQL auth failed (attempt {attempt + 1}): {exc}")
+            from ui.setup_wizard import DbCredentialsDialog
+            dlg = DbCredentialsDialog(
+                host=settings.database.host,
+                port=settings.database.port,
+                db_name=settings.database.name,
+                failed_user=settings.database.user,
+            )
+            if dlg.exec() != DbCredentialsDialog.DialogCode.Accepted:
+                logger.info("User skipped DB credential entry – offline mode.")
+                return False
+
+            new_user, new_pass = dlg.accepted_credentials()
+            if not new_user:
+                return False
+
+            # Persist the working credentials so the app remembers them
+            settings.database.user     = new_user
+            settings.database.password = new_pass
+            settings.save()
+
+    logger.warning("PostgreSQL: max credential attempts reached – offline mode.")
+    return False
 
 
 def build_services(settings):
@@ -1263,7 +1314,25 @@ def main() -> int:
     # ── Database init ──────────────────────────────────────────────────
     splash.showMessage("Connecting to databases…", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, QColor("#00D4FF"))
     app.processEvents()
-    init_databases()
+
+    # PostgreSQL — with interactive credential recovery on auth failure
+    splash.hide()
+    _init_postgres_with_retry(app, settings)
+    splash.show()
+
+    # Redis (no interactive retry needed — just cache, not critical path)
+    try:
+        from db.redis_client import init_redis
+        init_redis(
+            host=settings.redis.host,
+            port=settings.redis.port,
+            db=settings.redis.db,
+            password=settings.redis.password,
+            max_connections=settings.redis.max_connections,
+        )
+        intel.system("Startup", "Redis connected.")
+    except Exception as exc:
+        logger.warning(f"Redis unavailable ({exc}) – caching disabled")
 
     # ── Services ───────────────────────────────────────────────────────
     splash.showMessage("Starting trading services…", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, QColor("#00D4FF"))

@@ -22,6 +22,24 @@ _engine = None
 _SessionLocal = None
 
 
+def _is_auth_error(exc: Exception) -> bool:
+    """
+    Return True when the exception indicates an authentication or
+    privilege failure rather than a network/config problem.
+    Covers: role does not exist, password wrong, permission denied.
+    """
+    msg = str(exc).lower()
+    auth_phrases = (
+        "role",
+        "password authentication failed",
+        "permission denied",
+        "insufficient privilege",
+        "pg_hba.conf",
+        "no pg_hba.conf entry",
+    )
+    return any(p in msg for p in auth_phrases)
+
+
 def _ensure_database_exists(db_url: str) -> None:
     """
     Connect to the PostgreSQL *server* (via the 'postgres' system database)
