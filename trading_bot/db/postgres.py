@@ -11,6 +11,7 @@ from typing import Generator
 
 from loguru import logger
 from sqlalchemy import create_engine, event, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
@@ -21,6 +22,42 @@ _engine = None
 _SessionLocal = None
 
 
+def _ensure_database_exists(db_url: str) -> None:
+    """
+    Connect to the PostgreSQL *server* (via the 'postgres' system database)
+    and create the target database if it does not yet exist.
+    Must be called before init_db() creates the application engine.
+    """
+    url = make_url(db_url)
+    db_name = url.database
+
+    # Build a URL pointing at the postgres system database
+    system_url = url.set(database="postgres")
+
+    try:
+        system_engine = create_engine(
+            system_url,
+            isolation_level="AUTOCOMMIT",
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": 10},
+        )
+        with system_engine.connect() as conn:
+            exists = conn.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": db_name},
+            ).fetchone()
+            if not exists:
+                # Database name is an identifier — use quoting, not parameters
+                conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+                logger.info(f"Database '{db_name}' did not exist — created.")
+            else:
+                logger.debug(f"Database '{db_name}' already exists.")
+        system_engine.dispose()
+    except Exception as exc:
+        # Non-fatal: init_db will fail with a clearer error if DB is truly missing
+        logger.warning(f"Could not auto-create database '{db_name}': {exc}")
+
+
 def init_db(db_url: str, pool_size: int = 10, max_overflow: int = 20) -> None:
     """Initialise the database engine, create tables if necessary."""
     global _engine, _SessionLocal
@@ -28,6 +65,9 @@ def init_db(db_url: str, pool_size: int = 10, max_overflow: int = 20) -> None:
     with _lock:
         if _engine is not None:
             return
+
+        # Ensure the database itself exists before connecting
+        _ensure_database_exists(db_url)
 
         _engine = create_engine(
             db_url,
