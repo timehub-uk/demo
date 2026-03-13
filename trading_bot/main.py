@@ -1423,6 +1423,10 @@ def main() -> int:
     splash.finish(window)
     window.showMaximized()
 
+    # Set initial DB / Redis status in the bottom-left status bar,
+    # then start a 30-second health-check timer to keep it live.
+    window.status_bar.start_health_checks()
+
     intel.success("Startup", "BinanceML Pro ready ✅")
     return app.exec()
 

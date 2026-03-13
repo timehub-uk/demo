@@ -751,18 +751,20 @@ class TradingStatusBar(QStatusBar):
             )
             return l
 
-        self.mode_lbl     = lbl("MODE: MANUAL", YELLOW)
-        self.at_lbl       = lbl("AT: IDLE")
-        self.trades_lbl   = lbl("TRADES: 0")
-        self.pnl_lbl      = lbl("P&L: $0.00")
-        self.api_lbl      = lbl("● API")
-        self.db_lbl       = lbl("● DB")
-        self.redis_lbl    = lbl("● RDS")
+        self.mode_lbl   = lbl("MODE: MANUAL", YELLOW)
+        self.at_lbl     = lbl("AT: IDLE")
+        self.trades_lbl = lbl("TRADES: 0")
+        self.pnl_lbl    = lbl("P&L: $0.00")
+        self.api_lbl    = lbl("● API")
 
-        for w in [self.mode_lbl, _vsep(), self.at_lbl, _vsep(),
+        # DB / Redis — left side, prominent, with ONLINE/OFFLINE text
+        self.db_lbl    = lbl("● DB: —", FG2)
+        self.redis_lbl = lbl("● RDS: —", FG2)
+
+        for w in [self.db_lbl, self.redis_lbl, _vsep(),
+                  self.mode_lbl, _vsep(), self.at_lbl, _vsep(),
                   self.trades_lbl, _vsep(), self.pnl_lbl, _vsep(),
-                  self.api_lbl, _vsep(), self.db_lbl, _vsep(),
-                  self.redis_lbl, _vsep()]:
+                  self.api_lbl, _vsep()]:
             self.addWidget(w)
 
         self.cpu_lbl  = lbl("CPU: —")
@@ -775,6 +777,35 @@ class TradingStatusBar(QStatusBar):
                timeout=lambda: self.time_lbl.setText(
                    time.strftime("%H:%M:%S  %d %b %Y")
                )).start()
+
+        # Health-check every 30 s — runs on the UI thread via QTimer
+        self._health_timer = QTimer(self)
+        self._health_timer.setInterval(30_000)
+        self._health_timer.timeout.connect(self._run_health_check)
+
+    def start_health_checks(self) -> None:
+        """Call once after the window is shown to begin live DB monitoring."""
+        self._run_health_check()          # immediate first check
+        self._health_timer.start()
+
+    def _run_health_check(self) -> None:
+        # PostgreSQL
+        try:
+            from db.postgres import get_db
+            from sqlalchemy import text
+            with get_db() as db:
+                db.execute(text("SELECT 1"))
+            self.set_service("db", True)
+        except Exception:
+            self.set_service("db", False)
+
+        # Redis
+        try:
+            from db.redis_client import get_redis
+            get_redis().ping()
+            self.set_service("redis", True)
+        except Exception:
+            self.set_service("redis", False)
 
     def set_mode(self, mode: str) -> None:
         col = {"AUTO": GREEN, "MANUAL": YELLOW, "HYBRID": ACCENT,
@@ -795,12 +826,18 @@ class TradingStatusBar(QStatusBar):
 
     def set_service(self, name: str, ok: bool) -> None:
         mapping = {"api": self.api_lbl, "db": self.db_lbl, "redis": self.redis_lbl}
-        lbl = mapping.get(name)
-        if lbl:
-            col = GREEN if ok else RED
-            tag = {"api": "API", "db": "DB", "redis": "RDS"}.get(name, name.upper())
-            lbl.setText(f"● {tag}")
-            lbl.setStyleSheet(
+        widget = mapping.get(name)
+        if widget:
+            col  = GREEN if ok else RED
+            tags = {
+                "api":   ("API",    "API"),
+                "db":    ("DB",     "DB"),
+                "redis": ("RDS",    "RDS"),
+            }
+            short, _ = tags.get(name, (name.upper(), name.upper()))
+            status = "ONLINE" if ok else "OFFLINE"
+            widget.setText(f"● {short}: {status}")
+            widget.setStyleSheet(
                 f"color:{col}; font-size:10px; padding:0 8px; font-family:monospace;"
             )
 
