@@ -24,6 +24,16 @@ FEATURE_COLUMNS = [
     "timeframe_id",
 ]
 
+# Optional on-chain DEX features — appended when CoinGecko/Codex are active.
+# The model automatically expands to include them if present; they are filled
+# with 0 when the APIs are unavailable so training is never blocked.
+DEX_FEATURE_COLUMNS = [
+    "dex_volume_24h_usd_norm",   # log-normalised DEX 24h volume
+    "dex_liquidity_usd_norm",    # log-normalised pool liquidity
+    "dex_vol_liq_ratio",         # volume / liquidity pressure ratio
+    "dex_pool_count_top5",       # number of active top-5 pools (0-5 normalised)
+]
+
 # Mapping from interval string to normalised 0-1 timeframe id
 TIMEFRAME_IDS: dict[str, float] = {
     "1m": 0.0, "3m": 0.10, "5m": 0.20, "15m": 0.30, "30m": 0.40,
@@ -70,6 +80,32 @@ class FeatureEngineer:
         # Timeframe identity – constant column so the model knows which TF it's on
         tf_id = TIMEFRAME_IDS.get(interval, 0.55)   # default to 1h if unknown
         df["timeframe_id"] = tf_id
+        return df
+
+    @staticmethod
+    def inject_dex_features(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+        """
+        Fetch on-chain DEX features from CoinGecko/Codex and inject them as
+        constant columns over the whole DataFrame.  Safe to call even when
+        the APIs are disabled — columns are filled with 0 in that case.
+        """
+        import math
+        try:
+            from core.dex_data_provider import get_dex_provider
+            provider = get_dex_provider()
+            raw = provider.get_dex_features_for_symbol(symbol)
+        except Exception:
+            raw = {}
+
+        vol  = float(raw.get("dex_volume_24h_usd", 0))
+        liq  = float(raw.get("dex_liquidity_usd", 0))
+        ratio = float(raw.get("dex_vol_liq_ratio", 0))
+        pools = float(raw.get("dex_pool_count_top5", 0))
+
+        df["dex_volume_24h_usd_norm"] = math.log1p(vol) / 25.0   # normalise ~0-1
+        df["dex_liquidity_usd_norm"]  = math.log1p(liq) / 25.0
+        df["dex_vol_liq_ratio"]       = min(ratio, 10.0) / 10.0
+        df["dex_pool_count_top5"]     = pools / 5.0
         return df
 
     # ── Label generation ───────────────────────────────────────────────

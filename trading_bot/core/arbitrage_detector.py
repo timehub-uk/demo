@@ -339,12 +339,34 @@ class ArbitrageDetector:
             if opp:
                 opportunities.append(opp)
 
-        # 4. Sort by score, keep top 10
+        # 4. DEX↔CEX spread arbitrage (CoinGecko/Codex — only if APIs are active)
+        try:
+            from core.dex_data_provider import get_dex_provider
+            dex = get_dex_provider()
+            if dex.coingecko_active or dex.codex_active:
+                dex_opps = dex.scan_dex_arbitrage_opportunities()
+                for d in dex_opps:
+                    if d["spread_pct"] < 0.2 or d["confidence"] < MIN_CONFIDENCE:
+                        continue
+                    opp = ArbitrageOpportunity(
+                        arb_type="DEX_CEX_SPREAD",
+                        leg_buy=d["symbol"],
+                        leg_sell=f"DEX:{d['network']}:{d['pool_address'][:8]}",
+                        spread_z=d["spread_pct"] / 0.5,   # normalise as pseudo z-score
+                        expected_profit_pct=max(0, d["spread_pct"] - 0.15),
+                        confidence=d["confidence"],
+                        score=d["confidence"] * min(d["spread_pct"] / 1.0, 1.0),
+                    )
+                    opportunities.append(opp)
+        except Exception as exc:
+            logger.debug(f"DEX arb scan step failed: {exc}")
+
+        # 5. Sort by score, keep top 10
         opportunities.sort(key=lambda o: -o.score)
         with self._lock:
             self._latest_opportunities = opportunities[:10]
 
-        # 5. Emit callbacks for new high-quality opportunities (rate-limited per pair)
+        # 6. Emit callbacks for new high-quality opportunities (rate-limited per pair)
         now = time.time()
         for opp in opportunities:
             if opp.score >= 0.6 and opp.confidence >= MIN_CONFIDENCE:

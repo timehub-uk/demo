@@ -1456,9 +1456,15 @@ class MainWindow(QMainWindow):
 
         from ui.system_settings_widget import SystemSettingsWidget
         sys_settings = SystemSettingsWidget()
-        sys_settings.settings_saved.connect(
-            lambda: self._intel.system("Settings", "Configuration saved.")
-        )
+        def _on_settings_saved():
+            self._intel.system("Settings", "Configuration saved.")
+            try:
+                from core.dex_data_provider import reload_dex_provider
+                reload_dex_provider()
+            except Exception:
+                pass
+
+        sys_settings.settings_saved.connect(_on_settings_saved)
         tabs.addTab(sys_settings, "⚙  System")
 
         # Layers configuration panel

@@ -150,6 +150,21 @@ class UIConfig(BaseModel):
     sound_alerts: bool = True
 
 
+class CoinGeckoConfig(BaseModel):
+    enabled: bool = False
+    api_key: str = ""
+    plan: str = "Demo (free)"
+    base_url: str = "https://pro-api.coingecko.com/api/v3"
+    timeout: int = 10
+    networks: str = "eth,bsc,polygon_pos,arbitrum,base"
+
+
+class CodexConfig(BaseModel):
+    enabled: bool = False
+    api_key: str = ""
+    base_url: str = "https://graph.codex.io/graphql"
+
+
 # ── Main settings class ───────────────────────────────────────────────────────
 
 class Settings:
@@ -176,6 +191,8 @@ class Settings:
         self.trading = TradingConfig()
         self.ui = UIConfig()
         self.notifications = NotificationsConfig()
+        self.coingecko = CoinGeckoConfig()
+        self.codex = CodexConfig()
         self.first_run: bool = True
         self._loaded = True
 
@@ -193,6 +210,8 @@ class Settings:
             "trading": self.trading.model_dump(),
             "ui": self.ui.model_dump(),
             "notifications": self.notifications.model_dump(),
+            "coingecko": self.coingecko.model_dump(),
+            "codex": self.codex.model_dump(),
             "first_run": self.first_run,
         }
         from .encryption import EncryptionManager
@@ -230,6 +249,8 @@ class Settings:
         self.trading = TradingConfig(**data.get("trading", {}))
         self.ui = UIConfig(**data.get("ui", {}))
         self.notifications = NotificationsConfig(**data.get("notifications", {}))
+        self.coingecko = CoinGeckoConfig(**data.get("coingecko", {}))
+        self.codex = CodexConfig(**data.get("codex", {}))
         self.first_run = data.get("first_run", True)
 
     def effective_api_key(self) -> str:
