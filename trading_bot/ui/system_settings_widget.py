@@ -15,6 +15,8 @@ Sections:
 
 from __future__ import annotations
 
+import threading
+
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -24,7 +26,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.styles import (
-    ACCENT, GREEN, RED, YELLOW, BG0, BG2, BG3, BG4, BG5,
+    ACCENT, ACCENT2, GREEN, RED, YELLOW, BG0, BG2, BG3, BG4, BG5,
     BORDER, BORDER2, FG0, FG1, FG2, GLOW,
 )
 from ui.icons import svg_icon
@@ -148,6 +150,7 @@ class SystemSettingsWidget(QWidget):
 
         self._build_profile_tab()
         self._build_binance_tab()
+        self._build_coingecko_tab()
         self._build_database_tab()
         self._build_ai_tab()
         self._build_ml_tab()
@@ -196,6 +199,157 @@ class SystemSettingsWidget(QWidget):
         self.b_recv_window.setRange(1000, 60000)
         self.b_recv_window.setSuffix(" ms")
         form.addRow("Recv Window:", self.b_recv_window)
+
+    def _build_coingecko_tab(self) -> None:
+        _, form = self._scrollable_tab("CoinGecko", "chart")
+        self._cg_scroll_widget = form.parentWidget()
+
+        form.addRow(_section_label("COINGECKO DEX API"))
+
+        # Info label
+        info = QLabel(
+            "CoinGecko DEX API provides on-chain DEX liquidity, OHLCV, and\n"
+            "pool data. Free tier: 30 req/min. Pro: higher limits + websocket.\n"
+            "Docs: https://www.coingecko.com/en/api/dex"
+        )
+        info.setStyleSheet(f"color:{FG1}; font-size:10px; font-family:monospace;")
+        info.setWordWrap(True)
+        form.addRow("", info)
+
+        self.cg_api_key = SecretEdit("Enter CoinGecko API key (leave blank for free demo key)")
+        form.addRow("API Key:", self.cg_api_key)
+
+        self.cg_plan = QComboBox()
+        for plan in ["Demo (free)", "Analyst", "Lite", "Pro", "Enterprise"]:
+            self.cg_plan.addItem(plan)
+        form.addRow("Plan:", self.cg_plan)
+
+        self.cg_base_url = QLineEdit("https://pro-api.coingecko.com/api/v3")
+        form.addRow("Base URL:", self.cg_base_url)
+
+        self.cg_timeout = QSpinBox()
+        self.cg_timeout.setRange(1, 60)
+        self.cg_timeout.setValue(10)
+        self.cg_timeout.setSuffix(" s")
+        form.addRow("Timeout:", self.cg_timeout)
+
+        self.cg_enabled = QCheckBox("Enable CoinGecko DEX data feeds")
+        form.addRow("Enable:", self.cg_enabled)
+
+        form.addRow(_section_label("DEX NETWORKS"))
+        self.cg_networks = QLineEdit("eth,bsc,polygon_pos,arbitrum,base")
+        self.cg_networks.setPlaceholderText("Comma-separated network IDs")
+        form.addRow("Networks:", self.cg_networks)
+
+        # Test connection button
+        test_btn = QPushButton("Test CoinGecko Connection")
+        test_btn.setStyleSheet(
+            f"QPushButton {{ background:{BG4}; color:{ACCENT}; border:1px solid {BORDER2};"
+            f" border-radius:4px; padding:4px 14px; }}"
+            f"QPushButton:hover {{ background:{BG5}; }}"
+        )
+        self.cg_test_lbl = QLabel("")
+        self.cg_test_lbl.setStyleSheet(f"color:{FG2}; font-size:10px; font-family:monospace;")
+        test_btn.clicked.connect(self._test_coingecko)
+        form.addRow("", test_btn)
+        form.addRow("", self.cg_test_lbl)
+
+        form.addRow(_section_label("CODEX API  (On-Chain Analytics)"))
+
+        codex_info = QLabel(
+            "Codex.io provides real-time on-chain token analytics, DEX trades,\n"
+            "and liquidity data. Pricing: https://www.codex.io/pricing"
+        )
+        codex_info.setStyleSheet(f"color:{FG1}; font-size:10px; font-family:monospace;")
+        codex_info.setWordWrap(True)
+        form.addRow("", codex_info)
+
+        self.codex_api_key = SecretEdit("Enter Codex API key")
+        form.addRow("Codex API Key:", self.codex_api_key)
+
+        self.codex_base_url = QLineEdit("https://graph.codex.io/graphql")
+        form.addRow("GraphQL URL:", self.codex_base_url)
+
+        self.codex_enabled = QCheckBox("Enable Codex on-chain data feeds")
+        form.addRow("Enable:", self.codex_enabled)
+
+        codex_test_btn = QPushButton("Test Codex Connection")
+        codex_test_btn.setStyleSheet(
+            f"QPushButton {{ background:{BG4}; color:{ACCENT2}; border:1px solid {BORDER2};"
+            f" border-radius:4px; padding:4px 14px; }}"
+            f"QPushButton:hover {{ background:{BG5}; }}"
+        )
+        self.codex_test_lbl = QLabel("")
+        self.codex_test_lbl.setStyleSheet(f"color:{FG2}; font-size:10px; font-family:monospace;")
+        codex_test_btn.clicked.connect(self._test_codex)
+        form.addRow("", codex_test_btn)
+        form.addRow("", self.codex_test_lbl)
+
+    def _test_coingecko(self) -> None:
+        import threading
+        def _run():
+            try:
+                import urllib.request, json
+                key = self.cg_api_key.text().strip()
+                url = "https://pro-api.coingecko.com/api/v3/ping"
+                if not key:
+                    url = "https://api.coingecko.com/api/v3/ping"
+                req = urllib.request.Request(url)
+                if key:
+                    req.add_header("x-cg-pro-api-key", key)
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    data = json.loads(resp.read())
+                msg = f"✓ {data.get('gecko_says', 'Connected')}"
+                col = GREEN
+            except Exception as e:
+                msg = f"✗ {str(e)[:80]}"
+                col = RED
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: (
+                self.cg_test_lbl.setText(msg),
+                self.cg_test_lbl.setStyleSheet(f"color:{col}; font-size:10px; font-family:monospace;")
+            ))
+        threading.Thread(target=_run, daemon=True).start()
+        self.cg_test_lbl.setText("Testing…")
+        self.cg_test_lbl.setStyleSheet(f"color:{YELLOW}; font-size:10px; font-family:monospace;")
+
+    def _test_codex(self) -> None:
+        import threading
+        def _run():
+            try:
+                import urllib.request, json
+                key = self.codex_api_key.text().strip()
+                url = self.codex_base_url.text().strip() or "https://graph.codex.io/graphql"
+                payload = json.dumps({"query": "{ __typename }"}).encode()
+                req = urllib.request.Request(url, data=payload,
+                                             headers={"Content-Type": "application/json"})
+                if key:
+                    req.add_header("Authorization", key)
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    json.loads(resp.read())
+                msg = "✓ Codex GraphQL endpoint reachable"
+                col = GREEN
+            except Exception as e:
+                msg = f"✗ {str(e)[:80]}"
+                col = RED
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: (
+                self.codex_test_lbl.setText(msg),
+                self.codex_test_lbl.setStyleSheet(f"color:{col}; font-size:10px; font-family:monospace;")
+            ))
+        threading.Thread(target=_run, daemon=True).start()
+        self.codex_test_lbl.setText("Testing…")
+        self.codex_test_lbl.setStyleSheet(f"color:{YELLOW}; font-size:10px; font-family:monospace;")
+
+    def _scroll_to_coingecko(self) -> None:
+        """Scroll the CoinGecko tab into view – called from main_window."""
+        try:
+            for i in range(self.tabs.count()):
+                if "Coin" in self.tabs.tabText(i) or "gecko" in self.tabs.tabText(i).lower():
+                    self.tabs.setCurrentIndex(i)
+                    break
+        except Exception:
+            pass
 
     def _build_database_tab(self) -> None:
         _, form = self._scrollable_tab("Database", "database")
@@ -415,6 +569,27 @@ class SystemSettingsWidget(QWidget):
             self.ui_notif.setChecked(s.ui.show_notifications)
             self.ui_sounds.setChecked(s.ui.sound_alerts)
 
+            # CoinGecko / Codex  (optional – fields may not exist in all configs)
+            try:
+                cg = getattr(s, "coingecko", None)
+                if cg:
+                    self.cg_api_key.setText(getattr(cg, "api_key", ""))
+                    _set_combo(self.cg_plan, getattr(cg, "plan", "Demo (free)"))
+                    self.cg_base_url.setText(getattr(cg, "base_url",
+                                                      "https://pro-api.coingecko.com/api/v3"))
+                    self.cg_timeout.setValue(int(getattr(cg, "timeout", 10)))
+                    self.cg_enabled.setChecked(bool(getattr(cg, "enabled", False)))
+                    self.cg_networks.setText(getattr(cg, "networks",
+                                                     "eth,bsc,polygon_pos,arbitrum,base"))
+                codex = getattr(s, "codex", None)
+                if codex:
+                    self.codex_api_key.setText(getattr(codex, "api_key", ""))
+                    self.codex_base_url.setText(getattr(codex, "base_url",
+                                                         "https://graph.codex.io/graphql"))
+                    self.codex_enabled.setChecked(bool(getattr(codex, "enabled", False)))
+            except Exception:
+                pass
+
             self._flash_status("Settings loaded", GREEN)
         except Exception as e:
             self._flash_status(f"Load error: {e}", RED)
@@ -488,6 +663,24 @@ class SystemSettingsWidget(QWidget):
             s.ui.default_interval   = self.ui_interval.currentText()
             s.ui.show_notifications = self.ui_notif.isChecked()
             s.ui.sound_alerts       = self.ui_sounds.isChecked()
+
+            # CoinGecko / Codex  (optional – only write if the config model supports it)
+            try:
+                cg = getattr(s, "coingecko", None)
+                if cg is not None:
+                    cg.api_key  = self.cg_api_key.text()
+                    cg.plan     = self.cg_plan.currentText()
+                    cg.base_url = self.cg_base_url.text()
+                    cg.timeout  = self.cg_timeout.value()
+                    cg.enabled  = self.cg_enabled.isChecked()
+                    cg.networks = self.cg_networks.text()
+                codex = getattr(s, "codex", None)
+                if codex is not None:
+                    codex.api_key  = self.codex_api_key.text()
+                    codex.base_url = self.codex_base_url.text()
+                    codex.enabled  = self.codex_enabled.isChecked()
+            except Exception:
+                pass
 
             s.save()
             self.settings_saved.emit()

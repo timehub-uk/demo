@@ -739,10 +739,29 @@ class ToastOverlay(QWidget):
         self._reposition()
 
 
+class _ClickableLabel(QLabel):
+    """QLabel that emits clicked signal and shows pointer cursor on hover."""
+
+    clicked = pyqtSignal()
+
+    def __init__(self, text: str = "", parent=None) -> None:
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class TradingStatusBar(QStatusBar):
+    # Emitted when user clicks any service indicator — opens status popup
+    status_popup_requested = pyqtSignal()
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setFixedHeight(26)
+        self._status_dialog = None   # lazy-created SystemStatusDialog
 
         def lbl(text: str, col: str = FG2) -> QLabel:
             l = QLabel(text)
@@ -751,17 +770,38 @@ class TradingStatusBar(QStatusBar):
             )
             return l
 
+        def clbl(text: str, col: str = FG2) -> _ClickableLabel:
+            """Clickable label — opens system status popup."""
+            l = _ClickableLabel(text)
+            l.setStyleSheet(
+                f"color:{col}; font-size:10px; padding:0 8px; font-family:monospace;"
+            )
+            l.setToolTip("Click to open System Status dashboard")
+            l.clicked.connect(self._open_status_popup)
+            return l
+
         self.mode_lbl   = lbl("MODE: MANUAL", YELLOW)
         self.at_lbl     = lbl("AT: IDLE")
         self.trades_lbl = lbl("TRADES: 0")
-        self.pnl_lbl    = lbl("P&L: $0.00")
-        self.api_lbl    = lbl("● API")
 
-        # DB / Redis — left side, prominent, with ONLINE/OFFLINE text
-        self.db_lbl    = lbl("● DB: —", FG2)
-        self.redis_lbl = lbl("● RDS: —", FG2)
+        # P&L — clickable, coloured, prominent
+        self.pnl_lbl = _ClickableLabel("P&L: $0.00")
+        self.pnl_lbl.setStyleSheet(
+            f"color:{FG2}; font-size:10px; padding:0 8px; font-family:monospace;"
+        )
+        self.pnl_lbl.setToolTip("Today's realised P&L — click for full report")
+        self.pnl_lbl.clicked.connect(self._open_status_popup)
 
-        for w in [self.db_lbl, self.redis_lbl, _vsep(),
+        self.api_lbl = clbl("● API")
+
+        # Network status — clickable
+        self.net_lbl = clbl("● NET: —", FG2)
+
+        # DB / Redis — clickable, opens status popup
+        self.db_lbl    = clbl("● DB: —",  FG2)
+        self.redis_lbl = clbl("● RDS: —", FG2)
+
+        for w in [self.net_lbl, self.db_lbl, self.redis_lbl, _vsep(),
                   self.mode_lbl, _vsep(), self.at_lbl, _vsep(),
                   self.trades_lbl, _vsep(), self.pnl_lbl, _vsep(),
                   self.api_lbl, _vsep()]:
@@ -783,10 +823,17 @@ class TradingStatusBar(QStatusBar):
         self._health_timer.setInterval(30_000)
         self._health_timer.timeout.connect(self._run_health_check)
 
+        # Network check every 15 s
+        self._net_timer = QTimer(self)
+        self._net_timer.setInterval(15_000)
+        self._net_timer.timeout.connect(self._check_network)
+
     def start_health_checks(self) -> None:
-        """Call once after the window is shown to begin live DB monitoring."""
-        self._run_health_check()          # immediate first check
+        """Call once after the window is shown to begin live monitoring."""
+        self._run_health_check()
+        self._check_network()
         self._health_timer.start()
+        self._net_timer.start()
 
     def _run_health_check(self) -> None:
         # PostgreSQL
@@ -807,6 +854,28 @@ class TradingStatusBar(QStatusBar):
         except Exception:
             self.set_service("redis", False)
 
+    def _check_network(self) -> None:
+        import socket
+        try:
+            socket.setdefaulttimeout(2)
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
+            self.set_service("network", True)
+        except Exception:
+            self.set_service("network", False)
+
+    def _open_status_popup(self) -> None:
+        """Open (or raise) the live System Status dialog."""
+        try:
+            from ui.system_status_widget import SystemStatusDialog
+            if self._status_dialog is None or not self._status_dialog.isVisible():
+                self._status_dialog = SystemStatusDialog(self.parent())
+                self._status_dialog.show()
+            else:
+                self._status_dialog.raise_()
+                self._status_dialog.activateWindow()
+        except Exception as exc:
+            import traceback; traceback.print_exc()
+
     def set_mode(self, mode: str) -> None:
         col = {"AUTO": GREEN, "MANUAL": YELLOW, "HYBRID": ACCENT,
                "PAPER": ACCENT2, "PAUSED": RED}.get(mode.upper(), FG1)
@@ -825,16 +894,22 @@ class TradingStatusBar(QStatusBar):
         )
 
     def set_service(self, name: str, ok: bool) -> None:
-        mapping = {"api": self.api_lbl, "db": self.db_lbl, "redis": self.redis_lbl}
+        mapping = {
+            "api":     self.api_lbl,
+            "db":      self.db_lbl,
+            "redis":   self.redis_lbl,
+            "network": self.net_lbl,
+        }
         widget = mapping.get(name)
         if widget:
             col  = GREEN if ok else RED
             tags = {
-                "api":   ("API",    "API"),
-                "db":    ("DB",     "DB"),
-                "redis": ("RDS",    "RDS"),
+                "api":     "API",
+                "db":      "DB",
+                "redis":   "RDS",
+                "network": "NET",
             }
-            short, _ = tags.get(name, (name.upper(), name.upper()))
+            short  = tags.get(name, name.upper())
             status = "ONLINE" if ok else "OFFLINE"
             widget.setText(f"● {short}: {status}")
             widget.setStyleSheet(
@@ -1405,6 +1480,14 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        # System Status tab — live Grafana-style monitoring dashboard
+        try:
+            from ui.system_status_widget import SystemStatusWidget
+            self._system_status_tab = SystemStatusWidget()
+            tabs.addTab(self._system_status_tab, "📡  Status")
+        except Exception as exc:
+            logger.warning(f"System status tab unavailable: {exc}")
+
         self.settings_page = tabs
         self.stack.addWidget(self.settings_page)
 
@@ -1524,6 +1607,21 @@ class MainWindow(QMainWindow):
         netm.addAction(self._act("Check All Connections", self._check_connections, "Ctrl+Shift+C"))
         netm.addAction(self._act("Start REST API Server", self._start_api_server))
         netm.addAction(self._act("View API Endpoints",    self._show_api_docs))
+        netm.addSeparator()
+        netm.addAction(self._act("📡  System Status Dashboard",
+                                  self._open_system_status_popup, "Ctrl+Shift+D"))
+
+        # Setup
+        setupm = mb.addMenu("&Setup")
+        sysm = setupm.addMenu("⚙  System")
+        sysm.addAction(self._act("System Settings",   lambda: self._navigate_to(8)))
+        sysm.addAction(self._act("📡  Status / Health", self._open_system_status_popup,
+                                  "Ctrl+Shift+D"))
+        sysm.addSeparator()
+        sysm.addAction(self._act("Connections",        lambda: self._navigate_to(7)))
+        setupm.addSeparator()
+        setupm.addAction(self._act("API Keys",         lambda: self._navigate_to(8)))
+        setupm.addAction(self._act("CoinGecko DEX",    self._open_coingecko_setup))
 
         # Help
         hm = mb.addMenu("&Help")
@@ -1952,6 +2050,37 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         self._navigate_to(9)
+
+    def _open_system_status_popup(self) -> None:
+        """Open (or raise) the live System Status / Grafana dashboard popup."""
+        try:
+            from ui.system_status_widget import SystemStatusDialog
+            if not hasattr(self, "_sys_status_dlg") or \
+               self._sys_status_dlg is None or \
+               not self._sys_status_dlg.isVisible():
+                self._sys_status_dlg = SystemStatusDialog(self)
+                self._sys_status_dlg.show()
+            else:
+                self._sys_status_dlg.raise_()
+                self._sys_status_dlg.activateWindow()
+        except Exception as exc:
+            self._intel.error("MainWindow", f"System Status popup error: {exc}")
+
+    def _open_coingecko_setup(self) -> None:
+        """Open Settings page and jump to the CoinGecko section."""
+        self._navigate_to(8)          # Settings page
+        try:
+            # Find the System tab (index 0) and scroll to CoinGecko section
+            if hasattr(self, "settings_page"):
+                for i in range(self.settings_page.count()):
+                    if "System" in self.settings_page.tabText(i):
+                        self.settings_page.setCurrentIndex(i)
+                        tab_widget = self.settings_page.widget(i)
+                        if hasattr(tab_widget, "_scroll_to_coingecko"):
+                            tab_widget._scroll_to_coingecko()
+                        break
+        except Exception:
+            pass
 
     def _add_chart_tab(self) -> None:
         self.trading_page.chart_panel._prompt_add_tab()
