@@ -133,8 +133,12 @@ class RedisClient:
         pipe = self._r.pipeline()
         pipe.incr(k)
         pipe.expire(k, window_secs)
-        count, _ = pipe.execute()
-        return int(count) <= max_calls
+        results = pipe.execute()
+        count = int(results[0])
+        # Only set TTL when the key is newly created to enforce a fixed window
+        if count == 1:
+            self._r.expire(k, window_secs)
+        return count <= max_calls
 
     # ── Pub/Sub ───────────────────────────────────────────────────────────
     def subscribe(self, channel: str, callback: Callable) -> None:

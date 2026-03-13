@@ -394,7 +394,7 @@ class BacktestWidget(QWidget):
             from reportlab.lib.pagesizes import A4
             from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table
             from reportlab.lib.styles import getSampleStyleSheet
-            import tempfile, os, subprocess
+            import tempfile, os, subprocess, sys
 
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
                 path = f.name
@@ -417,7 +417,12 @@ class BacktestWidget(QWidget):
             content.append(Table(data))
             doc.build(content)
 
-            subprocess.Popen(["open", path])
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            elif sys.platform == "win32":
+                os.startfile(path)
+            else:
+                subprocess.Popen(["xdg-open", path])
             QMessageBox.information(self, "PDF Exported", f"Report saved and opened:\n{path}")
         except Exception as exc:
             QMessageBox.warning(self, "Export Error", str(exc))

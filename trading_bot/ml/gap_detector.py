@@ -300,10 +300,10 @@ class GapDetector:
                         new_ids.add(gap.gap_id)
                         # Detect newly discovered gaps (not seen last scan)
                         if gap.gap_id not in self._prev_gap_ids and gap.state == "OPEN":
-                            if gap.gap_type == "DOWN":
-                                new_gap_ups.append(gap)    # DOWN = BUY signal
+                            if gap.gap_type == "UP":
+                                new_gap_ups.append(gap)    # UP = WATCH signal
                             else:
-                                new_gap_downs.append(gap)  # UP = WATCH signal
+                                new_gap_downs.append(gap)  # DOWN = BUY signal
                 except Exception as exc:
                     logger.debug(f"GapDetector: {sym}/{tf} failed: {exc!r}")
 

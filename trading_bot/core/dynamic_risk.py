@@ -97,6 +97,7 @@ class DynamicRiskManager:
         self._outcomes: deque[bool] = deque(maxlen=50)
         self._consecutive_losses: int = 0
         self._pause_until: float = 0.0   # Unix timestamp
+        self._last_drawdown: float = 0.0  # Updated by update_portfolio_for_drawdown()
 
         # Circuit breaker state
         self._circuit_broken: bool = False
@@ -291,17 +292,16 @@ class DynamicRiskManager:
         )
 
     def _current_drawdown(self) -> float:
-        if self._portfolio_peak <= 0:
-            return 0.0
-        # We don't have current value here – computed externally via update_portfolio
-        # Return last known drawdown (approximation)
-        return 0.0   # Will be populated when update_portfolio is called with current value
+        return self._last_drawdown
 
     def update_portfolio_for_drawdown(self, current: float) -> float:
         """Call with current value to get real-time drawdown %."""
         if self._portfolio_peak <= 0:
             self._portfolio_peak = current
+        elif current > self._portfolio_peak:
+            self._portfolio_peak = current
         dd = max(0.0, (self._portfolio_peak - current) / self._portfolio_peak)
+        self._last_drawdown = dd
         return dd
 
     def _rolling_win_rate(self) -> float:

@@ -165,7 +165,13 @@ class MasterOrchestrator:
             visit(name)
         return order
 
-    def _start_service(self, name: str) -> bool:
+    def _start_service(self, name: str, _starting: set | None = None) -> bool:
+        if _starting is None:
+            _starting = set()
+        if name in _starting:
+            logger.warning(f"[Orchestrator] Circular dependency detected for {name}, skipping")
+            return False
+        _starting.add(name)
         with self._lock:
             svc = self._services.get(name)
             if not svc:
@@ -180,7 +186,7 @@ class MasterOrchestrator:
                     logger.warning(
                         f"[Orchestrator] Dependency {dep} not ready for {name}"
                     )
-                    self._start_service(dep)
+                    self._start_service(dep, _starting)
 
             svc.state = ServiceState.STARTING
 

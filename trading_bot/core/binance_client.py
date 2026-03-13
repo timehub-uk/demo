@@ -335,7 +335,8 @@ class BinanceClient:
         with self._lock:
             if stream not in self._callbacks:
                 self._callbacks[stream] = []
-            self._callbacks[stream].append(callback)
+            if callback not in self._callbacks[stream]:
+                self._callbacks[stream].append(callback)
 
         if stream in self._ws_active and self._ws_active[stream]:
             return  # Already subscribed

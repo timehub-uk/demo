@@ -259,12 +259,12 @@ class TelegramBot:
     def _build_portfolio(self) -> str:
         if self._portfolio:
             try:
-                summary = self._portfolio.get_summary()
-                total = summary.get("total_value_usdt", 0)
-                positions = summary.get("positions", [])
+                summary = self._portfolio.get_snapshot()
+                total = float(summary.total_usdt)
+                positions = summary.positions
                 lines = [f"💼 <b>Portfolio</b>\nTotal: ${total:,.2f}\n"]
                 for p in positions[:10]:
-                    lines.append(f"• {p.get('symbol','?')}: {p.get('qty',0):.4f} @ ${p.get('avg_price',0):,.2f}")
+                    lines.append(f"• {p.symbol}: {float(p.qty):.4f} @ ${float(p.avg_entry):,.2f}")
                 return "\n".join(lines)
             except Exception:
                 pass

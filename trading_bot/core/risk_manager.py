@@ -63,7 +63,8 @@ class RiskManager:
 
         risk_amount = portfolio_value * Decimal(str(risk_pct / 100))
         stop_distance = abs(entry_price - stop_loss_price)
-        if stop_distance == 0:
+        min_stop = entry_price * Decimal("0.001")  # 0.1% minimum stop distance
+        if stop_distance < min_stop:
             return Decimal("0")
 
         qty = risk_amount / stop_distance

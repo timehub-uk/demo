@@ -131,17 +131,18 @@ class ExecutionAlgoEngine:
         )]
 
     def _twap_slices(self, p: ExecParams) -> List[ExecSlice]:
-        slice_qty = p.total_qty / p.num_slices
-        interval = (p.duration_minutes * 60) / p.num_slices
+        num_slices = max(1, p.num_slices)
+        slice_qty = p.total_qty / num_slices
+        interval = (p.duration_minutes * 60) / num_slices
         now = time.time()
         return [
             ExecSlice(
                 algo="twap", symbol=p.symbol, side=p.side, qty=slice_qty,
                 order_type="LIMIT", limit_price=None,
                 scheduled_at=now + i * interval,
-                notes=f"slice {i+1}/{p.num_slices}",
+                notes=f"slice {i+1}/{num_slices}",
             )
-            for i in range(p.num_slices)
+            for i in range(num_slices)
         ]
 
     def _vwap_slices(self, p: ExecParams) -> List[ExecSlice]:

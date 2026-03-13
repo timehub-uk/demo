@@ -196,5 +196,5 @@ class ApprovalWorkflowEngine:
         for cb in self._callbacks:
             try:
                 cb(event_type, req)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"[Workflow] callback error on {event_type}: {exc}")

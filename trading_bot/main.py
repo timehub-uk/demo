@@ -908,6 +908,7 @@ def start_background_services(services: dict, settings) -> None:
 
         _iceberg_ensemble = services.get("ensemble")
         _iceberg_council  = services.get("signal_council")
+        _iceberg_central  = services.get("ml_central")
 
         def _on_iceberg(signals):
             """
@@ -942,6 +943,21 @@ def start_background_services(services: dict, settings) -> None:
                                 symbol=sig.symbol,
                                 signal=ml_signal,
                                 confidence=sig.iceberg_score,
+                            )
+                        except Exception:
+                            pass
+                    if _iceberg_central:
+                        try:
+                            _iceberg_central.feed(
+                                source_name,
+                                symbol     = sig.symbol,
+                                signal     = ml_signal,
+                                confidence = sig.iceberg_score,
+                                note       = (
+                                    f"ICEBERG {sig.action} @ {sig.price:.6g}  "
+                                    f"refills={sig.refill_count}  "
+                                    f"hidden≈${sig.hidden_usd:,.0f}"
+                                ),
                             )
                         except Exception:
                             pass
