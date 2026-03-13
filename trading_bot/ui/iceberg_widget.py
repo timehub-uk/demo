@@ -106,7 +106,7 @@ class IcebergSummaryBar(QFrame):
         )
         return lbl
 
-    def update(self, floors: int, ceilings: int, strong: int, ts: str) -> None:
+    def update_stats(self, floors: int, ceilings: int, strong: int, ts: str) -> None:
         total = floors + ceilings
         self._lbl_floors.setText(
             f"<span style='color:{FG2}; font-size:10px;'>BID FLOORS: </span>"
@@ -147,10 +147,9 @@ class IcebergWidget(QWidget):
     ) -> None:
         super().__init__(parent)
         self._detector = iceberg_detector
-        self._results:       list = []
-        self._filter_side    = "ALL"
-        self._filter_action  = "ALL"
-        self._filter_level   = "ALL"
+        self._results:    list = []
+        self._filter_side  = "ALL"
+        self._filter_level = "ALL"
 
         self._build_ui()
         self._connect_detector()
@@ -363,7 +362,7 @@ class IcebergWidget(QWidget):
         ceilings = sum(1 for r in all_results if r.side == "ASK")
         strong   = sum(1 for r in all_results if r.alert_level == "STRONG")
         ts_str   = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-        self._summary.update(floors, ceilings, strong, ts_str)
+        self._summary.update_stats(floors, ceilings, strong, ts_str)
 
         # ── Populate table ────────────────────────────────────────────────────
         self._table.setSortingEnabled(False)
