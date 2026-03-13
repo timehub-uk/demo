@@ -1463,6 +1463,16 @@ class MainWindow(QMainWindow):
                 reload_dex_provider()
             except Exception:
                 pass
+            try:
+                from core.zerox_provider import reload_zerox_provider
+                reload_zerox_provider()
+            except Exception:
+                pass
+            try:
+                from core.metamask_live_data import reload_metamask_live_data
+                reload_metamask_live_data()
+            except Exception:
+                pass
 
         sys_settings.settings_saved.connect(_on_settings_saved)
         tabs.addTab(sys_settings, "⚙  System")

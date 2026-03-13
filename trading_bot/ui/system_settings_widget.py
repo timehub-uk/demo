@@ -151,6 +151,7 @@ class SystemSettingsWidget(QWidget):
         self._build_profile_tab()
         self._build_binance_tab()
         self._build_coingecko_tab()
+        self._build_zerox_tab()
         self._build_database_tab()
         self._build_ai_tab()
         self._build_ml_tab()
@@ -350,6 +351,110 @@ class SystemSettingsWidget(QWidget):
                     break
         except Exception:
             pass
+
+    def _build_zerox_tab(self) -> None:
+        _, form = self._scrollable_tab("0x Protocol", "chart")
+
+        form.addRow(_section_label("0x PROTOCOL SWAP API"))
+
+        info = QLabel(
+            "0x aggregates liquidity from Uniswap, Curve, Balancer, SushiSwap +30\n"
+            "more DEXs to find the best swap price on-chain.\n"
+            "Pricing: https://0x.org/pricing\n"
+            "Free account: create at https://dashboard.0x.org"
+        )
+        info.setStyleSheet(f"color:{FG1}; font-size:10px; font-family:monospace;")
+        info.setWordWrap(True)
+        form.addRow("", info)
+
+        self.zx_api_key = SecretEdit("Enter 0x API key from dashboard.0x.org")
+        form.addRow("API Key:", self.zx_api_key)
+
+        self.zx_plan = QComboBox()
+        for plan in ["Free", "Standard", "Custom"]:
+            self.zx_plan.addItem(plan)
+        form.addRow("Plan:", self.zx_plan)
+
+        self.zx_chain = QComboBox()
+        for chain in ["ethereum", "bsc", "polygon", "arbitrum", "optimism", "base"]:
+            self.zx_chain.addItem(chain)
+        form.addRow("Default Chain:", self.zx_chain)
+
+        self.zx_base_url = QLineEdit("https://api.0x.org")
+        form.addRow("Base URL:", self.zx_base_url)
+
+        self.zx_enabled = QCheckBox("Enable 0x swap price data and DEX routing")
+        form.addRow("Enable:", self.zx_enabled)
+
+        form.addRow(_section_label("RATE LIMITS  (auto-managed)"))
+        rate_info = QLabel(
+            "Free:      1 req/s\n"
+            "Standard:  5 req/s  ($1,000/month)\n"
+            "Custom:   20 req/s  ($2,500+/month)\n\n"
+            "The system enforces per-second rate limits automatically."
+        )
+        rate_info.setStyleSheet(f"color:{FG2}; font-size:10px; font-family:monospace;")
+        form.addRow("", rate_info)
+
+        # Test connection
+        test_btn = QPushButton("Test 0x Connection")
+        test_btn.setStyleSheet(
+            f"QPushButton {{ background:{BG4}; color:{ACCENT}; border:1px solid {BORDER2};"
+            f" border-radius:4px; padding:4px 14px; }}"
+            f"QPushButton:hover {{ background:{BG5}; }}"
+        )
+        self.zx_test_lbl = QLabel("")
+        self.zx_test_lbl.setStyleSheet(
+            f"color:{FG2}; font-size:10px; font-family:monospace;"
+        )
+        test_btn.clicked.connect(self._test_zerox)
+        form.addRow("", test_btn)
+        form.addRow("", self.zx_test_lbl)
+
+        form.addRow(_section_label("METAMASK LIVE DATA  (no API key required)"))
+
+        mm_info = QLabel(
+            "Reads wallet balance, token holdings, gas prices, and block data\n"
+            "directly from public free RPC nodes — no auth, no cost.\n"
+            "RPC endpoints: cloudflare-eth.com, bsc-dataseed.binance.org, polygon-rpc.com…"
+        )
+        mm_info.setStyleSheet(f"color:{FG1}; font-size:10px; font-family:monospace;")
+        mm_info.setWordWrap(True)
+        form.addRow("", mm_info)
+
+        self.mm_poll_interval = QSpinBox()
+        self.mm_poll_interval.setRange(10, 300)
+        self.mm_poll_interval.setValue(30)
+        self.mm_poll_interval.setSuffix(" s")
+        form.addRow("Poll Interval:", self.mm_poll_interval)
+
+        self.mm_live_enabled = QCheckBox("Enable MetaMask live balance / gas polling")
+        form.addRow("Enable:", self.mm_live_enabled)
+
+    def _test_zerox(self) -> None:
+        def _run():
+            try:
+                from core.zerox_provider import ZeroXProvider
+                zx = ZeroXProvider()
+                zx._api_key  = self.zx_api_key.text().strip()
+                zx._chain    = self.zx_chain.currentText()
+                zx._plan     = self.zx_plan.currentText()
+                zx._base_url = self.zx_base_url.text().strip() or "https://api.0x.org"
+                zx.active    = bool(zx._api_key)
+                ok, msg = zx.test_connection()
+                col = GREEN if ok else RED
+            except Exception as e:
+                ok, msg, col = False, str(e)[:80], RED
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: (
+                self.zx_test_lbl.setText(("✓ " if ok else "✗ ") + msg),
+                self.zx_test_lbl.setStyleSheet(
+                    f"color:{col}; font-size:10px; font-family:monospace;"
+                ),
+            ))
+        threading.Thread(target=_run, daemon=True).start()
+        self.zx_test_lbl.setText("Testing…")
+        self.zx_test_lbl.setStyleSheet(f"color:{YELLOW}; font-size:10px; font-family:monospace;")
 
     def _build_database_tab(self) -> None:
         _, form = self._scrollable_tab("Database", "database")
@@ -569,6 +674,22 @@ class SystemSettingsWidget(QWidget):
             self.ui_notif.setChecked(s.ui.show_notifications)
             self.ui_sounds.setChecked(s.ui.sound_alerts)
 
+            # 0x Protocol + MetaMask live data
+            try:
+                zx = getattr(s, "zerox", None)
+                if zx:
+                    self.zx_api_key.setText(getattr(zx, "api_key", ""))
+                    _set_combo(self.zx_plan,  getattr(zx, "plan",  "Free"))
+                    _set_combo(self.zx_chain, getattr(zx, "chain", "ethereum"))
+                    self.zx_base_url.setText(getattr(zx, "base_url", "https://api.0x.org"))
+                    self.zx_enabled.setChecked(bool(getattr(zx, "enabled", False)))
+                mm = getattr(s, "metamask", None)
+                if mm:
+                    self.mm_poll_interval.setValue(int(getattr(mm, "poll_interval", 30)))
+                    self.mm_live_enabled.setChecked(bool(getattr(mm, "live_enabled", False)))
+            except Exception:
+                pass
+
             # CoinGecko / Codex  (optional – fields may not exist in all configs)
             try:
                 cg = getattr(s, "coingecko", None)
@@ -663,6 +784,22 @@ class SystemSettingsWidget(QWidget):
             s.ui.default_interval   = self.ui_interval.currentText()
             s.ui.show_notifications = self.ui_notif.isChecked()
             s.ui.sound_alerts       = self.ui_sounds.isChecked()
+
+            # 0x Protocol + MetaMask live data
+            try:
+                zx = getattr(s, "zerox", None)
+                if zx is not None:
+                    zx.api_key  = self.zx_api_key.text()
+                    zx.plan     = self.zx_plan.currentText()
+                    zx.chain    = self.zx_chain.currentText()
+                    zx.base_url = self.zx_base_url.text()
+                    zx.enabled  = self.zx_enabled.isChecked()
+                mm = getattr(s, "metamask", None)
+                if mm is not None:
+                    mm.poll_interval = self.mm_poll_interval.value()
+                    mm.live_enabled  = self.mm_live_enabled.isChecked()
+            except Exception:
+                pass
 
             # CoinGecko / Codex  (optional – only write if the config model supports it)
             try:

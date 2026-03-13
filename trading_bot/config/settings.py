@@ -165,6 +165,14 @@ class CodexConfig(BaseModel):
     base_url: str = "https://graph.codex.io/graphql"
 
 
+class ZeroXConfig(BaseModel):
+    enabled: bool = False
+    api_key: str = ""
+    plan: str = "Free"
+    chain: str = "ethereum"
+    base_url: str = "https://api.0x.org"
+
+
 # ── Main settings class ───────────────────────────────────────────────────────
 
 class Settings:
@@ -193,6 +201,7 @@ class Settings:
         self.notifications = NotificationsConfig()
         self.coingecko = CoinGeckoConfig()
         self.codex = CodexConfig()
+        self.zerox = ZeroXConfig()
         self.first_run: bool = True
         self._loaded = True
 
@@ -212,6 +221,7 @@ class Settings:
             "notifications": self.notifications.model_dump(),
             "coingecko": self.coingecko.model_dump(),
             "codex": self.codex.model_dump(),
+            "zerox": self.zerox.model_dump(),
             "first_run": self.first_run,
         }
         from .encryption import EncryptionManager
@@ -251,6 +261,7 @@ class Settings:
         self.notifications = NotificationsConfig(**data.get("notifications", {}))
         self.coingecko = CoinGeckoConfig(**data.get("coingecko", {}))
         self.codex = CodexConfig(**data.get("codex", {}))
+        self.zerox = ZeroXConfig(**data.get("zerox", {}))
         self.first_run = data.get("first_run", True)
 
     def effective_api_key(self) -> str:
