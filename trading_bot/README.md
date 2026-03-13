@@ -17,7 +17,7 @@
 | **Pair Discovery** | 1 000+ pairs scanned across USDT / BTC / ETH / BNB / SOL quote assets every 15 min |
 | **Detection Suite** | Stealth accumulation · Liquidity depth grading · 4-stage volume breakout · Multi-TF trend scanner |
 | **Charts** | Candlestick, Heikin-Ashi, OHLC · EMA/SMA/VWAP/BB/Ichimoku overlays · RSI, MACD, ATR, ADX sub-panels · AI forecast cone |
-| **AutoTrader** | SEMI\_AUTO (confirm-to-trade) or FULL\_AUTO · Ping-Pong range trader · Statistical + triangular arbitrage |
+| **AutoTrader** | SEMI\_AUTO (confirm-to-trade) or FULL\_AUTO · Ping-Pong range trader · Statistical + Triangular + DEX↔CEX Spread arbitrage |
 | **Risk** | Kelly position sizing · Circuit-breaker drawdown guard · Monte Carlo simulation · Walk-forward validation |
 | **Order Book** | Real-time L1/L2 depth · Bid-ask spread · Volume imbalance bar |
 | **Trade Journal** | Full trade history · Signal attribution · Entry/exit annotation on charts |
@@ -27,7 +27,8 @@
 | **Intel Log** | Real-time dockable activity log · Filter by level · Search · Export |
 | **Tax** | UK HMRC CGT · Section 104 pool · 30-day bed-and-breakfast rule · Monthly PDF reports · email delivery |
 | **API** | REST API on `127.0.0.1:8765` · 15+ endpoints · Bearer token auth · Webhooks |
-| **MetaMask** | Optional profit-sweeping to any EVM address · BSC / Ethereum / Polygon / Arbitrum |
+| **On-Chain APIs** | CoinGecko DEX API v3 · Codex GraphQL · 0x Swap API v2 · free-tier budget scheduler (12 slots/hr) |
+| **MetaMask** | Live wallet polling via free public JSON-RPC · profit-sweeping to any EVM address |
 | **Security** | AES-256-GCM encrypted config · OS keychain integration · PBKDF2 master key · bcrypt auth |
 | **Performance** | Apple Silicon MPS GPU · Thread pools · Redis caching · connection pool tuned for 20 GB RAM |
 
@@ -87,6 +88,7 @@ The left sidebar has 9 numbered panels + F1 Help:
 | `Ctrl+9` | Settings |
 | `F1` | Help & Shortcuts |
 | `Ctrl+Shift+S` | Simulation Panel |
+| `Ctrl+Shift+D` | System Status Dashboard |
 | `Ctrl+L` | Toggle Intel Log |
 
 ---
@@ -106,7 +108,10 @@ trading_bot/
 │   ├── portfolio.py                ← Live balances · GBP/USD conversion · P&L
 │   ├── risk_manager.py             ← Stop-loss, take-profit, position sizing
 │   ├── gas_fee_engine.py           ← On-chain gas estimation (web3 + fallback)
-│   └── metamask_wallet.py          ← EVM profit-sweep integration
+│   ├── metamask_wallet.py          ← EVM profit-sweep integration
+│   ├── dex_data_provider.py        ← CoinGecko DEX API + Codex GraphQL · ApiRateLimiter · DexCallScheduler
+│   ├── metamask_live_data.py       ← EVM wallet polling via free public JSON-RPC (no API key)
+│   └── zerox_provider.py           ← 0x Swap API v2 · permit2/price endpoint · per-second rate limiter
 ├── ml/
 │   ├── trainer.py                  ← LSTM + Transformer training · Optuna HPO · MPS GPU
 │   ├── predictor.py                ← Real-time BUY/SELL/HOLD signals with confidence
@@ -150,7 +155,8 @@ trading_bot/
 │   ├── alert_panel.py              ← Alert history table
 │   ├── help_widget.py              ← Shortcuts, documentation, about
 │   ├── connections_widget.py       ← Service health monitor
-│   ├── system_settings_widget.py   ← System configuration
+│   ├── system_settings_widget.py   ← System + On-Chain API configuration
+│   ├── system_status_widget.py     ← Grafana-style status dashboard (CPU/MEM/DB/Redis/NET graphs)
 │   ├── layers_settings_panel.py    ← 10-layer configuration (77 modules)
 │   └── setup_wizard.py             ← First-run configuration wizard
 └── utils/
@@ -271,6 +277,10 @@ Settings are stored in `~/.binanceml/config.enc` (AES-256-GCM encrypted).
 | `tax` | jurisdiction, cgt\_annual\_allowance, basic\_rate\_pct, higher\_rate\_pct, email\_reports |
 | `ui` | theme, accent\_color, font\_size, chart\_candle\_count, default\_interval |
 | `ai` | provider (claude/openai/gemini), api keys, voice\_enabled |
+| `coingecko` | enabled, api\_key, plan (Demo/Analyst/Pro), base\_url, timeout, networks |
+| `codex` | enabled, api\_key, base\_url (GraphQL endpoint) |
+| `zerox` | enabled, api\_key, plan (Free/Standard/Custom), chain, base\_url |
+| `metamask` | address (0x…), network, poll\_interval |
 
 ---
 

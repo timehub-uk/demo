@@ -64,6 +64,7 @@ SHORTCUTS = [
     ("System",       "Ctrl+Q",         "Quit application"),
     ("System",       "F11",            "Toggle fullscreen"),
     ("System",       "Ctrl+Shift+C",   "Check all connections"),
+    ("System",       "Ctrl+Shift+D",   "Open System Status Dashboard"),
 ]
 
 # ── FAQ / documentation ───────────────────────────────────────────────────────
@@ -297,6 +298,84 @@ Hover for full trade details (side, price, qty, gross P&amp;L, fees, tax, net).<
 </ul>
 <p class="warn">⚠ Auto-sweep uses the Binance Withdrawal API only — your private key is never required or stored.</p>
 
+<h2>ON-CHAIN DATA APIS (Settings → On-Chain)</h2>
+
+<h3>MetaMask Live Data</h3>
+<p>Polls your EVM wallet address using <b>free public JSON-RPC endpoints</b> — no API key required.
+Runs as a background thread, updating every 30 seconds. Provides:</p>
+<ul>
+  <li>Native balance (ETH / BNB / MATIC …)</li>
+  <li>ERC-20 token balances (USDT, USDC, WBTC, DAI, LINK, UNI, AAVE, WETH …)</li>
+  <li>Current gas price (standard + fast tier)</li>
+  <li>Latest block number and transaction count (nonce)</li>
+</ul>
+<p>Configure under <code>Settings (Ctrl+9) → On-Chain → MetaMask Live Data</code>.</p>
+
+<h3>CoinGecko DEX API v3</h3>
+<p>On-chain pool data sourced from CoinGecko's DEX endpoints:</p>
+<ul>
+  <li>Top liquidity pools by network (Ethereum, BSC, Polygon, Arbitrum)</li>
+  <li>Pool OHLCV data and 24h volume / liquidity statistics</li>
+  <li>Trending tokens by network</li>
+  <li>Token metadata (market cap, price, fully diluted valuation)</li>
+</ul>
+<p>Free tier: <b>10,000 calls/month</b> → automatically budgeted to <b>~13 calls/hr</b>
+using a 12-slot hourly scheduler + 1 emergency reserve slot.</p>
+<table>
+  <tr><th>Plan</th><th>Monthly quota</th><th>Auto-budget (calls/hr)</th></tr>
+  <tr><td>Demo</td><td>10,000</td><td>~13</td></tr>
+  <tr><td>Analyst / Lite</td><td>500,000</td><td>~680</td></tr>
+  <tr><td>Pro</td><td>1,000,000</td><td>~1,370</td></tr>
+</table>
+<p>Configure under <code>Settings (Ctrl+9) → On-Chain → CoinGecko DEX API</code>.
+Get a free API key at <code>https://www.coingecko.com/en/api</code>.</p>
+
+<h3>Codex GraphQL API</h3>
+<p>On-chain token and pair statistics via GraphQL. Used as a <b>confirmation gate</b>
+for high-confidence DEX arbitrage opportunities:</p>
+<ul>
+  <li>Pair stats: price, 24h volume, liquidity, buy/sell counts</li>
+  <li>Token info: market cap, holders, deployer, launch date</li>
+  <li>OHLCV data and recent trades</li>
+</ul>
+<p>Free tier: <b>~500 calls/month</b> → <b>~1 call per 87 minutes</b>.
+Only fired after 0x confirms a spread is real (emergency confirmation gate).
+Get a free API key at <code>https://www.codex.io</code>.</p>
+
+<h3>0x Protocol Swap API v2</h3>
+<p>Real-time <b>executable DEX swap prices</b> aggregated across Uniswap, Curve,
+Balancer, SushiSwap and other major DEXs:</p>
+<ul>
+  <li><code>permit2/price</code> — indicative price, no signature needed (used for validation)</li>
+  <li>Returns best route, price impact %, gas estimate, liquidity sources breakdown</li>
+  <li>Supports: Ethereum · BSC · Polygon · Arbitrum · Optimism · Base</li>
+</ul>
+<p>Free tier: <b>1 req/s</b>. The arbitrage detector throttles to
+1 call per 30 s per symbol to stay well within the budget.
+Get a free API key at <code>https://dashboard.0x.org</code>.</p>
+
+<h3>DEX Arbitrage Confirmation Pipeline</h3>
+<p>When a DEX↔CEX spread opportunity is detected:</p>
+<ol>
+  <li><b>CoinGecko cache</b> (free, no new call) → pool DEX price</li>
+  <li><b>Binance WebSocket</b> → CEX price · spread &gt; 0.3%?</li>
+  <li><b>0x get_price()</b> → confirms actual <em>executable</em> DEX price
+    — boosts confidence ×1.1 if confirmed, discounts ×0.7 if price was tighter</li>
+  <li><b>Codex emergency call</b> → pool liquidity depth (fired only when 0x confirms + confidence &gt; 80%)</li>
+</ol>
+<p>This preserves the Codex monthly budget for genuine opportunities only.</p>
+
+<h3>DEX Features in ML Training</h3>
+<p>When CoinGecko is active, the ML training pipeline automatically injects four
+on-chain features per symbol:</p>
+<table>
+  <tr><th>Feature</th><th>What it represents</th></tr>
+  <tr><td><code>dex_volume_24h_usd_norm</code></td><td>Log-normalised 24h on-chain volume</td></tr>
+  <tr><td><code>dex_liquidity_usd_norm</code></td><td>Log-normalised pool liquidity depth</td></tr>
+  <tr><td><code>dex_vol_liq_ratio</code></td><td>Volume ÷ liquidity (liquidity utilisation)</td></tr>
+  <tr><td><code>dex_pool_count_top5</code></td><td>Number of top-5 pools for this token</td></tr>
+</table>
+
 <h2>RISK MANAGEMENT</h2>
 <p class="warn">⚠ Cryptocurrency trading involves substantial risk of loss.</p>
 <ul>
@@ -328,6 +407,33 @@ Hover for full trade details (side, price, qty, gross P&amp;L, fees, tax, net).<
       initialise → evaluate → gate (Sharpe &lt; 0.5 rejected) → breed → promote champions.</li>
   <li><code>Safety Scanner (Ctrl+Shift+F)</code> – Honeypot detection, liquidity lock check,
       contract analysis, rug-pull scoring (0–100%).</li>
+</ul>
+
+<h2>SYSTEM STATUS DASHBOARD (Ctrl+Shift+D)</h2>
+<p>Opens a Grafana-style popup showing 60-second rolling graphs for six system metrics:</p>
+<table>
+  <tr><th>Panel</th><th>What it shows</th></tr>
+  <tr><td>CPU %</td><td>System CPU utilisation (all cores, sampled every second)</td></tr>
+  <tr><td>MEM %</td><td>System memory utilisation</td></tr>
+  <tr><td>DB Latency ms</td><td>PostgreSQL round-trip query time</td></tr>
+  <tr><td>Redis Latency ms</td><td>Redis PING round-trip time</td></tr>
+  <tr><td>NET TX KB/s</td><td>Network bytes sent per second</td></tr>
+  <tr><td>NET RX KB/s</td><td>Network bytes received per second</td></tr>
+</table>
+<p>A DEX API Quota panel shows remaining CoinGecko calls/hr, Codex calls/hr,
+scheduler cache warm slots (N/12), and emergency slot availability.</p>
+<p>Also accessible via: <b>Setup menu → System → Status/Health</b>
+or by clicking any status indicator in the bottom status bar.</p>
+
+<h2>STATUS BAR (Bottom of Screen)</h2>
+<p>The bottom status bar shows live indicators — click any to open the System Status Dashboard:</p>
+<ul>
+  <li><span class="ok">● Network: ONLINE</span> — internet connectivity (checked every 15 s)</li>
+  <li><span class="ok">● DB: ONLINE</span> — PostgreSQL connection status</li>
+  <li><span class="ok">● Redis: ONLINE</span> — Redis connection status</li>
+  <li><span class="ok">● API: ACTIVE</span> — Binance REST API status</li>
+  <li><b>P/L: +£12.34</b> — today's realised profit/loss (GBP)</li>
+  <li><b>Trading mode</b> — PAPER / LIVE / AUTO / HYBRID</li>
 </ul>
 
 <h2>SUPPORT &amp; LOGS</h2>
@@ -470,7 +576,13 @@ class HelpWidget(QWidget):
             (GREEN,  "Stealth Accumulation Detector — WATCH / ALERT / STRONG"),
             (GREEN,  "Liquidity Depth Analyzer — DEEP / ADEQUATE / THIN / ILLIQUID"),
             (GREEN,  "Volume Breakout Detector — 4-stage LAUNCH → BREAKOUT"),
-            (GREEN,  "Statistical + triangular arbitrage auto-trader"),
+            (GREEN,  "Statistical + Triangular + DEX↔CEX Spread arbitrage"),
+            (GREEN,  "CoinGecko DEX API — on-chain pool data, 12-slot hourly scheduler"),
+            (GREEN,  "Codex GraphQL API — pool liquidity confirmation gate"),
+            (GREEN,  "0x Protocol Swap API — executable DEX price validation"),
+            (GREEN,  "MetaMask Live Data — free public RPC wallet polling"),
+            (GREEN,  "DEX on-chain ML features — volume, liquidity, pool count"),
+            (GREEN,  "Grafana-style System Status Dashboard (Ctrl+Shift+D)"),
             (GREEN,  "Ping-Pong range trader with consecutive-loss protection"),
             (GREEN,  "Live Simulation Twin — 6 shadow variants + drift detection"),
             (GREEN,  "Strategy Mutation Lab — genetic parameter evolution"),

@@ -21,13 +21,14 @@
 13. [Trade Journal](#13-trade-journal)
 14. [Backtesting Engine](#14-backtesting-engine)
 15. [Connections & Health](#15-connections--health)
-16. [Settings & Layer Configuration](#16-settings--layer-configuration)
-17. [Simulation Panel](#17-simulation-panel)
-18. [REST API Reference](#18-rest-api-reference)
-19. [UK Tax (CGT) Reporting](#19-uk-tax-cgt-reporting)
-20. [Keyboard Shortcuts](#20-keyboard-shortcuts)
-21. [Troubleshooting](#21-troubleshooting)
-22. [Architecture Overview — 10-Layer Stack](#22-architecture-overview--10-layer-stack)
+16. [On-Chain Data APIs](#16-on-chain-data-apis)
+17. [Settings & Layer Configuration](#17-settings--layer-configuration)
+18. [Simulation Panel](#18-simulation-panel)
+19. [REST API Reference](#19-rest-api-reference)
+20. [UK Tax (CGT) Reporting](#20-uk-tax-cgt-reporting)
+21. [Keyboard Shortcuts](#21-keyboard-shortcuts)
+22. [Troubleshooting](#22-troubleshooting)
+23. [Architecture Overview — 10-Layer Stack](#23-architecture-overview--10-layer-stack)
 
 ---
 
@@ -177,12 +178,41 @@ Toggle it with **Ctrl+L**.
 
 ### Status Bar
 
-The bottom status bar shows:
-- Trading mode (PAPER / LIVE / AUTO / HYBRID)
-- AutoTrader state
-- Today's trade count and P&L
-- API, database, and Redis health indicators
-- CPU usage
+The bottom status bar shows live indicators — **click any indicator** to open the
+System Status Dashboard:
+
+| Indicator | Description |
+|-----------|-------------|
+| **Network: ONLINE / OFFLINE** | Internet connectivity (checked every 15 s) |
+| **DB: ONLINE / OFFLINE** | PostgreSQL connection |
+| **Redis: ONLINE / OFFLINE** | Redis connection |
+| **API: ACTIVE / DOWN** | Binance REST API status |
+| **P/L: +£12.34** | Today's realised profit/loss (GBP) |
+| Trading mode | PAPER / LIVE / AUTO / HYBRID |
+| AutoTrader state | SCANNING / IDLE / PAUSED |
+| CPU usage | System CPU % |
+
+### System Status Dashboard
+
+**Shortcut:** `Ctrl+Shift+D` · Also accessible via **Setup → System → Status/Health**
+or by clicking any status indicator in the bottom bar.
+
+Displays 60-second rolling Grafana-style area charts for:
+
+| Panel | Metric |
+|-------|--------|
+| CPU % | System CPU utilisation, sampled every second |
+| MEM % | System memory utilisation |
+| DB Latency ms | PostgreSQL round-trip query time |
+| Redis Latency ms | Redis PING round-trip time |
+| NET TX KB/s | Network bytes sent per second |
+| NET RX KB/s | Network bytes received per second |
+
+A **DEX API Quota** panel shows:
+- CoinGecko calls remaining this hour
+- Codex calls remaining this hour
+- DexCallScheduler cache warm slots (N/12)
+- Emergency reserve slot available (Yes/No)
 
 ---
 
@@ -433,6 +463,21 @@ Default monitored pairs: BTC/ETH · BTC/BNB · ETH/BNB · SOL/AVAX · XRP/ADA ·
 Exploits price inconsistencies between three currency pairs.
 Example: BTC → ETH → BNB → BTC. If this round-trip returns > 100% + fees, a signal is emitted.
 
+#### DEX↔CEX Spread Arbitrage
+
+Detects price divergences between on-chain DEX pools and Binance (CEX).
+Requires CoinGecko DEX API to be active. Uses a **zero-extra-call** approach:
+
+1. CoinGecko pool prices are read from the DexCallScheduler's cache
+2. Compared to the live Binance CEX price
+3. Spreads > 0.3% and confidence > 0.55 are flagged as opportunities
+4. High-confidence opportunities (> 0.8 confidence, > 0.5% spread) trigger:
+   - **0x price validation** — confirms the spread is real and executable
+     (boosts confidence if confirmed, discounts if 0x price is tighter)
+   - **Codex emergency call** — fetches pool liquidity depth (only fired after 0x confirms)
+
+Networks monitored: Ethereum, BSC, Polygon, Arbitrum (when pools are cached by the scheduler)
+
 ### Opportunity Score
 
 ```
@@ -443,6 +488,14 @@ score = z_magnitude   × 0.35
 ```
 
 Only opportunities with `score ≥ 0.50` and `confidence ≥ 0.55` are shown.
+
+**Arbitrage types** (`arb_type` field):
+
+| Type | Description |
+|------|-------------|
+| `STAT` | Statistical arbitrage — cointegrated CEX pairs |
+| `TRIANGULAR` | Three-leg currency loop on Binance |
+| `DEX_CEX_SPREAD` | On-chain DEX pool vs Binance CEX price divergence |
 
 ### Controls
 
@@ -489,8 +542,24 @@ Only opportunities with `score ≥ 0.50` and `confidence ≥ 0.55` are shown.
 |-------|-------------|
 | 1 — Archive | Downloads up to 1 year of 1m/5m/15m/1h/4h candles for top 100 USDT pairs |
 | 2 — Feature Engineering | Computes 18+ indicators: RSI, MACD, ATR, BB, OBV, VWAP, etc. |
+| 2b — DEX Features | Injects on-chain features when CoinGecko API is active (see below) |
 | 3 — LSTM Training | Trains LSTM + Transformer with Optuna HPO · Apple Silicon MPS acceleration |
 | 4 — Per-Token | Fine-tunes individual models for each active trading pair |
+
+### DEX On-Chain ML Features
+
+When CoinGecko DEX API is configured and active, four additional features are injected
+into each training row automatically (log-normalised, filled with 0 when API is inactive):
+
+| Feature | Description |
+|---------|-------------|
+| `dex_volume_24h_usd_norm` | Log-normalised 24h on-chain trading volume |
+| `dex_liquidity_usd_norm` | Log-normalised pool total liquidity |
+| `dex_vol_liq_ratio` | Volume ÷ Liquidity ratio (liquidity utilisation rate) |
+| `dex_pool_count_top5` | Number of qualifying top-5 pools for this token |
+
+These features help the model distinguish tokens with deep DEX liquidity from
+thin markets prone to manipulation.
 
 ### Continuous Learning
 
@@ -649,11 +718,77 @@ Click **Check All** to force an immediate health check. Auto-checks run every **
 
 ---
 
-## 16. Settings & Layer Configuration
+## 16. On-Chain Data APIs
+
+Configure under **Settings (Ctrl+9) → On-Chain** tab.
+
+### 16.0.1 MetaMask Live Data
+
+Polls an EVM wallet address using **free public JSON-RPC endpoints** — no API key required.
+Runs as a background thread updating every 30 seconds.
+
+| Setting | Description |
+|---------|-------------|
+| Wallet address | Your 0x… EVM address |
+| Network | ethereum / bsc / polygon / arbitrum / optimism / base |
+| Poll interval | Seconds between polls (default: 30) |
+
+Data collected each poll: native balance (ETH/BNB/MATIC), ERC-20 token balances
+(USDT/USDC/WBTC/DAI/LINK/UNI/AAVE/WETH), gas price, block number, transaction count.
+
+USD values are sourced from the live Binance price feed (no additional API calls).
+
+### 16.0.2 CoinGecko DEX API v3
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| API key | — | Free key from https://dashboard.coingecko.com |
+| Plan | Demo | Demo / Analyst / Lite / Pro / Enterprise |
+| Networks | eth, bsc, polygon_pos, arbitrum | Chains to monitor |
+| Base URL | https://api.coingecko.com/api/v3 | Override for self-hosted |
+| Timeout | 10 s | Per-request timeout |
+| Enabled | Off | Master toggle |
+
+**Budget calculation:** monthly quota ÷ days\_in\_month ÷ 24 = hourly budget.
+A 12-slot hourly call plan runs in the background scheduler. One emergency
+reservation slot is kept for high-confidence arbitrage confirmation.
+
+**Free tier (Demo plan): 10,000 calls/month → ~13 calls/hr → 12 scheduled + 1 emergency.**
+
+### 16.0.3 Codex GraphQL API
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| API key | — | Free key from https://www.codex.io |
+| Base URL | https://graph.codex.io/graphql | GraphQL endpoint |
+| Enabled | Off | Master toggle |
+
+**Free tier: ~500 calls/month → ~0.69 calls/hr (~1 call per 87 minutes).**
+Used exclusively as an emergency confirmation gate — fires only after 0x
+validates a high-confidence DEX_CEX_SPREAD opportunity.
+
+### 16.0.4 0x Protocol Swap API v2
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| API key | — | Free key from https://dashboard.0x.org |
+| Plan | Free | Free / Standard / Custom |
+| Chain | ethereum | Default chain for price queries |
+| Base URL | https://api.0x.org | API base |
+| Enabled | Off | Master toggle |
+
+**Free tier: 1 req/s rate limit.** The arbitrage detector throttles to
+1 call per 30 s per symbol, leaving ample headroom for other uses.
+
+Supported chains: Ethereum · BSC · Polygon · Arbitrum · Optimism · Base
+
+---
+
+## 17. Settings & Layer Configuration
 
 **Navigate:** SET (Ctrl+9)
 
-### 16.1 API Keys
+### 17.1 API Keys
 
 ```
 Binance API Key:    [your API key]
@@ -663,7 +798,7 @@ Binance Secret:     [your API secret]
 
 **Never share your API secret.** Keys are stored AES-256-GCM encrypted on disk.
 
-### 16.2 Trading Settings
+### 17.2 Trading Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -674,7 +809,7 @@ Binance Secret:     [your API secret]
 | Cooldown after SL | 15 min | Pause after a stop-loss hit |
 | Order type | LIMIT | Default order type (LIMIT / MARKET) |
 
-### 16.3 ML Settings
+### 17.3 ML Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -686,7 +821,7 @@ Binance Secret:     [your API secret]
 | Confidence threshold | 0.72 | Minimum to emit a signal |
 | Top tokens | 100 | Pairs to include in training |
 
-### 16.4 Tax Settings
+### 17.4 Tax Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -697,7 +832,7 @@ Binance Secret:     [your API secret]
 | Report currency | GBP | Currency for HMRC reports |
 | Email reports | On | Email monthly PDF on the 1st |
 
-### 16.5 UI Settings
+### 17.5 UI Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -707,7 +842,7 @@ Binance Secret:     [your API secret]
 | Default interval | 1m | Default chart timeframe |
 | Chart candle count | 200 | Visible candles on chart |
 
-### 16.6 Layer Configuration Panel
+### 17.6 Layer Configuration Panel
 
 Navigate to **Settings (Ctrl+9)** → **🧩 Layers** tab,
 or use **Simulation > ⚙ Layer Settings** in the menu bar.
@@ -738,7 +873,7 @@ Each of the 10 layers has its own tab with controls for every module.
 
 ---
 
-## 17. Simulation Panel
+## 18. Simulation Panel
 
 **Navigate:** Simulation menu (`Ctrl+Shift+S`) or nav sidebar **SIM**
 
@@ -797,7 +932,7 @@ Token & contract safety analysis for new token launches:
 
 ---
 
-## 18. REST API Reference
+## 19. REST API Reference
 
 The embedded REST API starts automatically on `http://127.0.0.1:8765`.
 
@@ -876,7 +1011,7 @@ curl -X POST http://localhost:8765/api/v1/webhook/register \
 
 ---
 
-## 19. UK Tax (CGT) Reporting
+## 20. UK Tax (CGT) Reporting
 
 BinanceML Pro calculates UK Capital Gains Tax using HMRC rules:
 
@@ -919,7 +1054,7 @@ for your specific situation.
 
 ---
 
-## 20. Keyboard Shortcuts
+## 21. Keyboard Shortcuts
 
 ### Navigation
 
@@ -936,6 +1071,7 @@ for your specific situation.
 | `Ctrl+9` | Settings |
 | `F1` | Help |
 | `Ctrl+Shift+S` | Simulation Panel |
+| `Ctrl+Shift+D` | System Status Dashboard |
 | `Ctrl+L` | Toggle Intel Log dock |
 | `Ctrl+B` | Toggle Order Book dock |
 
@@ -994,7 +1130,7 @@ for your specific situation.
 
 ---
 
-## 21. Troubleshooting
+## 22. Troubleshooting
 
 ### Application Won't Start
 
@@ -1081,7 +1217,7 @@ python trading_bot/main.py    # Setup Wizard will open again
 
 ---
 
-## 22. Architecture Overview — 10-Layer Stack
+## 23. Architecture Overview — 10-Layer Stack
 
 BinanceML Pro v2.0 implements a full institutional-grade trading stack
 organised into 10 functional layers with 77 modules:
@@ -1156,6 +1292,11 @@ organised into 10 functional layers with 77 modules:
 | Thread safety | Named locks on `_candle_cache`, `_open_trade_ids`, `_active_symbols` |
 | Gas estimation | web3 RPC with graceful fallback to jittered default gwei values |
 | Config | AES-256-GCM encrypted · PBKDF2 master key · 600 000 iterations |
+| DEX scheduler | `DexCallScheduler` — 12-slot hourly plan + 1 emergency reserve |
+| API budgeting | `ApiRateLimiter` — monthly quota ÷ days ÷ 24 = hourly token bucket |
+| MetaMask live data | Free public JSON-RPC — no API key, no cost |
+| 0x price validation | permit2/price endpoint · per-second rate limiter · 30 s per-symbol cooldown |
+| Arbitrage types | STAT · TRIANGULAR · DEX_CEX_SPREAD (3 types) |
 
 ---
 
