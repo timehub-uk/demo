@@ -351,6 +351,13 @@ def build_services(settings):
         pair_scanner=pair_scanner,
     )
 
+    intel.system("Startup", "Initialising iceberg detector (hidden order discovery, ICEBERG_PARTS=100)…")
+    from ml.iceberg_detector import IcebergDetector
+    iceberg_detector = IcebergDetector(
+        binance_client=binance,
+        pair_scanner=pair_scanner,
+    )
+
     intel.system("Startup", "Initialising ML central command (unified signal pipeline)…")
     from ml.ml_central_command import MLCentralCommand
     ml_central = MLCentralCommand()
@@ -475,6 +482,7 @@ def build_services(settings):
         "breakout_detector":   breakout_detector,
         "gap_detector":        gap_detector,
         "large_candle_watcher": large_candle_watcher,
+        "iceberg_detector":     iceberg_detector,
         "ml_central":           ml_central,
         "metamask_wallet":     metamask_wallet,
         "contract_analyzer":   contract_analyzer,
@@ -889,6 +897,59 @@ def start_background_services(services: dict, settings) -> None:
 
         lcw.on_alert(_on_large_candle)
 
+    # Iceberg detector (hidden order discovery — order book polling every 5 s)
+    iceberg_det = services.get("iceberg_detector")
+    if iceberg_det:
+        iceberg_det.start()
+        intel.system(
+            "Startup",
+            "Iceberg detector started (ICEBERG_PARTS=100, BID=FLOOR / ASK=CEILING signals)",
+        )
+
+        _iceberg_ensemble = services.get("ensemble")
+        _iceberg_council  = services.get("signal_council")
+
+        def _on_iceberg(signals):
+            """
+            Called by IcebergDetector after each scan with confirmed iceberg signals.
+            BID icebergs → FLOOR → feed as BUY signal (whale defending price).
+            ASK icebergs → CEILING → feed as WATCH signal (whale blocking).
+            """
+            try:
+                for sig in signals:
+                    if sig.alert_level not in ("ALERT", "STRONG"):
+                        continue
+                    ml_signal   = "BUY"   if sig.side == "BID" else "WATCH"
+                    source_name = "iceberg_floor" if sig.side == "BID" else "iceberg_ceiling"
+                    if _iceberg_ensemble:
+                        try:
+                            _iceberg_ensemble.feed(source_name, {
+                                "symbol":     sig.symbol,
+                                "signal":     ml_signal,
+                                "confidence": sig.iceberg_score,
+                                "note": (
+                                    f"ICEBERG {sig.action} @ {sig.price:.6g}  "
+                                    f"refills={sig.refill_count}  "
+                                    f"hidden≈${sig.hidden_usd:,.0f}"
+                                ),
+                            })
+                        except Exception:
+                            pass
+                    if _iceberg_council:
+                        try:
+                            _iceberg_council.register_signal(
+                                source=source_name,
+                                symbol=sig.symbol,
+                                signal=ml_signal,
+                                confidence=sig.iceberg_score,
+                            )
+                        except Exception:
+                            pass
+            except Exception as exc:
+                logger.warning(f"Iceberg callback error: {exc!r}")
+
+        iceberg_det.on_alert(_on_iceberg)
+
     # Market pulse broad monitor
     market_pulse = services.get("market_pulse")
     if market_pulse:
@@ -1251,6 +1312,7 @@ def main() -> int:
         breakout_detector=services.get("breakout_detector"),
         gap_detector=services.get("gap_detector"),
         large_candle_watcher=services.get("large_candle_watcher"),
+        iceberg_detector=services.get("iceberg_detector"),
         ml_central=services.get("ml_central"),
         metamask_wallet=services.get("metamask_wallet"),
         sim_twin=services.get("sim_twin"),

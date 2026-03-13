@@ -857,6 +857,7 @@ class MainWindow(QMainWindow):
         breakout_detector=None,
         gap_detector=None,
         large_candle_watcher=None,
+        iceberg_detector=None,
         ml_central=None,
         metamask_wallet=None,
         sim_twin=None,
@@ -924,6 +925,7 @@ class MainWindow(QMainWindow):
         self._breakout_detector      = breakout_detector
         self._gap_detector           = gap_detector
         self._large_candle_watcher   = large_candle_watcher
+        self._iceberg_detector       = iceberg_detector
         self._ml_central             = ml_central
 
         self._discord        = discord
@@ -1197,6 +1199,17 @@ class MainWindow(QMainWindow):
                 )
                 self.large_candle_widget.symbol_selected.connect(self._on_symbol_changed)
                 tabs.addTab(self.large_candle_widget, "🕯  Candles")
+            except Exception:
+                pass
+
+            # Iceberg detector tab (hidden order discovery — ICEBERG_PARTS=100)
+            try:
+                from ui.iceberg_widget import IcebergWidget
+                self.iceberg_widget = IcebergWidget(
+                    iceberg_detector=self._iceberg_detector,
+                )
+                self.iceberg_widget.symbol_selected.connect(self._on_symbol_changed)
+                tabs.addTab(self.iceberg_widget, "🧊  Icebergs")
             except Exception:
                 pass
 
