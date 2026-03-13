@@ -339,12 +339,24 @@ class ArbitrageDetector:
             if opp:
                 opportunities.append(opp)
 
-        # 4. DEX↔CEX spread arbitrage (CoinGecko/Codex — only if APIs are active)
+        # 4. DEX↔CEX spread arbitrage — read from scheduler cache (zero API calls)
+        #    The DexCallScheduler pre-fetches pool lists every 5 min; we only
+        #    consume its cached results here.  When a high-confidence opportunity
+        #    is found, we request an emergency deep-dive via the 13th reserved slot.
         try:
-            from core.dex_data_provider import get_dex_provider
+            from core.dex_data_provider import get_dex_provider, get_dex_scheduler
             dex = get_dex_provider()
             if dex.coingecko_active or dex.codex_active:
-                dex_opps = dex.scan_dex_arbitrage_opportunities()
+                # Use cached pool data from scheduler (no new API call consumed)
+                sched = get_dex_scheduler()
+                dex_opps = dex.scan_dex_arbitrage_opportunities(
+                    cached_pools={
+                        "eth":         sched.get("top_pools_eth", []),
+                        "bsc":         sched.get("top_pools_bsc", []),
+                        "arbitrum":    sched.get("top_pools_arb", []),
+                        "polygon_pos": sched.get("top_pools_poly", []),
+                    }
+                )
                 for d in dex_opps:
                     if d["spread_pct"] < 0.2 or d["confidence"] < MIN_CONFIDENCE:
                         continue
@@ -352,12 +364,22 @@ class ArbitrageDetector:
                         arb_type="DEX_CEX_SPREAD",
                         leg_buy=d["symbol"],
                         leg_sell=f"DEX:{d['network']}:{d['pool_address'][:8]}",
-                        spread_z=d["spread_pct"] / 0.5,   # normalise as pseudo z-score
+                        spread_z=d["spread_pct"] / 0.5,
                         expected_profit_pct=max(0, d["spread_pct"] - 0.15),
                         confidence=d["confidence"],
                         score=d["confidence"] * min(d["spread_pct"] / 1.0, 1.0),
                     )
                     opportunities.append(opp)
+                    # For very high-confidence opportunities, burn the emergency
+                    # slot to fetch real-time pool depth data
+                    if (d["confidence"] > 0.8 and d["spread_pct"] > 0.5
+                            and sched.emergency_available):
+                        sched.emergency_call(
+                            "get_pool_info",
+                            (d["network"], d["pool_address"]),
+                            cache_key=f"arb_pool_{d['pool_address'][:8]}",
+                            ttl=120,
+                        )
         except Exception as exc:
             logger.debug(f"DEX arb scan step failed: {exc}")
 

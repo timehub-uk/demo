@@ -341,6 +341,10 @@ class SystemStatusWidget(QWidget):
 
         root.addLayout(grid, 1)
 
+        # ── DEX API quota panel ───────────────────────────────────────────────
+        self._dex_panel = self._build_dex_quota_panel()
+        root.addWidget(self._dex_panel)
+
         # ── Footer / legend ───────────────────────────────────────────────────
         footer = QLabel(
             "⬤ Live  •  1 s refresh  •  60 s window  •  Grafana-style monitoring"
@@ -351,6 +355,38 @@ class SystemStatusWidget(QWidget):
 
         # track startup time for uptime
         self._start_ts = time.time()
+
+    def _build_dex_quota_panel(self) -> QFrame:
+        """Build the DEX API quota / call schedule status panel."""
+        panel = QFrame()
+        panel.setFixedHeight(70)
+        panel.setStyleSheet(
+            f"QFrame {{ background:{BG3}; border:1px solid {BORDER2}; border-radius:6px; }}"
+        )
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(14, 6, 14, 6)
+        layout.setSpacing(20)
+
+        title = QLabel("DEX API")
+        title.setStyleSheet(
+            f"color:{ACCENT}; font-size:10px; font-weight:bold; font-family:monospace;"
+        )
+        layout.addWidget(title)
+
+        self._dex_cg_lbl  = QLabel("CoinGecko: —")
+        self._dex_cx_lbl  = QLabel("Codex: —")
+        self._dex_sched_lbl = QLabel("Scheduler: —")
+        self._dex_emerg_lbl = QLabel("Emergency: —")
+
+        for lbl in [self._dex_cg_lbl, self._dex_cx_lbl,
+                    self._dex_sched_lbl, self._dex_emerg_lbl]:
+            lbl.setStyleSheet(
+                f"color:{FG1}; font-size:10px; font-family:monospace;"
+            )
+            layout.addWidget(lbl)
+
+        layout.addStretch()
+        return panel
 
     # ── Data collection ───────────────────────────────────────────────────────
 
@@ -400,6 +436,72 @@ class SystemStatusWidget(QWidget):
         # Binance API (just check if credentials exist)
         api_ok = self._check_api()
         self._status_row.set_status("api", api_ok)
+
+        # DEX quota panel (update every tick from in-memory state — free)
+        self._update_dex_quota_panel()
+
+    def _update_dex_quota_panel(self) -> None:
+        """Refresh DEX API quota / scheduler labels from in-memory state."""
+        try:
+            from core.dex_data_provider import get_dex_provider, get_dex_scheduler
+            dex   = get_dex_provider()
+            sched = get_dex_scheduler()
+
+            # CoinGecko quota
+            if dex.coingecko_active:
+                cg = dex.coingecko_quota_info
+                rem = cg["tokens_remaining"]
+                bud = cg["hourly_budget"]
+                pct = rem / bud if bud else 0
+                col = GREEN if pct > 0.5 else YELLOW if pct > 0.2 else RED
+                self._dex_cg_lbl.setText(f"CoinGecko: {rem}/{bud}/hr")
+                self._dex_cg_lbl.setStyleSheet(
+                    f"color:{col}; font-size:10px; font-family:monospace;"
+                )
+            else:
+                self._dex_cg_lbl.setText("CoinGecko: disabled")
+                self._dex_cg_lbl.setStyleSheet(
+                    f"color:{FG2}; font-size:10px; font-family:monospace;"
+                )
+
+            # Codex quota
+            if dex.codex_active:
+                cx = dex.codex_quota_info
+                rem = cx["tokens_remaining"]
+                bud = cx["hourly_budget"]
+                col = GREEN if rem > 0 else RED
+                self._dex_cx_lbl.setText(f"Codex: {rem}/{bud}/hr")
+                self._dex_cx_lbl.setStyleSheet(
+                    f"color:{col}; font-size:10px; font-family:monospace;"
+                )
+            else:
+                self._dex_cx_lbl.setText("Codex: disabled")
+                self._dex_cx_lbl.setStyleSheet(
+                    f"color:{FG2}; font-size:10px; font-family:monospace;"
+                )
+
+            # Scheduler: count valid cached slots
+            snap = sched.cache_snapshot()
+            valid = sum(1 for v in snap.values() if v["valid"])
+            total = len(snap)
+            self._dex_sched_lbl.setText(
+                f"Cache: {valid}/{total} slots warm  •  12 slots/hr"
+            )
+            self._dex_sched_lbl.setStyleSheet(
+                f"color:{ACCENT}; font-size:10px; font-family:monospace;"
+            )
+
+            # Emergency slot
+            avail = sched.emergency_available
+            self._dex_emerg_lbl.setText(
+                f"Emergency: {'available' if avail else 'used this hour'}"
+            )
+            self._dex_emerg_lbl.setStyleSheet(
+                f"color:{GREEN if avail else YELLOW}; font-size:10px; font-family:monospace;"
+            )
+
+        except Exception:
+            pass   # DEX provider not yet initialised — silently skip
 
     # ── System helpers ────────────────────────────────────────────────────────
 

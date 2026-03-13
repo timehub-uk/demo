@@ -34,8 +34,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass, field as dc_field
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -465,9 +466,21 @@ class DexDataProvider:
 
         return features
 
-    def scan_dex_arbitrage_opportunities(self) -> list[dict]:
+    def scan_dex_arbitrage_opportunities(
+        self,
+        cached_pools: dict[str, list] | None = None,
+    ) -> list[dict]:
         """
         Scan on-chain pools for DEX↔CEX price discrepancies.
+
+        Parameters
+        ----------
+        cached_pools : dict, optional
+            Pre-fetched pool lists keyed by network id, e.g.
+            {"eth": [...], "bsc": [...]}.  When provided the method works
+            entirely from cache — zero API calls consumed.  If a network is
+            missing from the dict (or is empty) the scheduler's budget is used
+            to fetch it on demand.
 
         Returns list of opportunity dicts:
         {
@@ -487,9 +500,12 @@ class DexDataProvider:
         if not self.coingecko_active:
             return opportunities
 
-        for network in self._cg_nets[:3]:   # limit to first 3 networks for speed
+        cached_pools = cached_pools or {}
+
+        for network in self._cg_nets[:4]:   # up to 4 networks
             try:
-                pools = self.get_top_pools(network, limit=15)
+                # Prefer cached data (free); fall back to live call only if cache empty
+                pools = cached_pools.get(network) or self.get_top_pools(network, limit=15)
                 for pool in pools:
                     attrs  = pool.get("attributes", {})
                     base   = pool.get("relationships", {}).get("base_token", {})
@@ -585,9 +601,326 @@ def _fetch_binance_price(symbol: str) -> float:
         return 0.0
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# DEX Call Scheduler
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Budget strategy for CoinGecko Demo (≈13 calls/hr):
+#
+#   12 scheduled slots  — evenly spaced at 5-minute intervals.
+#                         Each slot calls the highest-density endpoint available
+#                         (list endpoints > single-item calls).
+#    1 emergency slot   — reserved; only consumed when a live arbitrage signal
+#                         needs an immediate deep-dive on a specific pool.
+#
+# Slot priority tiers:
+#   ★★★  List endpoints (top_pools, trending_tokens)  — 1 call → 20+ data pts
+#   ★★   Time-series (dex_ohlcv)                      — 1 call → 100 OHLCV bars
+#   ★    Single-item (pool_info, recent_trades)        — 1 call → 1 data point
+#
+# 12-slot hourly schedule:
+#   min  0  get_top_pools(eth)           ★★★  most liquid, highest arb probability
+#   min  5  get_top_pools(bsc)           ★★★  second-largest DEX ecosystem
+#   min 10  get_trending_tokens(eth)     ★★★  spot momentum before it hits CEX
+#   min 15  get_top_pools(arbitrum)      ★★★  L2 — often leads CEX price moves
+#   min 20  get_dex_ohlcv(top_eth_pool) ★★   ML training: ETH price action
+#   min 25  get_recent_trades(top_pool) ★    real-time on-chain signal window 1
+#   min 30  get_top_pools(eth)           ★★★  30-min refresh (critical ETH repeat)
+#   min 35  get_trending_tokens(bsc)     ★★★  cross-chain trend detection
+#   min 40  get_dex_ohlcv(top_bsc_pool) ★★   ML training: BSC price action
+#   min 45  get_recent_trades(top_pool) ★    real-time on-chain signal window 2
+#   min 50  get_top_pools(polygon_pos)   ★★★  L2 coverage for unique arb
+#   min 55  get_global_dex_stats()       ★★   hour-end context for ML features
+#
+#   + emergency reserve → triggered by arbitrage detector → get_pool_info()
+#
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class ScheduledCall:
+    """One slot in the hourly call plan."""
+    minute_offset: int          # Minute within the hour when this fires (0-59)
+    label: str                  # Human-readable description
+    priority: int               # 3=list ★★★, 2=series ★★, 1=single ★
+    fn_name: str                # DexDataProvider method name
+    fn_args: tuple = dc_field(default_factory=tuple)
+    fn_kwargs: dict = dc_field(default_factory=dict)
+    cache_key: str = ""         # Key under which to store the result
+    cache_ttl: int = 360        # Result TTL in seconds (default 6 min)
+
+
+# The 12-slot hourly plan (minute offsets within each hour)
+_HOURLY_PLAN: list[ScheduledCall] = [
+    ScheduledCall( 0, "ETH top pools (1st pass)",  3, "get_top_pools",
+                   ("eth",), {"limit": 20}, "top_pools_eth",  360),
+    ScheduledCall( 5, "BSC top pools",             3, "get_top_pools",
+                   ("bsc",), {"limit": 20}, "top_pools_bsc",  360),
+    ScheduledCall(10, "ETH trending tokens",       3, "get_trending_tokens",
+                   ("eth",), {},            "trending_eth",    360),
+    ScheduledCall(15, "Arbitrum top pools",        3, "get_top_pools",
+                   ("arbitrum",), {"limit": 20}, "top_pools_arb", 360),
+    ScheduledCall(20, "ETH top-pool OHLCV",        2, "get_dex_ohlcv",
+                   ("eth", "__top_eth_pool__",), {},  "ohlcv_eth",  600),
+    ScheduledCall(25, "Top-pool recent trades",    1, "get_recent_trades",
+                   ("eth", "__top_eth_pool__",), {}, "trades_eth",  300),
+    ScheduledCall(30, "ETH top pools (30-min refresh)", 3, "get_top_pools",
+                   ("eth",), {"limit": 20}, "top_pools_eth",  360),
+    ScheduledCall(35, "BSC trending tokens",       3, "get_trending_tokens",
+                   ("bsc",), {},            "trending_bsc",    360),
+    ScheduledCall(40, "BSC top-pool OHLCV",        2, "get_dex_ohlcv",
+                   ("bsc", "__top_bsc_pool__",), {}, "ohlcv_bsc",  600),
+    ScheduledCall(45, "Top-pool recent trades (2nd)", 1, "get_recent_trades",
+                   ("eth", "__top_eth_pool__",), {}, "trades_eth2", 300),
+    ScheduledCall(50, "Polygon top pools",         3, "get_top_pools",
+                   ("polygon_pos",), {"limit": 20}, "top_pools_poly", 360),
+    ScheduledCall(55, "Global DEX stats",          2, "get_global_dex_stats",
+                   (), {},                 "global_dex_stats", 3600),
+]
+
+
+class DexCallScheduler:
+    """
+    Executes the 12-slot hourly call plan against a DexDataProvider, caches
+    results, and reserves the 13th slot as an emergency budget for ad-hoc
+    high-priority lookups (e.g. deep-dive on an arbitrage opportunity).
+
+    All scheduled calls run in a background daemon thread.
+    Call results are stored in self.cache[key] and remain valid for cache_ttl
+    seconds — consumers should always read from cache, not call APIs directly.
+
+    Usage
+    -----
+        sched = DexCallScheduler(provider)
+        sched.start()
+
+        # Read cached data (always safe, never blocks):
+        pools = sched.get("top_pools_eth", default=[])
+
+        # Trigger emergency deep-dive (uses the reserved 13th slot):
+        sched.emergency_call("get_pool_info", ("eth", "0xpool..."),
+                              cache_key="arb_pool_info")
+    """
+
+    def __init__(self, provider: "DexDataProvider") -> None:
+        self._provider     = provider
+        self._cache: dict[str, tuple[Any, float]] = {}   # key → (value, expires_at)
+        self._lock         = threading.Lock()
+        self._running      = False
+        self._thread: threading.Thread | None = None
+        # Track which slots have fired this hour
+        self._last_fired: dict[int, float] = {}   # minute_offset → last fired ts
+        # Emergency call queue
+        self._emergency_queue: list[tuple[str, tuple, dict, str]] = []
+        self._emergency_used_this_hour = 0
+
+    # ── Cache access ──────────────────────────────────────────────────────────
+
+    def get(self, key: str, default=None) -> Any:
+        """Return cached value if still valid, else default."""
+        with self._lock:
+            entry = self._cache.get(key)
+            if entry and time.time() < entry[1]:
+                return entry[0]
+        return default
+
+    def _store(self, key: str, value: Any, ttl: int) -> None:
+        with self._lock:
+            self._cache[key] = (value, time.time() + ttl)
+
+    def cache_snapshot(self) -> dict[str, dict]:
+        """Return metadata about all cache entries (for status display)."""
+        now = time.time()
+        snap = {}
+        with self._lock:
+            for k, (v, exp) in self._cache.items():
+                snap[k] = {
+                    "valid":    exp > now,
+                    "expires_in": max(0, int(exp - now)),
+                    "has_data": bool(v),
+                }
+        return snap
+
+    # ── Scheduler control ─────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._thread  = threading.Thread(
+            target=self._loop, daemon=True, name="dex-scheduler"
+        )
+        self._thread.start()
+        logger.info("DexCallScheduler started — 12 slots/hr + 1 emergency reserve")
+
+    def stop(self) -> None:
+        self._running = False
+
+    # ── Emergency reserve ─────────────────────────────────────────────────────
+
+    def emergency_call(
+        self,
+        fn_name: str,
+        args: tuple = (),
+        kwargs: dict | None = None,
+        cache_key: str = "_emergency",
+        ttl: int = 300,
+    ) -> bool:
+        """
+        Request an immediate out-of-schedule API call using the reserved 13th
+        token.  Returns True if the call was queued, False if this hour's
+        emergency slot is already spent.
+        """
+        # Reset counter at the top of each hour
+        if time.time() >= self._provider._cg_limiter._reset_at:
+            self._emergency_used_this_hour = 0
+
+        if self._emergency_used_this_hour >= 1:
+            logger.warning(
+                "DexCallScheduler: emergency reserve already used this hour — "
+                "queued call deferred to next hour"
+            )
+            return False
+        with self._lock:
+            self._emergency_queue.append((fn_name, args, kwargs or {}, cache_key, ttl))
+        logger.info(f"DexCallScheduler: emergency call queued → {fn_name}{args}")
+        return True
+
+    # ── Background loop ───────────────────────────────────────────────────────
+
+    def _loop(self) -> None:
+        while self._running:
+            now    = time.time()
+            minute = int((now % 3600) // 60)   # minute within current hour
+
+            # Fire any scheduled slots that are due
+            for slot in _HOURLY_PLAN:
+                # Fire if we're within ±30s of the target minute and haven't
+                # fired this slot in the last 4 minutes (avoid double-firing)
+                delta = minute - slot.minute_offset
+                last  = self._last_fired.get(slot.minute_offset, 0)
+                if abs(delta) <= 0 and now - last > 240:
+                    self._fire_slot(slot)
+                    self._last_fired[slot.minute_offset] = now
+
+            # Process emergency queue
+            with self._lock:
+                pending = self._emergency_queue[:]
+                self._emergency_queue.clear()
+
+            for fn_name, args, kwargs, cache_key, ttl in pending:
+                self._fire_emergency(fn_name, args, kwargs, cache_key, ttl)
+
+            time.sleep(30)   # check every 30 s for slot alignment
+
+    def _fire_slot(self, slot: ScheduledCall) -> None:
+        """Execute one scheduled slot, resolving dynamic pool address tokens."""
+        try:
+            args = self._resolve_args(slot.fn_args)
+            if args is None:
+                return   # dynamic arg not yet available — skip this slot
+            fn = getattr(self._provider, slot.fn_name)
+            result = fn(*args, **slot.fn_kwargs)
+            if result:
+                self._store(slot.cache_key, result, slot.cache_ttl)
+                logger.debug(
+                    f"DexCallScheduler ✓ [{slot.priority}★] {slot.label} "
+                    f"→ {slot.cache_key} ({_result_size(result)} items)"
+                )
+            else:
+                logger.debug(f"DexCallScheduler — {slot.label}: empty result")
+        except Exception as exc:
+            logger.debug(f"DexCallScheduler slot '{slot.label}' error: {exc}")
+
+    def _fire_emergency(
+        self, fn_name: str, args: tuple, kwargs: dict,
+        cache_key: str, ttl: int
+    ) -> None:
+        try:
+            fn = getattr(self._provider, fn_name)
+            result = fn(*args, **kwargs)
+            if result:
+                self._store(cache_key, result, ttl)
+            self._emergency_used_this_hour += 1
+            logger.info(
+                f"DexCallScheduler ★ emergency {fn_name}({args!r}) → {cache_key}"
+            )
+        except Exception as exc:
+            logger.warning(f"DexCallScheduler emergency call error: {exc}")
+
+    def _resolve_args(self, args: tuple) -> tuple | None:
+        """
+        Replace __top_eth_pool__ / __top_bsc_pool__ tokens with the actual
+        best pool address from the cache.  Returns None if not yet available.
+        """
+        resolved = []
+        for arg in args:
+            if arg == "__top_eth_pool__":
+                addr = self._best_pool_address("top_pools_eth")
+                if not addr:
+                    return None
+                resolved.append(addr)
+            elif arg == "__top_bsc_pool__":
+                addr = self._best_pool_address("top_pools_bsc")
+                if not addr:
+                    return None
+                resolved.append(addr)
+            else:
+                resolved.append(arg)
+        return tuple(resolved)
+
+    def _best_pool_address(self, cache_key: str) -> str:
+        """Return the pool address with the highest 24h volume from a cached pool list."""
+        pools = self.get(cache_key, [])
+        if not pools:
+            return ""
+        best = max(
+            pools,
+            key=lambda p: float(
+                p.get("attributes", {}).get("volume_usd", {}).get("h24", 0) or 0
+            ),
+            default=None,
+        )
+        return best.get("attributes", {}).get("address", "") if best else ""
+
+    # ── Public status info ────────────────────────────────────────────────────
+
+    @property
+    def schedule_summary(self) -> list[dict]:
+        """Return the 12-slot plan with last-fired times — for UI display."""
+        now = time.time()
+        rows = []
+        for slot in _HOURLY_PLAN:
+            last = self._last_fired.get(slot.minute_offset, 0)
+            cache_valid = False
+            with self._lock:
+                entry = self._cache.get(slot.cache_key)
+                if entry:
+                    cache_valid = now < entry[1]
+            rows.append({
+                "minute":     slot.minute_offset,
+                "label":      slot.label,
+                "priority":   slot.priority,
+                "last_fired": int(now - last) if last else None,
+                "cache_valid": cache_valid,
+                "cache_key":  slot.cache_key,
+            })
+        return rows
+
+    @property
+    def emergency_available(self) -> bool:
+        return self._emergency_used_this_hour < 1
+
+
+def _result_size(v: Any) -> int:
+    if isinstance(v, (list, dict)):
+        return len(v)
+    return 1
+
+
 # ── Singleton accessor ────────────────────────────────────────────────────────
 
 _provider: DexDataProvider | None = None
+_scheduler: DexCallScheduler | None = None
 
 
 def get_dex_provider() -> DexDataProvider:
@@ -598,11 +931,23 @@ def get_dex_provider() -> DexDataProvider:
     return _provider
 
 
+def get_dex_scheduler() -> DexCallScheduler:
+    """Return (or create) the global DexCallScheduler — starts it if needed."""
+    global _scheduler
+    if _scheduler is None:
+        _scheduler = DexCallScheduler(get_dex_provider())
+        _scheduler.start()
+    return _scheduler
+
+
 def reload_dex_provider() -> DexDataProvider:
     """Re-read config and reset the singleton — call after settings save."""
-    global _provider
+    global _provider, _scheduler
     if _provider is not None:
         _provider._reload_config()
     else:
         _provider = DexDataProvider()
+    # Restart scheduler with updated provider config
+    if _scheduler is not None:
+        _scheduler._provider = _provider
     return _provider
