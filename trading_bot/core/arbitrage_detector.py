@@ -241,6 +241,9 @@ class ArbitrageDetector:
         # Emit cooldown — prevent flooding callbacks with the same pair signal
         self._last_emitted: dict[str, float] = {}  # pair_key → last emit timestamp
 
+        # 0x call cooldown per symbol — avoid burning free-tier quota on same pair
+        self._last_zerox_call: dict[str, float] = {}  # symbol → last call timestamp
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def on_opportunity(self, cb: Callable[[ArbitrageOpportunity], None]) -> None:
@@ -370,16 +373,55 @@ class ArbitrageDetector:
                         score=d["confidence"] * min(d["spread_pct"] / 1.0, 1.0),
                     )
                     opportunities.append(opp)
-                    # For very high-confidence opportunities, burn the emergency
-                    # slot to fetch real-time pool depth data
-                    if (d["confidence"] > 0.8 and d["spread_pct"] > 0.5
-                            and sched.emergency_available):
-                        sched.emergency_call(
-                            "get_pool_info",
-                            (d["network"], d["pool_address"]),
-                            cache_key=f"arb_pool_{d['pool_address'][:8]}",
-                            ttl=120,
-                        )
+
+                    # For high-confidence opportunities run a two-step confirmation:
+                    #   Step A) 0x get_price() — confirms the executable DEX price
+                    #           (free-tier: 1 req/s, no monthly cap; we throttle to
+                    #            1 call per 30s per symbol via _last_zerox_call)
+                    #   Step B) Codex emergency call — confirms pool liquidity depth
+                    #           (free-tier: ~1 call/87 min; only fire after 0x confirms)
+                    if d["confidence"] > 0.8 and d["spread_pct"] > 0.5:
+                        confirmed_spread = self._validate_with_zerox(d["symbol"])
+                        if confirmed_spread is not None:
+                            if confirmed_spread >= 0.3:
+                                # 0x confirmed spread is real and executable — boost
+                                opp.confidence = round(
+                                    min(0.95, opp.confidence * 1.1), 3
+                                )
+                                opp.expected_profit_pct = round(
+                                    max(0.0, confirmed_spread / 100.0 - 0.15), 5
+                                )
+                                opp.score = round(
+                                    opp.confidence * min(confirmed_spread / 1.0, 1.0),
+                                    3,
+                                )
+                                logger.debug(
+                                    f"0x confirmed {d['symbol']} spread "
+                                    f"{confirmed_spread:.2f}% — "
+                                    f"conf now {opp.confidence:.0%}"
+                                )
+                            else:
+                                # 0x price tighter than CoinGecko suggested — discount
+                                opp.confidence = round(opp.confidence * 0.7, 3)
+                                opp.score      = round(opp.score      * 0.7, 3)
+                                logger.debug(
+                                    f"0x narrowed {d['symbol']} spread to "
+                                    f"{confirmed_spread:.2f}% — confidence reduced"
+                                )
+
+                        # Burn the Codex emergency slot only when 0x has confirmed
+                        # (or 0x is inactive) AND confidence is still high
+                        if opp.confidence > 0.8 and sched.emergency_available:
+                            sched.emergency_call(
+                                "get_pool_info",
+                                (d["network"], d["pool_address"]),
+                                cache_key=f"arb_pool_{d['pool_address'][:8]}",
+                                ttl=120,
+                            )
+                            logger.debug(
+                                f"Codex emergency call queued for pool "
+                                f"{d['pool_address'][:8]} on {d['network']}"
+                            )
         except Exception as exc:
             logger.debug(f"DEX arb scan step failed: {exc}")
 
@@ -553,6 +595,68 @@ class ArbitrageDetector:
             confidence=round(confidence, 3),
             score=round(score, 3),
         )
+
+    # ── 0x price validation ────────────────────────────────────────────────────
+
+    def _validate_with_zerox(self, cex_symbol: str) -> Optional[float]:
+        """
+        Call 0x get_best_price_for_pair() and compare against the cached CEX price.
+
+        Returns the confirmed spread % (e.g. 0.8 means 0.8%) or None when 0x is
+        inactive, the symbol isn't supported, or the call fails.
+
+        Throttled to 1 call per 30s per symbol so the free-tier 1 req/s budget
+        is never saturated by the arbitrage scanner alone.
+        """
+        now = time.time()
+        last = self._last_zerox_call.get(cex_symbol, 0.0)
+        if now - last < 30.0:          # 30s per-symbol cooldown
+            return None
+        self._last_zerox_call[cex_symbol] = now
+
+        try:
+            from core.zerox_provider import get_zerox_provider
+            zx = get_zerox_provider()
+            if not zx.active:
+                return None
+
+            data = zx.get_best_price_for_pair(cex_symbol)
+            if not data or not data.get("price"):
+                return None
+
+            # 0x price endpoint returns "buyToken per sellToken":
+            #   sell USDC → buy ETH  →  price ≈ 0.000286 (ETH per USDC)
+            # Invert to get USD per token (≈ 3497 USDC/ETH)
+            raw_price = float(data["price"])
+            if raw_price <= 0:
+                return None
+            dex_price_usd = 1.0 / raw_price
+
+            # CEX price from the rolling price buffer (ETHUSDT, BNBUSDT, …)
+            cex_buf = self._price_buf.get(cex_symbol, [])
+            if not cex_buf:
+                return None
+            cex_price = cex_buf[-1]
+            if cex_price <= 0:
+                return None
+
+            spread_pct = abs(dex_price_usd - cex_price) / cex_price * 100.0
+
+            # Log gas context if available
+            gas_price_wei = float(data.get("gas_price") or 0)
+            if gas_price_wei > 0:
+                gas_gwei = gas_price_wei / 1e9
+                logger.debug(
+                    f"0x {cex_symbol}: dex={dex_price_usd:.4f} "
+                    f"cex={cex_price:.4f} spread={spread_pct:.2f}% "
+                    f"gas={gas_gwei:.1f}gwei"
+                )
+
+            return round(spread_pct, 3)
+
+        except Exception as exc:
+            logger.debug(f"0x validation for {cex_symbol} failed: {exc}")
+            return None
 
     # ── Callbacks ──────────────────────────────────────────────────────────────
 
