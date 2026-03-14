@@ -76,6 +76,29 @@ _C = {
     "di_neg": RED,
 }
 
+# Print-friendly colour overrides (dark-on-white, increased contrast).
+# Temporarily swapped in during PDF export, then restored.
+_PRINT_C = {
+    "ema9":   "#006064",
+    "ema20":  "#1565C0",
+    "ema50":  "#E65100",
+    "ema200": "#BF360C",
+    "sma20":  "#6A1B9A",
+    "sma50":  "#311B92",
+    "bb":     "#37474F",
+    "vwap":   "#880E4F",
+    "ich":    "#1B5E20",
+    "volume": "#004D40",
+    "obv":    "#BF360C",
+    "rsi":    "#1565C0",
+    "macd":   "#1565C0",
+    "stoch":  "#006064",
+    "atr":    "#E65100",
+    "adx":    "#B71C1C",
+    "di_pos": "#1B5E20",
+    "di_neg": "#B71C1C",
+}
+
 
 # ── Indicator toggle pill ──────────────────────────────────────────────────────
 
@@ -1013,12 +1036,23 @@ class ChartWidget(QWidget):
     # ── PDF export ─────────────────────────────────────────────────────
 
     def _export_pdf(self) -> None:
-        """Render the entire chart widget to a PDF via QPrinter."""
-        from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
-        from PyQt6.QtWidgets import QFileDialog
-        from PyQt6.QtGui import QPainter
+        """
+        Export the chart to a PDF with a white background and print-optimised
+        colours.  The export process:
+          1. Saves the current dark-theme state.
+          2. Switches every pyqtgraph plot to a white background with dark
+             axis / grid pens and swaps in the _PRINT_C colour map.
+          3. Re-renders and grabs the chart-only splitter area as a QPixmap.
+          4. Restores the dark theme and re-renders.
+          5. Writes the pixmap (plus a text header) to a landscape PDF.
+        """
+        from PyQt6.QtPrintSupport import QPrinter
+        from PyQt6.QtWidgets import QFileDialog, QApplication
+        from PyQt6.QtGui import (
+            QPainter, QColor, QFont, QPageLayout, QPageSize,
+        )
+        from PyQt6.QtCore import QRectF, QSizeF
 
-        # Ask the user where to save
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Export Chart to PDF",
@@ -1028,34 +1062,125 @@ class ChartWidget(QWidget):
         if not path:
             return
 
+        # ── Helpers ───────────────────────────────────────────────────────
+        _WHITE    = QColor("white")
+        _DARK_BG  = QColor(BG2)
+        _PRINT_PEN = pg.mkPen("#222222", width=1)
+        _DARK_PEN  = pg.mkPen(FG1, width=1)
+
+        all_plots = [self._price_plot] + list(self._sub_plots.values())
+
+        def _set_axes_pen(pen) -> None:
+            for pw in all_plots:
+                for ax in ("bottom", "left", "right", "top"):
+                    try:
+                        a = pw.getAxis(ax)
+                        a.setPen(pen)
+                        a.setTextPen(pen)
+                    except Exception:
+                        pass
+
+        def _apply_print_theme() -> None:
+            for pw in all_plots:
+                pw.setBackground(_WHITE)
+                pw.showGrid(x=True, y=True, alpha=0.18)
+            _set_axes_pen(_PRINT_PEN)
+            # Update the shared colour map in-place
+            _C.update(_PRINT_C)
+
+        def _restore_dark_theme() -> None:
+            for pw in all_plots:
+                pw.setBackground(_DARK_BG)
+                pw.showGrid(x=True, y=True, alpha=0.08)
+            _set_axes_pen(_DARK_PEN)
+            # Restore original _C values (use saved snapshot)
+            _C.update(_C_ORIG)
+
+        # ── Save original _C state ─────────────────────────────────────────
+        _C_ORIG: dict[str, str] = dict(_C)
+
+        # ── Switch to print theme, re-render, grab ─────────────────────────
+        pixmap = None
+        try:
+            _apply_print_theme()
+            self._render()
+            QApplication.processEvents()
+            # Grab only the chart splitter (excludes dark toolbar rows)
+            pixmap = self._splitter.grab()
+        finally:
+            _restore_dark_theme()
+            self._render()
+
+        if pixmap is None or pixmap.isNull():
+            return
+
+        # ── Write to PDF ───────────────────────────────────────────────────
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
         printer.setOutputFileName(path)
-        printer.setPageOrientation(
-            __import__("PyQt6.QtGui", fromlist=["QPageLayout"]).QPageLayout.Orientation.Landscape
+
+        layout = QPageLayout(
+            QPageSize(QPageSize.PageSizeId.A4),
+            QPageLayout.Orientation.Landscape,
+            __import__("PyQt6.QtCore", fromlist=["QMarginsF"]).QMarginsF(10, 10, 10, 10),
+            QPageLayout.Unit.Millimeter,
         )
+        printer.setPageLayout(layout)
 
         painter = QPainter()
         if not painter.begin(printer):
             return
         try:
-            # Scale the widget to fill the printer page
-            page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
-            widget_size = self.size()
-            sx = page_rect.width()  / max(widget_size.width(),  1)
-            sy = page_rect.height() / max(widget_size.height(), 1)
-            scale = min(sx, sy)
-            painter.scale(scale, scale)
-            self.render(painter)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            page = printer.pageRect(QPrinter.Unit.DevicePixel)
+            pw, ph = page.width(), page.height()
+
+            # Fill page white
+            painter.fillRect(QRectF(0, 0, pw, ph), _WHITE)
+
+            # Header: symbol / interval / timestamp
+            from datetime import datetime, timezone
+            ts_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            sym_str = self._symbol
+            if sym_str.endswith("USDT"):
+                sym_str = f"{sym_str[:-4]} — USDT"
+            header = f"{sym_str}  |  {self._interval}  |  {ts_str}"
+            hdr_font = QFont("monospace", 11)
+            hdr_font.setBold(True)
+            painter.setFont(hdr_font)
+            painter.setPen(QColor("#111111"))
+            header_h = 40.0
+            painter.drawText(
+                QRectF(0, 4, pw, header_h),
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                header,
+            )
+
+            # Chart pixmap scaled to fit remaining area
+            chart_y  = header_h + 8
+            chart_h  = ph - chart_y - 4
+            chart_w  = pw
+            scaled   = pixmap.scaled(
+                int(chart_w), int(chart_h),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            x_off = (chart_w - scaled.width())  / 2
+            painter.drawPixmap(int(x_off), int(chart_y), scaled)
+
+            # Thin border around chart area
+            painter.setPen(pg.mkPen("#BBBBBB", width=1))
+            painter.drawRect(
+                QRectF(int(x_off), int(chart_y), scaled.width(), scaled.height())
+            )
         finally:
             painter.end()
 
-        # Brief status toast if available
         try:
             from PyQt6.QtWidgets import QToolTip
             QToolTip.showText(
                 self.mapToGlobal(self.rect().center()),
-                f"Chart exported to {path}",
+                f"Saved: {path}",
                 self,
             )
         except Exception:
