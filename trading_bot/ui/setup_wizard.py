@@ -6,6 +6,8 @@ database credentials, and master encryption password.
 
 from __future__ import annotations
 
+from urllib.parse import quote_plus
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QPixmap, QColor, QPainter, QLinearGradient
 from PyQt6.QtWidgets import (
@@ -17,7 +19,7 @@ from PyQt6.QtWidgets import (
 
 from config import get_settings
 from config.encryption import EncryptionManager
-from ui.styles import ACCENT, GREEN, RED, BG1, BG2, BG3, FG0, FG1, FG2, BORDER
+from ui.styles import ACCENT, GREEN, RED, YELLOW, BG1, BG2, BG3, FG0, FG1, FG2, BORDER
 
 
 class WelcomePage(QWizardPage):
@@ -307,10 +309,14 @@ class DatabasePage(QWizardPage):
         try:
             from db.postgres import init_db
             from db.redis_client import init_redis
-            url = (f"postgresql+psycopg2://{self.pg_user.text()}:{self.pg_pass.text()}"
-                   f"@{self.pg_host.text()}:{self.pg_port.text()}/{self.pg_name.text()}")
+            url = (
+                f"postgresql+psycopg2://{quote_plus(self.pg_user.text())}"
+                f":{quote_plus(self.pg_pass.text())}"
+                f"@{self.pg_host.text()}:{self.pg_port.text()}/{self.pg_name.text()}"
+            )
             init_db(url)
-            init_redis(host=self.redis_host.text(), port=int(self.redis_port.text()))
+            redis_port = int(self.redis_port.text()) if self.redis_port.text().isdigit() else 6379
+            init_redis(host=self.redis_host.text(), port=redis_port)
             self.db_status.setText("✅ Database connections OK!")
             self.db_status.setStyleSheet(f"color:{GREEN};")
         except Exception as exc:
@@ -367,13 +373,19 @@ class SetupWizard(QWizard):
         settings.ai.voice_enabled = self.ai_page.voice_cb.isChecked()
 
         settings.database.host = self.db_page.pg_host.text()
-        settings.database.port = int(self.db_page.pg_port.text())
+        try:
+            settings.database.port = int(self.db_page.pg_port.text())
+        except ValueError:
+            settings.database.port = 5432
         settings.database.name = self.db_page.pg_name.text()
         settings.database.user = self.db_page.pg_user.text()
         settings.database.password = self.db_page.pg_pass.text()
 
         settings.redis.host = self.db_page.redis_host.text()
-        settings.redis.port = int(self.db_page.redis_port.text())
+        try:
+            settings.redis.port = int(self.db_page.redis_port.text())
+        except ValueError:
+            settings.redis.port = 6379
 
         settings.first_run = False
         settings.save()
@@ -525,7 +537,7 @@ class DbCredentialsDialog(QDialog):
 
         # Step 2: test the target connection
         url = (
-            f"postgresql+psycopg2://{user}:{password}"
+            f"postgresql+psycopg2://{quote_plus(user)}:{quote_plus(password)}"
             f"@{self._host}:{self._port}/{self._db_name}"
         )
         try:
@@ -571,7 +583,7 @@ class DbCredentialsDialog(QDialog):
 
         # ── Connect to postgres system DB as superuser ────────────────
         sys_url = (
-            f"postgresql+psycopg2://{su_user}:{su_pass}"
+            f"postgresql+psycopg2://{quote_plus(su_user)}:{quote_plus(su_pass)}"
             f"@{self._host}:{self._port}/postgres"
         )
         try:
@@ -614,7 +626,7 @@ class DbCredentialsDialog(QDialog):
 
             # ── Connect to the target DB as superuser to grant schema ─
             tgt_url = (
-                f"postgresql+psycopg2://{su_user}:{su_pass}"
+                f"postgresql+psycopg2://{quote_plus(su_user)}:{quote_plus(su_pass)}"
                 f"@{self._host}:{self._port}/{db_name}"
             )
             tgt_engine = create_engine(
