@@ -403,6 +403,109 @@ class TradeMarkerLayer:
         return markers
 
 
+# ── Chart event annotation layer ───────────────────────────────────────────────
+
+# Per-event-type defaults: (color, symbol, anchor_side)
+_EVENT_CONFIG: dict[str, tuple[str, str, str]] = {
+    "CASCADE":      ("#FF5722", "▼", "bottom"),
+    "WHALE":        ("#CE93D8", "◆", "top"),
+    "FUNDING":      ("#FFD700", "◆", "top"),
+    "LEAD_LAG":     ("#26C6DA", "→", "top"),
+    "AGGRESSOR":    ("#FF7043", "★", "top"),
+    "ML_SIGNAL":    ("#4CAF50", "▲", "top"),
+    "ML_SELL":      ("#EF5350", "▼", "bottom"),
+    "VOLUME_SPIKE": ("#AB47BC", "↑", "top"),
+}
+
+
+class ChartEvent:
+    """Lightweight data holder for a chart event annotation."""
+
+    __slots__ = ("ts", "price", "event_type", "label", "color", "detail")
+
+    def __init__(
+        self,
+        ts: float,
+        price: float,
+        event_type: str,
+        label: str,
+        color: str = "",
+        detail: str = "",
+    ) -> None:
+        self.ts         = ts
+        self.price      = price
+        self.event_type = event_type
+        self.label      = label
+        self.color      = color
+        self.detail     = detail
+
+
+class EventAnnotationLayer:
+    """
+    Renders typed market-event markers on a pyqtgraph price plot.
+
+    Each event is drawn as a coloured diamond scatter point with a short
+    label.  Hover detection finds the nearest event within a pixel threshold
+    so the ChartWidget can show a detailed tooltip.
+    """
+
+    def __init__(self, price_plot: pg.PlotWidget) -> None:
+        self._plot   = price_plot
+        self._items: list = []
+        self._events: list[ChartEvent] = []
+
+    def clear(self) -> None:
+        for item in self._items:
+            try:
+                self._plot.removeItem(item)
+            except Exception:
+                pass
+        self._items.clear()
+
+    def draw(self, events: list[ChartEvent]) -> None:
+        self.clear()
+        self._events = list(events)
+        _font = QFont("monospace", 8)
+        _font.setBold(True)
+        for ev in events:
+            cfg  = _EVENT_CONFIG.get(ev.event_type, ("#BBBBBB", "●", "top"))
+            col  = ev.color or cfg[0]
+            side = cfg[2]
+            scatter = pg.ScatterPlotItem(
+                x=[ev.ts], y=[ev.price],
+                symbol="d", size=9,
+                pen=pg.mkPen(col, width=1.5),
+                brush=QBrush(QColor(col + "77")),
+            )
+            self._plot.addItem(scatter)
+            self._items.append(scatter)
+            # Label positioned just above or below the diamond
+            anchor_y = 1.2 if side == "top" else -0.2
+            lbl = pg.TextItem(
+                text=ev.label[:28],
+                color=col,
+                anchor=(0.5, anchor_y),
+            )
+            lbl.setFont(_font)
+            lbl.setPos(ev.ts, ev.price)
+            self._plot.addItem(lbl, ignoreBounds=True)
+            self._items.append(lbl)
+
+    def find_nearest(
+        self, x: float, y: float, time_tol: float, price_tol: float
+    ) -> "ChartEvent | None":
+        """Return the nearest ChartEvent within tolerance, or None."""
+        best      = None
+        best_dist = float("inf")
+        for ev in self._events:
+            if abs(ev.ts - x) < time_tol and abs(ev.price - y) < price_tol:
+                dist = ((ev.ts - x) ** 2 + (ev.price - y) ** 2) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    best = ev
+        return best
+
+
 # ── Panel title text item ──────────────────────────────────────────────────────
 
 def _panel_label(text: str, color: str = FG1) -> pg.TextItem:
@@ -575,15 +678,19 @@ class ChartWidget(QWidget):
 
         # Overlay indicators
         self._overlays: dict[str, bool] = {
-            "ema9":   False,
-            "ema20":  True,
-            "ema50":  True,
-            "ema200": False,
-            "sma20":  False,
-            "sma50":  False,
-            "bb":     True,
-            "vwap":   True,
-            "ich":    False,
+            "ema9":     False,
+            "ema20":    True,
+            "ema50":    True,
+            "ema200":   False,
+            "sma20":    False,
+            "sma50":    False,
+            "bb":       True,
+            "vwap":     True,
+            "ich":      False,
+            "sr":        False,   # auto support/resistance levels
+            "sessions":  True,   # Asian / London / NY session bands
+            "events":    True,   # market event annotations
+            "watermark": True,   # faint pair-name background watermark
         }
         # Sub-panel indicators
         self._panels: dict[str, bool] = {
@@ -604,6 +711,12 @@ class ChartWidget(QWidget):
         self._trade_markers: list[dict] = []   # [{ts, price, trade, is_entry}, ...]
         self._trade_layer: Optional[TradeMarkerLayer] = None
         self._trade_hover: Optional[pg.TextItem] = None
+
+        # Market event annotations (whale, cascade, funding, lead-lag, etc.)
+        self._chart_events: list[ChartEvent] = []
+        self._show_events:  bool = True
+        self._event_layer:  Optional[EventAnnotationLayer] = None
+        self._event_hover:  Optional[pg.TextItem] = None
 
         # Chart navigation
         self._auto_scale:  bool = True
@@ -758,6 +871,21 @@ class ChartWidget(QWidget):
         trades_pill.toggled.connect(self._on_trades_toggled)
         lay.addWidget(trades_pill)
 
+        lay.addWidget(_vsep())
+        lay.addWidget(_lbl("EXTRAS"))
+        events_pill = IndicatorPill("EVENTS", "#FF7043", checked=True)
+        events_pill.toggled.connect(self._on_events_toggled)
+        lay.addWidget(events_pill)
+        sr_pill = IndicatorPill("S/R", "#78909C", checked=False)
+        sr_pill.toggled.connect(lambda c: self._toggle("sr", c))
+        lay.addWidget(sr_pill)
+        sess_pill = IndicatorPill("SESSIONS", "#546E7A", checked=True)
+        sess_pill.toggled.connect(lambda c: self._toggle("sessions", c))
+        lay.addWidget(sess_pill)
+        wmark_pill = IndicatorPill("WMARK", "#37474F", checked=True)
+        wmark_pill.toggled.connect(lambda c: self._toggle("watermark", c))
+        lay.addWidget(wmark_pill)
+
         lay.addStretch()
         return row
 
@@ -910,6 +1038,20 @@ class ChartWidget(QWidget):
         self._trade_hover.setZValue(100)
         self._price_plot.addItem(self._trade_hover, ignoreBounds=True)
 
+        # Event annotation layer (whale, cascade, funding, etc.)
+        self._event_layer = EventAnnotationLayer(self._price_plot)
+
+        # Hover tooltip for event markers
+        self._event_hover = pg.TextItem(
+            text="", color=FG0, anchor=(0, 1),
+            border=pg.mkPen(BORDER, width=1),
+            fill=pg.mkBrush(BG3 + "EE"),
+        )
+        self._event_hover.setFont(QFont("monospace", 10))
+        self._event_hover.setVisible(False)
+        self._event_hover.setZValue(101)
+        self._price_plot.addItem(self._event_hover, ignoreBounds=True)
+
     def _build_sub_panels(self) -> None:
         # Each sub-panel: (internal_key, title_text, title_colour, y_range, reference_lines)
         panel_specs = [
@@ -1019,12 +1161,27 @@ class ChartWidget(QWidget):
         if self._signals:
             self._price_plot.addItem(SignalMarker(self._signals))
 
+        # Session background bands (Asian / London / NY)
+        self._draw_session_bands(ts)
+
+        # Pair watermark (faint background text)
+        self._draw_watermark(ts, cls)
+
+        # Auto support/resistance levels
+        self._draw_sr_levels(ts, his, los)
+
         # Trade entry/exit markers
         self._draw_trade_markers()
         # Re-add hover tooltip on top after clear
         if self._trade_hover:
             self._price_plot.addItem(self._trade_hover, ignoreBounds=True)
             self._trade_hover.setVisible(False)
+
+        # Market event annotations (whale, cascade, funding, etc.)
+        self._draw_event_annotations()
+        if self._event_hover:
+            self._price_plot.addItem(self._event_hover, ignoreBounds=True)
+            self._event_hover.setVisible(False)
 
         # AI forecast projection
         self._draw_forecast(ts, cls, his, los)
@@ -1284,6 +1441,7 @@ class ChartWidget(QWidget):
             vl.setPos(x)
         self._update_ohlcv_label(x)
         self._check_trade_hover(x, y)
+        self._check_event_hover(x, y)
 
     def _on_sub_mouse_move(self, pos, plot: pg.PlotWidget) -> None:
         if not plot.sceneBoundingRect().contains(pos):
@@ -1676,3 +1834,201 @@ class ChartWidget(QWidget):
             except Exception:
                 pass
         return "HOLD", 0.0
+
+    # ── Pair watermark ─────────────────────────────────────────────────
+
+    def _draw_watermark(self, ts: np.ndarray, cls: np.ndarray) -> None:
+        """Draw a faint bold pair-name watermark centred on the price plot."""
+        if not self._overlays.get("watermark"):
+            return
+        sym = self._symbol
+        if sym.endswith("USDT"):
+            label = f"{sym[:-4]} — USDT"
+        elif sym.endswith("BTC"):
+            label = f"{sym[:-3]} — BTC"
+        elif sym.endswith("ETH"):
+            label = f"{sym[:-3]} — ETH"
+        else:
+            label = sym
+
+        center_t = float((ts[0] + ts[-1]) / 2)
+        center_p = float((float(cls.max()) + float(cls.min())) / 2)
+
+        lbl = pg.TextItem(
+            text=label,
+            color=QColor(200, 210, 220, 14),   # ~5 % opacity
+            anchor=(0.5, 0.5),
+        )
+        font = QFont("monospace", 52)
+        font.setBold(True)
+        lbl.setFont(font)
+        lbl.setPos(center_t, center_p)
+        self._price_plot.addItem(lbl, ignoreBounds=True)
+
+    # ── Session background bands ───────────────────────────────────────
+
+    def _draw_session_bands(self, ts: np.ndarray) -> None:
+        """Draw Asian / London / NY session background colour bands."""
+        if not self._overlays.get("sessions") or len(ts) < 2:
+            return
+        import datetime as _dt
+
+        t0, t1 = float(ts[0]), float(ts[-1])
+        sessions = [
+            ("Asian",  0,  9, "#1A237E1A"),   # deep-blue tint
+            ("London", 7, 16, "#1B5E201A"),   # deep-green tint
+            ("NY",    13, 21, "#B71C1C1A"),   # deep-red tint
+        ]
+        # Label colours (shown at bottom of band)
+        sess_label_cols = {"Asian": "#7986CB", "London": "#66BB6A", "NY": "#EF5350"}
+
+        day_start = _dt.datetime.utcfromtimestamp(t0).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        day_end = _dt.datetime.utcfromtimestamp(t1).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) + _dt.timedelta(days=1)
+
+        day = day_start
+        while day <= day_end:
+            for name, h_start, h_end, color in sessions:
+                s = (day + _dt.timedelta(hours=h_start)).timestamp()
+                e = (day + _dt.timedelta(hours=h_end)).timestamp()
+                if e < t0 or s > t1:
+                    continue
+                region = pg.LinearRegionItem(
+                    values=(s, e),
+                    orientation="vertical",
+                    movable=False,
+                    brush=QBrush(QColor(color)),
+                    pen=pg.mkPen(color[:7] + "00", width=0),
+                )
+                region.setZValue(-10)
+                self._price_plot.addItem(region)
+                # Session name label at top of band
+                lbl = pg.TextItem(
+                    text=name, color=sess_label_cols[name], anchor=(0.5, 0),
+                )
+                lbl.setFont(QFont("monospace", 8))
+                lbl.setPos((s + e) / 2, 0)
+                lbl.setParentItem(self._price_plot.getPlotItem())
+                lbl.setPos((s + e) / 2, 0)
+            day += _dt.timedelta(days=1)
+
+    # ── Auto S/R levels ────────────────────────────────────────────────
+
+    def _draw_sr_levels(self, ts: np.ndarray, his: np.ndarray, los: np.ndarray) -> None:
+        """Auto-detect swing high/low clusters and draw S/R horizontal lines."""
+        if not self._overlays.get("sr") or len(ts) < 20:
+            return
+        n      = len(ts)
+        window = 5
+
+        highs = [his[i] for i in range(window, n - window)
+                 if his[i] == his[i - window:i + window + 1].max()]
+        lows  = [los[i] for i in range(window, n - window)
+                 if los[i] == los[i - window:i + window + 1].min()]
+
+        def _cluster(levels: list, tol: float = 0.005) -> list:
+            if not levels:
+                return []
+            levels = sorted(levels)
+            groups: list[list[float]] = [[levels[0]]]
+            for v in levels[1:]:
+                if abs(v - groups[-1][-1]) / (groups[-1][-1] + 1e-9) < tol:
+                    groups[-1].append(v)
+                else:
+                    groups.append([v])
+            return [sum(g) / len(g) for g in groups]
+
+        resistance = _cluster(highs)[-5:]
+        support    = _cluster(lows)[:5]
+
+        for lvl in resistance:
+            self._price_plot.addItem(pg.InfiniteLine(
+                pos=lvl, angle=0, movable=False,
+                pen=pg.mkPen(RED + "88", width=1, style=Qt.PenStyle.DashLine),
+                label=f"R {lvl:.4f}",
+                labelOpts={"position": 0.98, "color": RED, "fill": BG3},
+            ), ignoreBounds=True)
+        for lvl in support:
+            self._price_plot.addItem(pg.InfiniteLine(
+                pos=lvl, angle=0, movable=False,
+                pen=pg.mkPen(GREEN + "88", width=1, style=Qt.PenStyle.DashLine),
+                label=f"S {lvl:.4f}",
+                labelOpts={"position": 0.98, "color": GREEN, "fill": BG3},
+            ), ignoreBounds=True)
+
+    # ── Market event annotations ───────────────────────────────────────
+
+    def add_chart_event(
+        self,
+        ts: float,
+        price: float,
+        event_type: str,
+        label: str,
+        color: str = "",
+        detail: str = "",
+    ) -> None:
+        """
+        Add a market event marker to the chart.
+
+        Call from any thread; the chart will re-render event annotations
+        immediately if data is already loaded.  Up to 200 events are kept;
+        older ones are pruned automatically.
+        """
+        ev = ChartEvent(ts=ts, price=price, event_type=event_type,
+                        label=label, color=color, detail=detail)
+        self._chart_events.append(ev)
+        if len(self._chart_events) > 200:
+            self._chart_events = self._chart_events[-200:]
+        if self._data and self._event_layer:
+            self._draw_event_annotations()
+
+    def clear_chart_events(self) -> None:
+        """Remove all event annotations from the chart."""
+        self._chart_events.clear()
+        if self._event_layer:
+            self._event_layer.clear()
+
+    def _draw_event_annotations(self) -> None:
+        if not self._event_layer:
+            return
+        if not self._show_events or not self._overlays.get("events"):
+            self._event_layer.clear()
+            return
+        if self._ts is None or len(self._ts) == 0:
+            return
+        t_min = float(self._ts[0])
+        t_max = float(self._ts[-1])
+        visible = [ev for ev in self._chart_events if t_min <= ev.ts <= t_max]
+        self._event_layer.draw(visible)
+
+    def _on_events_toggled(self, checked: bool) -> None:
+        self._show_events = checked
+        self._overlays["events"] = checked
+        if self._data:
+            self._draw_event_annotations()
+
+    def _check_event_hover(self, x: float, y: float) -> None:
+        """Show event tooltip when the cursor is near an event diamond."""
+        if not self._event_hover or not self._event_layer:
+            return
+        pr = self._price_plot.viewRange()
+        price_span = max(1e-9, pr[1][1] - pr[1][0])
+        time_span  = max(1.0,  pr[0][1] - pr[0][0])
+        ev = self._event_layer.find_nearest(
+            x, y,
+            time_tol=time_span  * 0.015,
+            price_tol=price_span * 0.02,
+        )
+        if ev:
+            ts_str = datetime.utcfromtimestamp(ev.ts).strftime("%Y-%m-%d %H:%M UTC")
+            lines  = [f"  {ev.event_type}  —  {ts_str}", f"  {ev.label}"]
+            if ev.detail:
+                lines.append(f"  {ev.detail}")
+            self._event_hover.setText("\n".join(lines))
+            self._event_hover.setPos(ev.ts, ev.price)
+            self._event_hover.setVisible(True)
+        else:
+            self._event_hover.setVisible(False)

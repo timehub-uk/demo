@@ -1483,10 +1483,115 @@ class MainWindow(QMainWindow):
                     )
                 except Exception:
                     pass
+
+            # Wire backend events → chart event annotations
+            self._wire_chart_events()
         except Exception as exc:
             logger.warning(f"Market Watch page unavailable: {exc}")
             self.market_watch_page = _placeholder("Market Watch", f"Not available: {exc}")
         self.stack.addWidget(self.market_watch_page)
+
+    # ── Chart event wiring ────────────────────────────────────────────────────
+
+    def _push_chart_event(
+        self,
+        symbol: str,
+        ts: float,
+        price: float,
+        event_type: str,
+        label: str,
+        color: str = "",
+        detail: str = "",
+    ) -> None:
+        """Push a market event to the ChartWidget overlay for the given symbol."""
+        try:
+            chart_panel = getattr(self.trading_page, "chart_panel", None)
+            if chart_panel is None:
+                return
+            cw_map = getattr(chart_panel, "_chart_widgets", {})
+            cw = cw_map.get(symbol)
+            if cw and hasattr(cw, "add_chart_event"):
+                cw.add_chart_event(ts, price, event_type, label, color, detail)
+        except Exception:
+            pass
+
+    def _wire_chart_events(self) -> None:
+        """Register callbacks on backend services to push events to the chart."""
+        import time as _time
+
+        # Cascade detector → chart
+        cd = getattr(self, "_cascade_detector", None)
+        if cd:
+            try:
+                def _on_cascade(ev):
+                    self._push_chart_event(
+                        symbol     = ev.symbol,
+                        ts         = _time.time(),
+                        price      = 0.0,   # will show at last known price
+                        event_type = "CASCADE",
+                        label      = f"CASCADE {ev.direction} {ev.price_change:+.2%}",
+                        color      = "#FF5722",
+                        detail     = f"{ev.vol_ratio:.1f}× vol [{ev.severity}]",
+                    )
+                cd.on_event(_on_cascade)
+            except Exception:
+                pass
+
+        # Funding rate monitor → chart
+        fm = getattr(self, "_funding_monitor", None)
+        if fm:
+            try:
+                def _on_funding(ev):
+                    self._push_chart_event(
+                        symbol     = ev.symbol,
+                        ts         = _time.time(),
+                        price      = ev.price,
+                        event_type = "FUNDING",
+                        label      = f"FUND {ev.rate_pct:+.4f}%",
+                        color      = "#FFD700",
+                        detail     = ev.direction,
+                    )
+                fm.on_event(_on_funding)
+            except Exception:
+                pass
+
+        # Correlation engine lead/lag → chart
+        ce = getattr(self, "_correlation_engine", None)
+        if ce:
+            try:
+                def _on_leadlag(ev):
+                    # Tag the follower symbol's chart
+                    self._push_chart_event(
+                        symbol     = ev.follower,
+                        ts         = _time.time(),
+                        price      = 0.0,
+                        event_type = "LEAD_LAG",
+                        label      = f"LEAD {ev.leader} {ev.leader_move:+.2%}",
+                        color      = "#26C6DA",
+                        detail     = f"expect {ev.expected_move}  r={ev.correlation:.2f}",
+                    )
+                ce.on_event(_on_leadlag)
+            except Exception:
+                pass
+
+        # Whale watcher → chart
+        ww = getattr(self, "_whale_watcher", None)
+        if ww:
+            try:
+                def _on_whale(ev):
+                    sym = getattr(ev, "symbol", "") or ""
+                    self._push_chart_event(
+                        symbol     = sym,
+                        ts         = _time.time(),
+                        price      = getattr(ev, "price", 0.0) or 0.0,
+                        event_type = "WHALE",
+                        label      = f"WHALE ${getattr(ev, 'usd_value', 0):,.0f}",
+                        color      = "#CE93D8",
+                        detail     = getattr(ev, "side", ""),
+                    )
+                ww.on_event(_on_whale)
+            except Exception:
+                pass
 
     def _build_connections_page(self) -> None:
         from ui.connections_widget import ConnectionsWidget
