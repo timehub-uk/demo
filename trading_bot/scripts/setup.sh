@@ -22,6 +22,7 @@ if [ "$OS" = "Linux" ] && command -v apt-get &>/dev/null; then
         libgl1 \
         libglib2.0-0 \
         libdbus-1-3 \
+        libxcb-cursor0 \
         python3.12-venv \
         > /dev/null
 fi

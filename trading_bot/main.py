@@ -27,6 +27,18 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
+# ── Qt platform auto-detection (must happen before QApplication is created) ──
+# If no DISPLAY/WAYLAND_DISPLAY is set, fall back to offscreen rendering so
+# the process does not abort with "Could not load the Qt platform plugin xcb".
+def _configure_qt_platform() -> None:
+    if os.environ.get("QT_QPA_PLATFORM"):
+        return  # honour explicit override
+    has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    if not has_display:
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
+_configure_qt_platform()
+
 # ── Logging (before imports that use logger) ────────────────────────────────
 from utils.logger import setup_logger, get_intel_logger
 setup_logger("INFO")
