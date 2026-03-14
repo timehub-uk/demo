@@ -14,10 +14,24 @@ ARCH=$(uname -m)
 OS=$(uname -s)
 echo "▶ Platform: $OS $ARCH"
 
+# Install system dependencies required by PyQt6 on Debian/Ubuntu
+if [ "$OS" = "Linux" ] && command -v apt-get &>/dev/null; then
+    echo "▶ Installing system dependencies for PyQt6 (Ubuntu/Debian)…"
+    sudo apt-get install -y --no-install-recommends \
+        libegl1 \
+        libgl1 \
+        libglib2.0-0 \
+        libdbus-1-3 \
+        python3.12-venv \
+        > /dev/null
+fi
+
 # Python version check
-PYTHON=$(which python3.12 2>/dev/null || which python3.11 2>/dev/null || which python3 2>/dev/null)
+PYTHON=$(which python3.12 2>/dev/null || which python3 2>/dev/null)
 if [ -z "$PYTHON" ]; then
-    echo "❌ Python 3.11+ required. Install via: brew install python@3.12"
+    echo "❌ Python 3.12 required."
+    echo "  macOS:  brew install python@3.12"
+    echo "  Ubuntu: sudo apt-get install python3.12 python3.12-venv"
     exit 1
 fi
 echo "▶ Python: $($PYTHON --version)"

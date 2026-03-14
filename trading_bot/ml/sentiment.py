@@ -211,10 +211,12 @@ class AIScorer:
             api_key = settings.ai.gemini_api_key
             if not api_key:
                 return None
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            resp = model.generate_content(prompt)
+            from google import genai
+            client = genai.Client(api_key=api_key)
+            resp = client.models.generate_content(
+                model="gemini-1.5-flash",
+                contents=prompt,
+            )
             raw = resp.text.strip()
             data = json.loads(raw)
             return float(data["score"]), float(data["confidence"]), str(data["label"])

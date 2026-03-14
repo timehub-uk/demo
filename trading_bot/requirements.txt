@@ -55,7 +55,7 @@ PyJWT>=2.8.0
 # ── AI API Clients ───────────────────────────────────────────
 anthropic>=0.29.0
 openai>=1.35.0
-google-generativeai>=0.7.2
+google-genai>=1.0.0
 elevenlabs>=1.2.0
 
 # ── Email ────────────────────────────────────────────────────
