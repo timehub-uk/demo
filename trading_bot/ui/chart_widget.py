@@ -845,6 +845,19 @@ class ChartWidget(QWidget):
         self.lbl_change.setStyleSheet(f"font-size:12px; font-weight:600; padding:0 4px;")
         lay.addWidget(self.lbl_change)
 
+        lay.addWidget(_vsep())
+        pdf_btn = QPushButton("⎙ PDF")
+        pdf_btn.setFixedHeight(24)
+        pdf_btn.setFixedWidth(54)
+        pdf_btn.setStyleSheet(
+            f"QPushButton {{ background:{BG3}; color:{FG1}; border:1px solid {BORDER}; "
+            f"border-radius:3px; font-size:11px; font-weight:700; }}"
+            f"QPushButton:hover {{ background:{BG4}; color:{FG0}; }}"
+        )
+        pdf_btn.setToolTip("Export chart to PDF")
+        pdf_btn.clicked.connect(self._export_pdf)
+        lay.addWidget(pdf_btn)
+
         return row
 
     def _build_toolbar_row2(self) -> QWidget:
@@ -996,6 +1009,57 @@ class ChartWidget(QWidget):
         self._auto_follow = checked
         label = "Auto-Follow ✓" if checked else "Auto-Follow ✗"
         self._autofollow_btn.setText(label)
+
+    # ── PDF export ─────────────────────────────────────────────────────
+
+    def _export_pdf(self) -> None:
+        """Render the entire chart widget to a PDF via QPrinter."""
+        from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
+        from PyQt6.QtWidgets import QFileDialog
+        from PyQt6.QtGui import QPainter
+
+        # Ask the user where to save
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Chart to PDF",
+            f"{self._symbol}_{self._interval}_chart.pdf",
+            "PDF Files (*.pdf)",
+        )
+        if not path:
+            return
+
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+        printer.setOutputFileName(path)
+        printer.setPageOrientation(
+            __import__("PyQt6.QtGui", fromlist=["QPageLayout"]).QPageLayout.Orientation.Landscape
+        )
+
+        painter = QPainter()
+        if not painter.begin(printer):
+            return
+        try:
+            # Scale the widget to fill the printer page
+            page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
+            widget_size = self.size()
+            sx = page_rect.width()  / max(widget_size.width(),  1)
+            sy = page_rect.height() / max(widget_size.height(), 1)
+            scale = min(sx, sy)
+            painter.scale(scale, scale)
+            self.render(painter)
+        finally:
+            painter.end()
+
+        # Brief status toast if available
+        try:
+            from PyQt6.QtWidgets import QToolTip
+            QToolTip.showText(
+                self.mapToGlobal(self.rect().center()),
+                f"Chart exported to {path}",
+                self,
+            )
+        except Exception:
+            pass
 
     def _build_price_plot(self) -> None:
         self._price_plot = pg.PlotWidget()
