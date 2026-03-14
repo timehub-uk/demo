@@ -9,6 +9,7 @@ import json
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -50,7 +51,7 @@ class WebhookManager:
 
     def __init__(self) -> None:
         self._endpoints: dict[str, WebhookEndpoint] = {}
-        self._queue: list[WebhookEvent] = []
+        self._queue: deque[WebhookEvent] = deque()
         self._lock = threading.Lock()
         self._dispatch_thread = threading.Thread(
             target=self._dispatch_loop, daemon=True, name="webhook-dispatcher"
@@ -109,10 +110,7 @@ class WebhookManager:
     def _dispatch_loop(self) -> None:
         while True:
             with self._lock:
-                if self._queue:
-                    ev = self._queue.pop(0)
-                else:
-                    ev = None
+                ev = self._queue.popleft() if self._queue else None
             if ev:
                 self._deliver(ev)
             else:

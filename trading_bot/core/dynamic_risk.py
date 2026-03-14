@@ -274,7 +274,7 @@ class DynamicRiskManager:
 
         final_qty = base_qty * size_mult
 
-        if final_qty < 1e-8 or size_mult == 0:
+        if final_qty < 1e-8 or size_mult < 1e-9:
             return RiskCheck(
                 approved=False, final_quantity=Decimal("0"),
                 stop_loss=Decimal(str(round(stop_loss_f, 8))),

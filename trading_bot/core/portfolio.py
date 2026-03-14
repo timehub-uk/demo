@@ -135,8 +135,8 @@ class PortfolioManager:
                 try:
                     price = self._client.get_price(f"{asset}USDT")
                     usd_val = total * price
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Could not get price for {asset}USDT: {exc}")
             total_usdt += usd_val
             assets[asset] = {
                 "free": float(free),

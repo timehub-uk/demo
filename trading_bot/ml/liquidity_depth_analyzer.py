@@ -354,19 +354,20 @@ class LiquidityDepthAnalyzer:
         Walk the ask side of the book to fill usdt_size.
         Returns slippage as a % of mid price.
         """
-        remaining = usdt_size
-        cost      = 0.0
+        remaining  = usdt_size
+        total_qty  = 0.0
         for price_str, qty_str in asks:
             price    = float(price_str)
             qty      = float(qty_str)
             fill_qty = min(remaining / price, qty)
-            cost     += fill_qty * price
+            total_qty += fill_qty
             remaining -= fill_qty * price
             if remaining <= 0:
                 break
         if usdt_size <= 0 or mid <= 0:
             return 0.0
-        avg_price = cost / (usdt_size - max(0.0, remaining)) if (usdt_size - remaining) > 0 else mid
+        usdt_filled = usdt_size - max(0.0, remaining)
+        avg_price   = (usdt_filled / total_qty) if total_qty > 0 else mid
         return max(0.0, (avg_price - mid) / mid * 100)
 
     # ── Order book fetch ───────────────────────────────────────────────────────

@@ -407,7 +407,11 @@ class AutoTrader:
                 # Fallback sizing: 1% risk
                 risk_amt = portfolio_value * 0.01
                 sl_dist  = abs(price - sl_price)
-                quantity = risk_amt / (sl_dist + 1e-9)
+                # Enforce a minimum stop distance of 0.1% to prevent
+                # near-zero sl_dist producing astronomically large quantities
+                min_sl_dist = price * 0.001
+                sl_dist = max(sl_dist, min_sl_dist)
+                quantity = risk_amt / sl_dist
 
             if quantity <= 0:
                 raise ValueError("Calculated quantity is zero")
