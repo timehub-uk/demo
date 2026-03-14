@@ -1,6 +1,7 @@
 #!/bin/bash
 # ============================================================
-# BinanceML Pro – One-command setup for Mac Mini M4
+# BinanceML Pro – One-command setup (Mac / Linux / Ubuntu)
+# Requires Python 3.12+
 # ============================================================
 set -e
 
@@ -34,8 +35,9 @@ source "$VENV_DIR/bin/activate"
 pip install --upgrade pip setuptools wheel --quiet
 
 # Install requirements
+# --pre is required for pandas-ta 0.4.x which explicitly targets Python 3.12+
 echo "▶ Installing Python dependencies…"
-pip install -r "$(dirname "$0")/../requirements.txt" \
+pip install --pre -r "$(dirname "$0")/../requirements.txt" \
     --extra-index-url https://download.pytorch.org/whl/cpu \
     --quiet
 
