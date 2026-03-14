@@ -32,7 +32,9 @@ SHORTCUTS = [
     ("Navigation",   "Ctrl+8",         "Go to Connections"),
     ("Navigation",   "Ctrl+9",         "Go to Settings"),
     ("Navigation",   "F1",             "Go to Help"),
-    ("Navigation",   "Ctrl+Shift+S",   "Go to Simulation Panel"),
+    ("Navigation",   "F2",             "Go to Reports panel"),
+    ("Navigation",   "Ctrl+Shift+S",   "Go to Simulation panel"),
+    ("Navigation",   "Ctrl+Shift+W",   "Go to Market Watch dashboard"),
     ("Navigation",   "Ctrl+L",         "Toggle Intel Log dock"),
     ("Navigation",   "Ctrl+B",         "Toggle Order Book dock"),
     ("Trading",      "Ctrl+Shift+B",   "Market BUY current symbol"),
@@ -44,7 +46,6 @@ SHORTCUTS = [
     ("ML",           "Ctrl+Shift+T",   "Stop ML training"),
     ("ML",           "Ctrl+R",         "Reload ML model"),
     ("ML",           "Ctrl+I",         "Run data integrity check"),
-    ("Simulation",   "Ctrl+Shift+T",   "Open Simulation Twin tab"),
     ("Simulation",   "Ctrl+Shift+M",   "Open Mutation Lab tab"),
     ("Simulation",   "Ctrl+Shift+F",   "Open Safety Scanner tab"),
     ("Layer 1",      "Shift+Alt+1",    "Layer 1 – Infrastructure settings"),
@@ -60,6 +61,7 @@ SHORTCUTS = [
     ("Charts",       "Ctrl++",         "Add chart tab"),
     ("Charts",       "Ctrl+W",         "Close current chart tab"),
     ("Charts",       "Ctrl+Tab",       "Next chart tab"),
+    ("Charts",       "⎙ PDF button",   "Export chart to PDF (white bg, print colours)"),
     ("System",       "Ctrl+,",         "Open Settings"),
     ("System",       "Ctrl+Q",         "Quit application"),
     ("System",       "F11",            "Toggle fullscreen"),
@@ -257,19 +259,149 @@ and trains an LSTM + Transformer ensemble. After that, models retrain automatica
 
 <h2>CHART FEATURES</h2>
 
-<h3>Overlays</h3>
-<p>EMA 9/20/50/200 · SMA 20/50 · Bollinger Bands · VWAP ±1σ/±2σ · Ichimoku Cloud</p>
+<h3>Chart Styles</h3>
+<p>Candlestick · OHLC Bar · Heikin-Ashi · Line · Area — switch with the STYLE buttons in toolbar row 1.</p>
 
-<h3>Sub-Panel Oscillators</h3>
-<p>Volume + OBV · RSI (14) · MACD (12,26,9) · Stochastic (14,3,3) · ATR (14) · ADX (14)</p>
+<h3>Overlays (toolbar row 1 pills)</h3>
+<p>EMA 9/20/50/200 · SMA 20/50 · Bollinger Bands (20,2σ) · VWAP ±1σ/±2σ · Ichimoku Cloud</p>
+
+<h3>Sub-Panel Oscillators (toolbar row 2 pills)</h3>
+<p>Volume + OBV · RSI (14) with overbought/oversold fill · MACD (12,26,9) histogram ·
+Stochastic (14,3,3) · ATR (14) · ADX (14) with ±DI lines</p>
 
 <h3>AI Forecast Overlay</h3>
 <p>Toggle <b>AI FORECAST</b> pill → choose 5b / 10b / 20b / 50b / 100b horizon.
-Green cone = bullish · Red cone = bearish. <b>ACC</b> badge shows historical accuracy.</p>
+Green cone = bullish · Red cone = bearish. <b>ACC</b> badge shows live historical accuracy vs model ceiling.</p>
 
 <h3>Trade Markers</h3>
-<p>Toggle <b>TRADES</b> pill → yellow squares at every entry/exit, connected by a dotted line.
-Hover for full trade details (side, price, qty, gross P&amp;L, fees, tax, net).</p>
+<p>Toggle <b>TRADES</b> pill → gold squares at every entry/exit, connected by a dotted line.
+Hover any square for full trade details: side, price, qty, gross P&amp;L, fees (2×0.1%), UK CGT 20%, net.</p>
+
+<h3>Event Annotations (EVENTS pill)</h3>
+<p>Coloured diamond markers appear on the price chart for live market events — fired automatically
+as they occur from the backend services:</p>
+<table>
+  <tr><th>Event Type</th><th>Colour</th><th>Source</th></tr>
+  <tr><td>CASCADE</td><td style="color:#FF5722">▼ orange-red</td><td>Liquidation cascade detector</td></tr>
+  <tr><td>WHALE</td><td style="color:#CE93D8">◆ purple</td><td>Whale watcher (large block orders)</td></tr>
+  <tr><td>FUNDING</td><td style="color:#FFD700">◆ gold</td><td>Funding rate monitor (±0.10 % trigger)</td></tr>
+  <tr><td>LEAD_LAG</td><td style="color:#26C6DA">→ cyan</td><td>Correlation engine (lead/lag opportunity)</td></tr>
+  <tr><td>AGGRESSOR</td><td style="color:#FF7043">★ deep-orange</td><td>Order flow monitor (smart money)</td></tr>
+  <tr><td>ML_SIGNAL</td><td style="color:#4CAF50">▲ green</td><td>ML predictor BUY signal</td></tr>
+  <tr><td>VOLUME_SPIKE</td><td style="color:#AB47BC">↑ purple</td><td>Volume spike alert</td></tr>
+</table>
+<p>Hover any diamond for a tooltip: event type, UTC timestamp, and detail text.</p>
+
+<h3>Session Background Bands (SESSIONS pill)</h3>
+<p>Faint colour bands mark the three major trading sessions across every visible day:</p>
+<ul>
+  <li><span style="color:#7986CB">■ Asian</span> — 00:00–09:00 UTC (deep blue)</li>
+  <li><span style="color:#66BB6A">■ London</span> — 07:00–16:00 UTC (deep green)</li>
+  <li><span style="color:#EF5350">■ New York</span> — 13:00–21:00 UTC (deep red)</li>
+</ul>
+
+<h3>Auto Support &amp; Resistance (S/R pill)</h3>
+<p>Automatically detects swing highs and lows using a 5-bar rolling window, clusters levels within
+±0.5%, and draws up to 5 <span class="warn">red dashed resistance</span> and 5
+<span class="ok">green dashed support</span> lines with price labels.</p>
+
+<h3>Pair Watermark (WMARK pill)</h3>
+<p>Ultra-faint bold pair name (e.g. <b>BTC — USDT</b>) centred on the price plot, ~5 % opacity.
+Useful for screenshots and screen shares. Toggle off for a cleaner chart.</p>
+
+<h3>PDF Export (⎙ PDF button, top-right toolbar)</h3>
+<p>Exports the chart to a landscape A4 PDF with a <b>white background and print-optimised colours</b>
+(indicator lines remapped to dark-on-white equivalents, axis text set to near-black).
+A header showing <code>SYMBOL · INTERVAL · UTC timestamp</code> is added automatically.
+The live dark-theme view is restored immediately after capture.</p>
+
+<h3>Chart Navigation (toolbar row 3)</h3>
+<p>◀◀ / ◀ / ▶ / ▶▶ pan · − Zoom / + Zoom / Fit · Auto-Scale · Auto-Follow (locks view to latest candles)</p>
+
+<h2>MARKET WATCH DASHBOARD (Ctrl+Shift+W)</h2>
+<p>Unified real-time market surveillance panel with six tabs.
+Each backend service has an <b>on/off toggle button</b> in the top bar — when disabled the
+service stops all processing and fires no alerts, saving CPU and network bandwidth.</p>
+
+<h3>Backend Services (toggle bar)</h3>
+<table>
+  <tr><th>Service</th><th>What it does</th><th>Alert trigger</th></tr>
+  <tr>
+    <td><b>Funding Rate Monitor</b></td>
+    <td>Polls Binance perpetual futures <code>/fapi/v1/premiumIndex</code> every 5 min</td>
+    <td>Rate ≥ ±0.10 % → FUNDING_RATE alert</td>
+  </tr>
+  <tr>
+    <td><b>Order Flow (OFI)</b></td>
+    <td>Consumes aggTrade WebSocket; tracks 1-min and 5-min buy/sell aggressor ratio and
+        Order Flow Imbalance per symbol</td>
+    <td>1-min ratio ≥ 72 % (BUY_PRESSURE) or ≤ 28 % (SELL_PRESSURE) → AGGRESSOR alert</td>
+  </tr>
+  <tr>
+    <td><b>Correlation Engine</b></td>
+    <td>Lead/lag detector for BTC→ETH/BNB/SOL/XRP and ETH→BNB.
+        Adaptive Welford thresholds learn each pair's normal move size (MIN_SAMPLES=20).
+        Pearson r checked — only pairs with r ≥ 0.50 generate alerts.</td>
+    <td>Leader moves &gt; adaptive threshold AND follower hasn't reacted within 45 s → LEAD_LAG alert</td>
+  </tr>
+  <tr>
+    <td><b>Cascade Detector</b></td>
+    <td>Compound liquidation cascade detector. Per-symbol Welford statistics learn
+        normal price-move magnitude and volume-spike ratios (MIN_SAMPLES=30).
+        Fires when BOTH price ≥ adaptive threshold AND volume ≥ adaptive threshold within a 2-min window.</td>
+    <td>CASCADE alert — severity: MEDIUM / HIGH / EXTREME</td>
+  </tr>
+</table>
+
+<h3>Tab 1 — Volume Alerts</h3>
+<p>Single scrolling table (max 300 rows) receiving alerts from all types:
+VOLUME_SPIKE · EARLY_PUMP · CASCADE · FUNDING_RATE · LEAD_LAG · AGGRESSOR · WHALE.
+Columns: Time · Type · Symbol · Details · Value.</p>
+
+<h3>Tab 2 — ML Watch</h3>
+<p>Two-pane layout: top = live signal feed (Time · Symbol · Signal · Confidence · Source),
+bottom = per-symbol confidence summary table. Receives signals from the LSTM predictor,
+continuous learner, and whale watcher.</p>
+
+<h3>Tab 3 — Order Flow</h3>
+<p>Live table updated every 30 s: Symbol · Buy Vol 1m · Sell Vol 1m · Aggressor % · OFI 1m ·
+Buy Vol 5m · Signal.  Colour-coded: green BUY_PRESSURE / red SELL_PRESSURE / grey NEUTRAL.</p>
+
+<h3>Tab 4 — Portfolio Heatmap</h3>
+<p>Grid of tiles — one per open position. Tile <b>colour</b> = P&amp;L direction/magnitude
+(deep green profit → deep red loss). Tile <b>size</b> = position USD value (60–140 px).
+Updates every 5 seconds.</p>
+
+<h3>Tab 5 — Regime &amp; Cascade</h3>
+<p>Left: market regime table per symbol (TRENDING · RANGING · VOLATILE · BEAR · BULL).
+Right: cascade and lead-lag event feed with severity labels.
+Split with a resizable QSplitter. Polls every 30 s.</p>
+
+<h3>Tab 6 — Kill Switch</h3>
+<p>Emergency trading halt controls with confirmation dialogs:</p>
+<ul>
+  <li><b>Cancel All Orders</b> — cancels every open order on Binance immediately</li>
+  <li><b>Pause AutoTrader</b> — stops the AutoTrader from placing new orders</li>
+  <li><b>Switch to Paper Mode</b> — switches execution to simulated paper trading</li>
+  <li><b>EMERGENCY STOP</b> (large red button) — executes all three actions simultaneously</li>
+</ul>
+
+<h2>STREAM DECK INTEGRATION</h2>
+<p>If an <b>Elgato Stream Deck</b> is connected, BinanceML Pro maps trading actions to the physical
+buttons automatically.  No Stream Deck hardware? The integration silently does nothing — no errors.</p>
+<p>Set <code>STREAM_DECK_SIMULATE=1</code> as an environment variable to test button renders
+without hardware.</p>
+<table>
+  <tr><th>Button</th><th>Row</th><th>Action</th></tr>
+  <tr><td>Keys 0–4</td><td>Row 1</td><td>BUY BTC · ETH · SOL · BNB · XRP (market order at current size)</td></tr>
+  <tr><td>Keys 5–9</td><td>Row 2</td><td>SELL BTC · ETH · SOL · BNB · XRP</td></tr>
+  <tr><td>Key 10</td><td>Row 3</td><td>Enable AUTO trading mode</td></tr>
+  <tr><td>Key 11</td><td>Row 3</td><td>Disable AUTO trading mode</td></tr>
+  <tr><td>Key 12</td><td>Row 3</td><td>Switch to PAPER mode</td></tr>
+  <tr><td>Key 13</td><td>Row 3</td><td>CANCEL ALL open orders</td></tr>
+  <tr><td>Key 14</td><td>Row 3</td><td>⛔ KILL — emergency stop (cancel all + pause AT)</td></tr>
+</table>
+<p>Live prices and P&amp;L are displayed on the button faces (refreshed every heartbeat).</p>
 
 <h2>REST API</h2>
 <p>Auto-starts at <code>http://127.0.0.1:8765</code>. Use Bearer token from Settings → API Keys.</p>
@@ -594,6 +726,18 @@ class HelpWidget(QWidget):
             (GREEN,  "REST API (15+ endpoints) + webhooks · Bearer token auth"),
             (GREEN,  "Whale detection · sentiment analysis · AES-256-GCM security"),
             (GREEN,  "SQLAlchemy 3.0-ready — all queries use select() API"),
+            (GREEN,  "Market Watch dashboard — 6-tab market surveillance (Ctrl+Shift+W)"),
+            (GREEN,  "Funding Rate Monitor — perpetual futures ±0.10 % extreme alerts"),
+            (GREEN,  "Order Flow / OFI — aggressor ratio + smart-money detection"),
+            (GREEN,  "Correlation Engine — lead/lag detector with Welford adaptive thresholds"),
+            (GREEN,  "Cascade Detector — liquidation cascade ML (adaptive per-symbol σ)"),
+            (GREEN,  "Portfolio Heatmap — P&L colour tiles sized by position USD value"),
+            (GREEN,  "Emergency Kill Switch — Cancel All · Pause AT · Paper Mode"),
+            (GREEN,  "Elgato Stream Deck — 15-button hardware trading control panel"),
+            (GREEN,  "Chart event annotations — CASCADE/WHALE/FUNDING/LEAD-LAG on chart"),
+            (GREEN,  "Chart session bands — Asian / London / NY coloured regions"),
+            (GREEN,  "Auto S/R levels — swing-high/low cluster detection"),
+            (GREEN,  "Chart PDF export — white background, print-optimised colours"),
         ]
         for col, feat in features:
             fl = QLabel(f"  ●  {feat}")

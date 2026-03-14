@@ -49,7 +49,16 @@ _PANEL_HELP: dict[int, tuple[str, str]] = {
     0: ("Trading Panel",
         "Manual order entry, active orders, trade history, portfolio and P&L.\n\n"
         "• Multi-tab charts: open any USDT pair in its own tab\n"
-        "• Overlay selector: EMA/SMA/Bollinger/RSI/MACD and more\n"
+        "• Chart styles: Candlestick · OHLC · Heikin-Ashi · Line · Area\n"
+        "• Overlays: EMA 9/20/50/200 · SMA · BB · VWAP ±σ · Ichimoku\n"
+        "• Event annotations: CASCADE / WHALE / FUNDING / LEAD-LAG markers on chart\n"
+        "• Session bands: Asian · London · NY coloured background regions\n"
+        "• Auto S/R: swing-high/low cluster detection → resistance & support lines\n"
+        "• Pair watermark: faint bold pair name centred on the price chart (WMARK)\n"
+        "• Sub-panels: Volume · OBV · RSI · MACD · Stochastic · ATR · ADX\n"
+        "• AI Forecast cone: BUY/SELL projection with accuracy badge (ACC)\n"
+        "• Trade markers: entry/exit squares with hover P&L tooltip\n"
+        "• ⎙ PDF export: white-background, print-optimised chart PDF\n"
         "• Order entry: LIMIT / MARKET / STOP / OCO with SL+TP\n"
         "• Active Orders table with one-click cancel\n"
         "• Portfolio tab shows free/locked balances in USD/GBP"),
@@ -132,14 +141,23 @@ _PANEL_HELP: dict[int, tuple[str, str]] = {
         "• Ad-Hoc:    custom date range, full/P&L/attribution/forecast/risk/tax\n"
         "• Shortcut: F2"),
     12: ("Market Watch",
-        "Unified real-time market surveillance dashboard.\n\n"
-        "• Volume Alerts: large volume spikes, whale events, cascade alerts\n"
-        "• ML Watch: live signal feed, per-symbol model confidence\n"
-        "• Order Flow: aggressor ratio + OFI per symbol (smart money tracker)\n"
-        "• Heatmap: portfolio exposure colour grid (P&L + position size)\n"
-        "• Regime & Cascade: market regime per symbol + liquidation cascade feed\n"
-        "• Kill Switch: emergency halt — cancel all / pause AT / paper mode\n"
-        "• Shortcut: Ctrl+W"),
+        "Unified real-time market surveillance dashboard.  Shortcut: Ctrl+Shift+W\n\n"
+        "Toggle bar — each service can be enabled / disabled independently:\n"
+        "• Funding Rate Monitor — polls perpetual futures funding rates every 5 min;\n"
+        "  fires alert when rate exceeds ±0.10 % (extreme funding)\n"
+        "• Order Flow (OFI) — tracks buy/sell aggressor ratio and Order Flow Imbalance\n"
+        "  per symbol from aggTrade WebSocket; alerts at ≥72 % or ≤28 % (smart money)\n"
+        "• Correlation Engine — lead/lag detector for BTC→ETH/BNB/SOL/XRP and ETH→BNB;\n"
+        "  adaptive Welford thresholds; fires when leader moves but follower hasn't reacted\n"
+        "• Cascade Detector — liquidation cascade detector; adaptive ML thresholds learn\n"
+        "  normal price volatility and volume-spike distributions per symbol\n\n"
+        "Tabs:\n"
+        "• Volume Alerts — all alert types in one table (whale, cascade, funding, lead-lag)\n"
+        "• ML Watch — live signal feed + per-symbol model confidence summary\n"
+        "• Order Flow — aggressor ratio + OFI table for every subscribed symbol\n"
+        "• Portfolio Heatmap — P&L colour tiles sized by position USD value\n"
+        "• Regime & Cascade — market regime per symbol + liquidation event feed\n"
+        "• Kill Switch — emergency halt: Cancel All / Pause AutoTrader / Paper Mode"),
 }
 
 

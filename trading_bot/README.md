@@ -1,6 +1,6 @@
 # BinanceML Pro
 
-**Professional AI-Powered Binance Trading Platform — v2.0**
+**Professional AI-Powered Binance Trading Platform — v2.1**
 
 > Fully automated crypto trading with LSTM + Transformer ML · 10-layer architecture ·
 > UK HMRC CGT reporting · Institutional-grade risk management · SQLAlchemy 3.0 ready
@@ -16,9 +16,10 @@
 | **Signal Pipeline** | Regime detector → MTF confluence → Signal Council deliberation → Dynamic risk sizing |
 | **Pair Discovery** | 1 000+ pairs scanned across USDT / BTC / ETH / BNB / SOL quote assets every 15 min |
 | **Detection Suite** | Stealth accumulation · Liquidity depth grading · 4-stage volume breakout · Multi-TF trend scanner |
-| **Charts** | Candlestick, Heikin-Ashi, OHLC · EMA/SMA/VWAP/BB/Ichimoku overlays · RSI, MACD, ATR, ADX sub-panels · AI forecast cone |
+| **Charts** | Candlestick, Heikin-Ashi, OHLC · EMA/SMA/VWAP/BB/Ichimoku overlays · RSI, MACD, ATR, ADX sub-panels · AI forecast cone · Event annotations · Session bands · Auto S/R · PDF export |
 | **AutoTrader** | SEMI\_AUTO (confirm-to-trade) or FULL\_AUTO · Ping-Pong range trader · Statistical + Triangular + DEX↔CEX Spread arbitrage |
 | **Risk** | Kelly position sizing · Circuit-breaker drawdown guard · Monte Carlo simulation · Walk-forward validation |
+| **Market Watch** | 6-tab surveillance dashboard · Funding Rate Monitor · Order Flow OFI · Correlation/Lead-Lag · Cascade Detector · Portfolio Heatmap · Emergency Kill Switch |
 | **Order Book** | Real-time L1/L2 depth · Bid-ask spread · Volume imbalance bar |
 | **Trade Journal** | Full trade history · Signal attribution · Entry/exit annotation on charts |
 | **Backtesting** | Symbol + interval + date range · Equity curve · Sharpe / CAGR / max-drawdown · Trade-by-trade log |
@@ -29,6 +30,7 @@
 | **API** | REST API on `127.0.0.1:8765` · 15+ endpoints · Bearer token auth · Webhooks |
 | **On-Chain APIs** | CoinGecko DEX API v3 · Codex GraphQL · 0x Swap API v2 · free-tier budget scheduler (12 slots/hr) |
 | **MetaMask** | Live wallet polling via free public JSON-RPC · profit-sweeping to any EVM address |
+| **Stream Deck** | Elgato Stream Deck 15-button layout · BUY/SELL/AUTO/KILL hardware control |
 | **Security** | AES-256-GCM encrypted config · OS keychain integration · PBKDF2 master key · bcrypt auth |
 | **Performance** | Apple Silicon MPS GPU · Thread pools · Redis caching · connection pool tuned for 20 GB RAM |
 
@@ -59,6 +61,10 @@ brew services start postgresql@16 redis
 python trading_bot/main.py
 ```
 
+> **Tip:** Use `install_macos.sh` or `install_debian.sh` in the project root for a
+> fully automated one-command install including system dependencies, virtual environment,
+> and database initialisation.
+
 ### Prerequisites
 
 | Dependency | Version | Notes |
@@ -73,8 +79,6 @@ python trading_bot/main.py
 
 ## Navigation
 
-The left sidebar has 9 numbered panels + F1 Help:
-
 | Shortcut | Panel |
 |---|---|
 | `Ctrl+1` | Trading (charts, order entry, portfolio) |
@@ -87,9 +91,12 @@ The left sidebar has 9 numbered panels + F1 Help:
 | `Ctrl+8` | Connections & Health |
 | `Ctrl+9` | Settings |
 | `F1` | Help & Shortcuts |
+| `F2` | Reports |
 | `Ctrl+Shift+S` | Simulation Panel |
+| `Ctrl+Shift+W` | Market Watch dashboard |
 | `Ctrl+Shift+D` | System Status Dashboard |
 | `Ctrl+L` | Toggle Intel Log |
+| `Ctrl+B` | Toggle Order Book |
 
 ---
 
@@ -107,6 +114,12 @@ trading_bot/
 │   ├── order_manager.py            ← Order lifecycle · PostgreSQL persistence
 │   ├── portfolio.py                ← Live balances · GBP/USD conversion · P&L
 │   ├── risk_manager.py             ← Stop-loss, take-profit, position sizing
+│   ├── alert_manager.py            ← Alert dispatch (10 alert types) · callbacks
+│   ├── funding_rate_monitor.py     ← Perpetual futures funding rate polling (±0.10 % alert)
+│   ├── order_flow.py               ← Aggressor ratio + OFI from aggTrade WebSocket
+│   ├── correlation_engine.py       ← Lead/lag detector · Welford adaptive thresholds
+│   ├── cascade_detector.py         ← Liquidation cascade detector · adaptive ML σ
+│   ├── stream_deck.py              ← Elgato Stream Deck 15-button hardware integration
 │   ├── gas_fee_engine.py           ← On-chain gas estimation (web3 + fallback)
 │   ├── metamask_wallet.py          ← EVM profit-sweep integration
 │   ├── dex_data_provider.py        ← CoinGecko DEX API + Codex GraphQL · ApiRateLimiter · DexCallScheduler
@@ -116,6 +129,7 @@ trading_bot/
 │   ├── trainer.py                  ← LSTM + Transformer training · Optuna HPO · MPS GPU
 │   ├── predictor.py                ← Real-time BUY/SELL/HOLD signals with confidence
 │   ├── continuous_learner.py       ← 24 h auto-retraining · 25 min data-integrity checks
+│   ├── forecast_tracker.py         ← Forecast accuracy tracking · horizon reliability curves
 │   ├── pair_scanner.py             ← 1 000+ pair ranking (volume, activity, momentum)
 │   ├── pair_ml_analyzer.py         ← Tradability Score from 6 ML tools per pair
 │   ├── accumulation_detector.py    ← Stealth accumulation: NONE/WATCH/ALERT/STRONG
@@ -129,10 +143,11 @@ trading_bot/
 │   └── uk_tax.py                   ← HMRC CGT · Section 104 · bed-and-breakfast rule
 ├── api/
 │   └── server.py                   ← Flask REST API · Bearer auth · webhooks
-├── ui/                             ← 32 PyQt6 widget modules
+├── ui/                             ← 34 PyQt6 widget modules
 │   ├── main_window.py              ← Main window, sidebar, Intel Log dock
 │   ├── trading_panel.py            ← Order entry, active orders, daily P&L bar chart
-│   ├── chart_widget.py             ← Candlestick charts + all indicators
+│   ├── chart_widget.py             ← Candlestick charts · all indicators · event annotations · PDF export
+│   ├── market_watch_panel.py       ← Market Watch 6-tab surveillance dashboard
 │   ├── orderbook_widget.py         ← Real-time L1/L2 order book
 │   ├── auto_trader_widget.py       ← AutoTrader (Pairs/Trend/Arb tabs)
 │   ├── ml_training_widget.py       ← Training progress charts and signal stream
@@ -178,7 +193,43 @@ Layer  8  Token & Contract Safety          ContractAnalyzer · HoneypotDetector 
 Layer  9  Monitoring & Reporting           PnLAttribution · TradeJournal · ForecastTracker · Alerts
 Layer 10  Governance & Oversight           InvestmentCommittee · ApprovalWorkflow · AccessControl
 ──────── Evolution Layer                   LiveSimulationTwin · StrategyMutationLab
+──────── Surveillance Layer                FundingRateMonitor · OrderFlowOFI · CascadeDetector · CorrelationEngine
 ```
+
+---
+
+## Market Watch Dashboard
+
+Open with **`Ctrl+Shift+W`**.  Each backend service has an on/off toggle — disabling it
+stops all processing and fires no alerts.
+
+| Service | What it does | Alert trigger |
+|---|---|---|
+| **Funding Rate Monitor** | Polls Binance perp futures every 5 min | Rate ≥ ±0.10 % |
+| **Order Flow (OFI)** | Tracks buy/sell aggressor ratio from aggTrade WebSocket | 1-min ratio ≥ 72 % or ≤ 28 % |
+| **Correlation Engine** | Lead/lag detector BTC→ETH/BNB/SOL/XRP · Welford adaptive thresholds | Leader moves; follower hasn't reacted within 45 s |
+| **Cascade Detector** | Liquidation cascade: rapid price + volume spike · adaptive ML σ per symbol | Price ≥ adaptive threshold AND volume ≥ adaptive threshold |
+
+Tabs: **Volume Alerts · ML Watch · Order Flow · Heatmap · Regime & Cascade · Kill Switch**
+
+---
+
+## Chart Features
+
+### Toolbar overlays
+`EMA9/20/50/200` · `SMA20/50` · `BB` · `VWAP ±σ` · `ICH` · `AI FORECAST` (cone + ACC badge)
+
+### Extras row
+| Toggle | What it does |
+|---|---|
+| `EVENTS` | Coloured diamond annotations for CASCADE / WHALE / FUNDING / LEAD_LAG / AGGRESSOR / ML_SIGNAL |
+| `S/R` | Auto swing-high/low cluster → up to 5 resistance + 5 support dashed lines |
+| `SESSIONS` | Asian (00–09 UTC) · London (07–16 UTC) · NY (13–21 UTC) coloured bands |
+| `WMARK` | Ultra-faint bold pair name centred on chart (~5 % opacity) |
+
+### PDF Export
+Click **⎙ PDF** (top-right toolbar) → white-background A4 landscape PDF with print-optimised
+indicator colours, header (symbol · interval · UTC timestamp), and thin chart border.
 
 ---
 
@@ -213,12 +264,6 @@ curl -X POST http://localhost:8765/api/v1/order \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"symbol":"BTCUSDT","side":"BUY","quantity":0.001,"price":65000}'
-
-# Register a webhook for TRADE + SIGNAL events
-curl -X POST http://localhost:8765/api/v1/webhook/register \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{"url":"https://your-app.com/hook","events":["TRADE","SIGNAL"]}'
 ```
 
 ---
@@ -252,14 +297,6 @@ curl -X POST http://localhost:8765/api/v1/webhook/register \
 
 All ORM queries use the **SQLAlchemy 2.0 `select()` API** — compatible with
 SQLAlchemy 2.x and ready for SQLAlchemy 3.0 (which removes the legacy `.query()` API).
-
-```python
-# Pattern used throughout the codebase
-from sqlalchemy import select
-result = db.execute(
-    select(Trade).where(Trade.symbol == symbol)
-).scalar_one_or_none()
-```
 
 ---
 
