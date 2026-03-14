@@ -337,9 +337,8 @@ class BinanceClient:
                 self._callbacks[stream] = []
             if callback not in self._callbacks[stream]:
                 self._callbacks[stream].append(callback)
-
-        if stream in self._ws_active and self._ws_active[stream]:
-            return  # Already subscribed
+            if stream in self._ws_active and self._ws_active[stream]:
+                return  # Already subscribed
 
         def _on_message(ws, message):
             import json
@@ -350,8 +349,8 @@ class BinanceClient:
                         cb(data)
                     except Exception as e:
                         logger.error(f"WS callback error: {e}")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"WS message parse error [{stream}]: {exc}")
 
         def _on_error(ws, error):
             logger.warning(f"WS error [{stream}]: {error}")

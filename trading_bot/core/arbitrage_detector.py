@@ -665,5 +665,5 @@ class ArbitrageDetector:
         for cb in self._callbacks:
             try:
                 cb(opp)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error(f"Arbitrage callback error: {exc}")

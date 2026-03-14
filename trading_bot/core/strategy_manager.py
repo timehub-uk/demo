@@ -294,6 +294,10 @@ class StrategyManager:
                 ))
 
         scores.sort(key=lambda s: -s.score)
+        if not scores:
+            return self._last_selection or StrategySelection(
+                active_strategy=self._active, regime=regime, scores=[], switched_from=None
+            )
         best = scores[0].name
 
         old = self._active
@@ -319,7 +323,8 @@ class StrategyManager:
                     pass
         else:
             self._intel.ml("StrategyManager",
-                f"Strategy confirmed: {best}  (regime={regime}  score={scores[0].score:.2f})")
+                f"Strategy confirmed: {best}  (regime={regime}  score={scores[0].score:.2f})" if scores else
+                f"Strategy confirmed: {best}  (regime={regime})")
 
         return selection
 

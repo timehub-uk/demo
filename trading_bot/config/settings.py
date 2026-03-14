@@ -6,9 +6,12 @@ Provides typed access to all configuration values.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
@@ -245,8 +248,8 @@ class Settings:
             elif PLAIN_CONFIG_FILE.exists():
                 data = json.loads(PLAIN_CONFIG_FILE.read_text())
                 self._apply(data)
-        except Exception:
-            pass  # Use defaults on any failure
+        except Exception as exc:
+            logger.warning(f"Config load failed, using defaults: {exc}")
 
     def _apply(self, data: dict[str, Any]) -> None:
         self.user = UserProfile(**data.get("user", {}))

@@ -161,10 +161,7 @@ class Backtester:
                 if exit_reason:
                     position = self._close_position(position, close, exit_reason, capital)
                     trades.append(position)
-                    if position.direction == "BUY":
-                        capital += position.pnl
-                    else:
-                        capital += position.pnl
+                    capital += position.pnl
                     position = None
 
             # Generate signal from model
@@ -310,7 +307,8 @@ class Backtester:
         else:
             gross = (pos.entry_price - exit_price) * pos.quantity
         net_pnl = gross - abs(fee)
-        pnl_pct = net_pnl / (pos.entry_price * pos.quantity) * 100
+        denominator = pos.entry_price * pos.quantity
+        pnl_pct = net_pnl / denominator * 100 if denominator else 0.0
 
         return BacktestTrade(
             symbol=pos.symbol, direction=pos.direction,

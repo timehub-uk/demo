@@ -244,6 +244,8 @@ class ForecastTracker:
 
             direction  = row["direction"]
             entry      = row["entry_price"]
+            if not entry:
+                continue
             move_pct   = (price - entry) / entry * 100.0
             if direction == "SELL":
                 move_pct = -move_pct   # positive = correct for SELL too
@@ -383,6 +385,8 @@ def _expected_rate(horizon_bars: int) -> float:
     if horizon_bars <= 0:
         return 0.60
     keys = sorted(HORIZON_RELIABILITY.keys())
+    if not keys:
+        return 0.55
     if horizon_bars <= keys[0]:
         return HORIZON_RELIABILITY[keys[0]]
     if horizon_bars >= keys[-1]:

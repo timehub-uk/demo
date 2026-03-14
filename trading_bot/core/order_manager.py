@@ -217,5 +217,5 @@ class OrderManager:
         for cb in self._callbacks:
             try:
                 cb(order)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error(f"Order callback error: {exc}")
