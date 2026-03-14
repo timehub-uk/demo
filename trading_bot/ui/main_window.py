@@ -131,6 +131,15 @@ _PANEL_HELP: dict[int, tuple[str, str]] = {
         "• Quarterly: Q1–Q4 bar chart, Sharpe estimate, month-by-month table\n"
         "• Ad-Hoc:    custom date range, full/P&L/attribution/forecast/risk/tax\n"
         "• Shortcut: F2"),
+    12: ("Market Watch",
+        "Unified real-time market surveillance dashboard.\n\n"
+        "• Volume Alerts: large volume spikes, whale events, cascade alerts\n"
+        "• ML Watch: live signal feed, per-symbol model confidence\n"
+        "• Order Flow: aggressor ratio + OFI per symbol (smart money tracker)\n"
+        "• Heatmap: portfolio exposure colour grid (P&L + position size)\n"
+        "• Regime & Cascade: market regime per symbol + liquidation cascade feed\n"
+        "• Kill Switch: emergency halt — cancel all / pause AT / paper mode\n"
+        "• Shortcut: Ctrl+W"),
 }
 
 
@@ -337,6 +346,7 @@ _NAV_ITEMS = [
     (9,  "help",         "HELP"),
     (10, "simulation",   "SIM"),
     (11, "reports",      "RPT"),
+    (12, "ml",           "WATCH"),
 ]
 
 
@@ -983,6 +993,11 @@ class MainWindow(QMainWindow):
         discord=None,
         slack=None,
         email_notifier=None,
+        funding_monitor=None,
+        ofi_monitor=None,
+        correlation_engine=None,
+        cascade_detector=None,
+        stream_deck=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -1043,6 +1058,11 @@ class MainWindow(QMainWindow):
         self._discord        = discord
         self._slack          = slack
         self._email_notifier = email_notifier
+        self._funding_monitor    = funding_monitor
+        self._ofi_monitor        = ofi_monitor
+        self._correlation_engine = correlation_engine
+        self._cascade_detector   = cascade_detector
+        self._stream_deck        = stream_deck
 
         self._settings       = get_settings()
         self._intel          = get_intel_logger()
@@ -1111,6 +1131,7 @@ class MainWindow(QMainWindow):
         self._build_help_page()          # 9
         self._build_simulation_page()    # 10
         self._build_reports_page()       # 11
+        self._build_market_watch_page()  # 12
 
         # Toast notification overlay (floats over the window)
         self._toast = ToastOverlay(central)
@@ -1434,6 +1455,39 @@ class MainWindow(QMainWindow):
             self.simulation_page = _placeholder("Simulation", f"Not available: {exc}")
         self.stack.addWidget(self.simulation_page)
 
+    def _build_market_watch_page(self) -> None:
+        """Market Watch – index 12."""
+        try:
+            from ui.market_watch_panel import MarketWatchPanel
+            alert_mgr = getattr(self, "_alert_mgr", None)
+            self.market_watch_page = MarketWatchPanel(
+                alert_manager    = alert_mgr,
+                whale_watcher    = self._whale_watcher,
+                funding_monitor  = self._funding_monitor,
+                cascade_detector = self._cascade_detector,
+                ofi_monitor      = self._ofi_monitor,
+                portfolio        = self._portfolio,
+                regime_detector  = self._regime_detector,
+                correlation_engine = self._correlation_engine,
+                predictor        = self._predictor,
+                continuous_learner = self._cl,
+                engine           = self._engine,
+                auto_trader      = self._auto_trader,
+                order_manager    = self._order_manager,
+            )
+            # Forward ML predictor signals to the ML Watch tab
+            if self._predictor:
+                try:
+                    self._predictor.on_signal(
+                        lambda s: self.market_watch_page.add_ml_signal(s)
+                    )
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.warning(f"Market Watch page unavailable: {exc}")
+            self.market_watch_page = _placeholder("Market Watch", f"Not available: {exc}")
+        self.stack.addWidget(self.market_watch_page)
+
     def _build_connections_page(self) -> None:
         from ui.connections_widget import ConnectionsWidget
         binance_client = None
@@ -1658,17 +1712,18 @@ class MainWindow(QMainWindow):
 
     def _build_shortcuts(self) -> None:
         pairs = [
-            ("Ctrl+1", lambda: self._navigate_to(0)),
-            ("Ctrl+2", lambda: self._navigate_to(1)),
-            ("Ctrl+3", lambda: self._navigate_to(2)),
-            ("Ctrl+4", lambda: self._navigate_to(3)),
-            ("Ctrl+5", lambda: self._navigate_to(4)),
-            ("Ctrl+6", lambda: self._navigate_to(5)),
-            ("Ctrl+7", lambda: self._navigate_to(6)),
-            ("Ctrl+8", lambda: self._navigate_to(7)),
-            ("Ctrl+9", lambda: self._navigate_to(8)),
-            ("F11",    self._toggle_fullscreen),
-            ("F1",     lambda: self._navigate_to(9)),
+            ("Ctrl+1",       lambda: self._navigate_to(0)),
+            ("Ctrl+2",       lambda: self._navigate_to(1)),
+            ("Ctrl+3",       lambda: self._navigate_to(2)),
+            ("Ctrl+4",       lambda: self._navigate_to(3)),
+            ("Ctrl+5",       lambda: self._navigate_to(4)),
+            ("Ctrl+6",       lambda: self._navigate_to(5)),
+            ("Ctrl+7",       lambda: self._navigate_to(6)),
+            ("Ctrl+8",       lambda: self._navigate_to(7)),
+            ("Ctrl+9",       lambda: self._navigate_to(8)),
+            ("Ctrl+Shift+W", lambda: self._navigate_to(12)),
+            ("F11",          self._toggle_fullscreen),
+            ("F1",           lambda: self._navigate_to(9)),
         ]
         for key, fn in pairs:
             sc = QShortcut(QKeySequence(key), self)

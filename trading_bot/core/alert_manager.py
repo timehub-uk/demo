@@ -43,17 +43,22 @@ from utils.logger import get_intel_logger
 
 
 class AlertType(str, Enum):
-    BUY          = "BUY"
-    SELL         = "SELL"
-    WIN          = "WIN"
-    LOSS         = "LOSS"
-    NEW_TOKEN    = "NEW_TOKEN"
-    NEW_HIGH     = "NEW_HIGH"
-    NEW_LOW      = "NEW_LOW"
-    VOLUME_SPIKE = "VOLUME_SPIKE"
-    EARLY_PUMP   = "EARLY_PUMP"
-    WASH         = "WASH"
+    BUY           = "BUY"
+    SELL          = "SELL"
+    WIN           = "WIN"
+    LOSS          = "LOSS"
+    NEW_TOKEN     = "NEW_TOKEN"
+    NEW_HIGH      = "NEW_HIGH"
+    NEW_LOW       = "NEW_LOW"
+    VOLUME_SPIKE  = "VOLUME_SPIKE"
+    EARLY_PUMP    = "EARLY_PUMP"
+    WASH          = "WASH"
     CIRCUIT_BREAK = "CIRCUIT_BREAK"
+    # ── New market-watch alert types ──────────────────────────────────
+    FUNDING_RATE  = "FUNDING_RATE"   # extreme perpetual funding rate
+    CASCADE       = "CASCADE"        # liquidation cascade (price + vol spike)
+    LEAD_LAG      = "LEAD_LAG"       # correlated pair hasn't reacted yet
+    AGGRESSOR     = "AGGRESSOR"      # smart-money buy/sell pressure (OFI)
 
 
 ALERT_EMOJIS: dict[AlertType, str] = {
@@ -68,6 +73,10 @@ ALERT_EMOJIS: dict[AlertType, str] = {
     AlertType.EARLY_PUMP:    "🚀",
     AlertType.WASH:          "🫧",
     AlertType.CIRCUIT_BREAK: "⛔",
+    AlertType.FUNDING_RATE:  "💸",
+    AlertType.CASCADE:       "🌊",
+    AlertType.LEAD_LAG:      "🔗",
+    AlertType.AGGRESSOR:     "🦈",
 }
 
 # Minimum seconds between repeated alerts for the same (type, symbol)

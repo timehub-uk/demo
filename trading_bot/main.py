@@ -469,6 +469,32 @@ def build_services(settings):
         registry=StrategyRegistry(),
     )
 
+    # ── New market-watch services ──────────────────────────────────────
+    intel.system("Startup", "Initialising funding rate monitor…")
+    from core.funding_rate_monitor import FundingRateMonitor
+    funding_monitor = FundingRateMonitor()
+
+    intel.system("Startup", "Initialising order flow monitor (OFI)…")
+    from core.order_flow import OrderFlowMonitor
+    ofi_monitor = OrderFlowMonitor(binance_client=binance)
+
+    intel.system("Startup", "Initialising correlation / lead-lag engine…")
+    from core.correlation_engine import CorrelationEngine
+    correlation_engine = CorrelationEngine()
+
+    intel.system("Startup", "Initialising liquidation cascade detector…")
+    from core.cascade_detector import CascadeDetector
+    cascade_detector = CascadeDetector()
+
+    intel.system("Startup", "Initialising Stream Deck controller…")
+    from core.stream_deck import get_stream_deck
+    stream_deck = get_stream_deck()
+    stream_deck.set_services(
+        engine=engine,
+        auto_trader=auto_trader if "auto_trader" in dir() else None,
+        order_manager=orders,
+    )
+
     # Wire whale watcher + token ML into trading engine
     engine.set_whale_watcher(whale_watcher)
     engine.set_token_ml_manager(token_ml)
@@ -500,6 +526,11 @@ def build_services(settings):
         "continuous_learner": cl,
         "tax_calc": tax_calc,
         "whale_watcher": whale_watcher,
+        "funding_monitor":    funding_monitor,
+        "ofi_monitor":        ofi_monitor,
+        "correlation_engine": correlation_engine,
+        "cascade_detector":   cascade_detector,
+        "stream_deck":        stream_deck,
         "token_ml": token_ml,
         "sentiment": sentiment,
         "port_opt": port_opt,
@@ -596,6 +627,69 @@ def start_background_services(services: dict, settings) -> None:
     if sentiment:
         sentiment.start(default_symbols)
         intel.system("Startup", "Sentiment analyser started")
+
+    # ── Market-watch services ──────────────────────────────────────────────
+    funding_mon = services.get("funding_monitor")
+    if funding_mon:
+        funding_mon.start(default_symbols)
+        intel.system("Startup", "Funding rate monitor started")
+
+    ofi_mon = services.get("ofi_monitor")
+    if ofi_mon:
+        ofi_mon.start(default_symbols)
+        intel.system("Startup", "Order flow monitor (OFI) started")
+
+    corr_eng = services.get("correlation_engine")
+    if corr_eng:
+        # Feed live ticker prices from engine heartbeat into correlation engine
+        def _on_hb_corr(snap):
+            try:
+                sym   = snap.get("symbol") if isinstance(snap, dict) else getattr(snap, "symbol", None)
+                price = snap.get("price")  if isinstance(snap, dict) else getattr(snap, "price", None)
+                if sym and price:
+                    corr_eng.feed_price(sym, float(price))
+            except Exception:
+                pass
+        engine.on("heartbeat", _on_hb_corr)
+        intel.system("Startup", "Correlation / lead-lag engine wired to price feed")
+
+    casc_det = services.get("cascade_detector")
+    if casc_det:
+        def _on_hb_cascade(snap):
+            try:
+                sym   = snap.get("symbol") if isinstance(snap, dict) else getattr(snap, "symbol", None)
+                price = snap.get("price")  if isinstance(snap, dict) else getattr(snap, "price", None)
+                vol   = snap.get("volume_usd", snap.get("volume", 0)) \
+                        if isinstance(snap, dict) else getattr(snap, "volume_usd", 0)
+                if sym and price:
+                    casc_det.feed_price(sym, float(price))
+                if sym and vol:
+                    casc_det.feed_volume(sym, float(vol))
+            except Exception:
+                pass
+        engine.on("heartbeat", _on_hb_cascade)
+        intel.system("Startup", "Cascade detector wired to price/volume feed")
+
+    sd = services.get("stream_deck")
+    if sd:
+        # Inject auto_trader reference (built after stream_deck was created)
+        at_ref = services.get("auto_trader")
+        if at_ref:
+            sd._auto_trader = at_ref
+        if sd.start():
+            intel.system("Startup", "Stream Deck connected and active")
+        else:
+            intel.system("Startup", "Stream Deck not connected (no device / package missing)")
+        # Feed live prices to Stream Deck display
+        def _on_hb_sd(snap):
+            try:
+                sym   = snap.get("symbol") if isinstance(snap, dict) else getattr(snap, "symbol", None)
+                price = snap.get("price")  if isinstance(snap, dict) else getattr(snap, "price", None)
+                if sym and price:
+                    sd.update_price(sym, float(price))
+            except Exception:
+                pass
+        engine.on("heartbeat", _on_hb_sd)
 
     # Voice alerts
     voice = services.get("voice")
@@ -1419,6 +1513,11 @@ def main() -> int:
         discord=services.get("discord"),
         slack=services.get("slack"),
         email_notifier=services.get("email_notifier"),
+        funding_monitor=services.get("funding_monitor"),
+        ofi_monitor=services.get("ofi_monitor"),
+        correlation_engine=services.get("correlation_engine"),
+        cascade_detector=services.get("cascade_detector"),
+        stream_deck=services.get("stream_deck"),
     )
     splash.finish(window)
     window.showMaximized()
