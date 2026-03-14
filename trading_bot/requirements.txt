@@ -32,7 +32,9 @@ joblib>=1.4.2
 optuna>=3.6.1
 
 # ── Technical Analysis ───────────────────────────────────────
-pandas-ta>=0.4.67b0
+# pandas-ta is replaced by the local trading_bot/pandas_ta.py shim
+# (pandas-ta on PyPI requires Python >=3.12 and pulls in platform-info
+#  which has no available distribution)
 ta>=0.11.0
 
 # ── Data / Visualisation ─────────────────────────────────────
