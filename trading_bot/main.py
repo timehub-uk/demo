@@ -68,34 +68,71 @@ from loguru import logger
 try:
     from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen
     from PyQt6.QtCore import Qt, QTimer
-    from PyQt6.QtGui import QPixmap, QFont, QColor, QPainter, QPen, QBrush, QFontMetrics
+    from PyQt6.QtGui import (
+        QPixmap, QFont, QColor, QPainter, QPen, QBrush, QFontMetrics,
+        QLinearGradient, QFontDatabase,
+    )
 except ImportError as e:
     print(f"PyQt6 not available: {e}")
     print("Install with: pip install PyQt6 PyQt6-Qt6")
     sys.exit(1)
 
 
+def _splash_font(size: int, weight: QFont.Weight = QFont.Weight.Normal) -> QFont:
+    """Return the best available sans-serif font for the current platform."""
+    families = QFontDatabase.families()
+    for name in ("Inter", "SF Pro Display", "Segoe UI", "Ubuntu", "Helvetica Neue",
+                 "DejaVu Sans", "Liberation Sans", "Noto Sans", "Arial"):
+        if name in families:
+            return QFont(name, size, weight)
+    f = QFont()
+    f.setStyleHint(QFont.StyleHint.SansSerif)
+    f.setPointSize(size)
+    f.setWeight(weight)
+    return f
+
+
+def _splash_mono(size: int) -> QFont:
+    """Return the best available monospace font for the current platform."""
+    families = QFontDatabase.families()
+    for name in ("JetBrains Mono", "Fira Code", "Consolas", "SF Mono",
+                 "DejaVu Sans Mono", "Liberation Mono", "Courier New"):
+        if name in families:
+            return QFont(name, size)
+    f = QFont()
+    f.setStyleHint(QFont.StyleHint.Monospace)
+    f.setPointSize(size)
+    return f
+
+
 class _SplashScreen(QSplashScreen):
     """Branded splash screen with logo, title, and cyan progress bar."""
 
     _CYAN     = "#00D4FF"
-    _CYAN_DIM = "#0F2530"
-    _BG       = "#0A0A12"
-    _FG       = "#E0E0F0"
-    _FG2      = "#7A7A9A"
-    _FG3      = "#3A3A5A"
+    _CYAN_DIM = "#0D1F2D"
+    _BG       = "#08080F"
+    _BG2      = "#0D0D1A"
+    _FG       = "#E8E8F4"
+    _FG2      = "#7070A0"
+    _FG3      = "#2E2E4E"
     _GREEN    = "#00C853"
     _RED      = "#FF3D3D"
     _YELLOW   = "#FFD600"
 
+    # ── dimensions ──────────────────────────────────────────────────────────
+    _W, _H    = 800, 460
+    _PAD      = 56          # horizontal margin
+    _BAR_H    = 5           # top / bottom cyan accent bar height
+    _PB_H     = 7           # progress bar height
+
     def __init__(self, app: QApplication) -> None:
-        pixmap = QPixmap(740, 400)
+        pixmap = QPixmap(self._W, self._H)
         pixmap.fill(QColor(self._BG))
         super().__init__(pixmap, Qt.WindowType.WindowStaysOnTopHint)
         self._app      = app
         self._progress = 0
         self._step_msg = "Initialising BinanceML Pro…"
-        self._checks: list[tuple[str, str]] = []   # (label, status)
+        self._checks: list[tuple[str, str]] = []
         self.show()
         app.processEvents()
 
@@ -121,6 +158,7 @@ class _SplashScreen(QSplashScreen):
 
     def drawContents(self, painter: QPainter) -> None:  # type: ignore[override]
         w, h = self.width(), self.height()
+        pad  = self._PAD
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
@@ -130,70 +168,113 @@ class _SplashScreen(QSplashScreen):
         FG3   = QColor(self._FG3)
         TRACK = QColor(self._CYAN_DIM)
 
-        # ── Logo icon ──────────────────────────────────────────────────────
-        lx, ly, lsz = 56, 52, 84
+        # ── Background gradient ────────────────────────────────────────────
+        grad = QLinearGradient(0, 0, 0, h)
+        grad.setColorAt(0.0, QColor(self._BG))
+        grad.setColorAt(1.0, QColor(self._BG2))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(CYAN))
-        painter.drawRoundedRect(lx, ly, lsz, lsz, 18, 18)
+        painter.setBrush(QBrush(grad))
+        painter.drawRect(0, 0, w, h)
 
-        font_logo = QFont("SF Pro Display", 44, QFont.Weight.Bold)
-        painter.setFont(font_logo)
+        # ── TOP cyan accent bar ────────────────────────────────────────────
+        top_grad = QLinearGradient(0, 0, w, 0)
+        top_grad.setColorAt(0.0, QColor(0, 180, 220, 0))
+        top_grad.setColorAt(0.2, CYAN)
+        top_grad.setColorAt(0.8, CYAN)
+        top_grad.setColorAt(1.0, QColor(0, 180, 220, 0))
+        painter.setBrush(QBrush(top_grad))
+        painter.drawRect(0, 0, w, self._BAR_H)
+
+        # ── BOTTOM cyan accent bar ─────────────────────────────────────────
+        bot_grad = QLinearGradient(0, 0, w, 0)
+        bot_grad.setColorAt(0.0, QColor(0, 180, 220, 0))
+        bot_grad.setColorAt(0.3, QColor(0, 180, 220, 120))
+        bot_grad.setColorAt(0.7, QColor(0, 180, 220, 120))
+        bot_grad.setColorAt(1.0, QColor(0, 180, 220, 0))
+        painter.setBrush(QBrush(bot_grad))
+        painter.drawRect(0, h - self._BAR_H, w, self._BAR_H)
+
+        # ── Logo box ───────────────────────────────────────────────────────
+        lx, ly, lsz = pad, 36, 78
+        # outer glow
+        glow = QColor(self._CYAN)
+        glow.setAlpha(40)
+        painter.setBrush(QBrush(glow))
+        painter.drawRoundedRect(lx - 4, ly - 4, lsz + 8, lsz + 8, 20, 20)
+        # filled box
+        painter.setBrush(QBrush(CYAN))
+        painter.drawRoundedRect(lx, ly, lsz, lsz, 16, 16)
+        # "B" letter
+        font_b = _splash_font(38, QFont.Weight.Black)
+        painter.setFont(font_b)
         painter.setPen(QColor(self._BG))
         painter.drawText(lx, ly, lsz, lsz, Qt.AlignmentFlag.AlignCenter, "B")
 
         # ── App title ──────────────────────────────────────────────────────
-        tx = lx + lsz + 22
+        tx = lx + lsz + 20
+        ty = ly
 
-        font_main = QFont("SF Pro Display", 40, QFont.Weight.Bold)
+        font_main = _splash_font(36, QFont.Weight.Bold)
         painter.setFont(font_main)
-        fm = QFontMetrics(font_main)
+        fm_main = QFontMetrics(font_main)
         painter.setPen(FG)
-        painter.drawText(tx, ly, 520, 56,
+        painter.drawText(tx, ty, 400, 50,
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                          "BinanceML")
 
-        pro_x = tx + fm.horizontalAdvance("BinanceML") + 10
-        font_pro = QFont("SF Pro Display", 40, QFont.Weight.ExtraLight)
+        adv = fm_main.horizontalAdvance("BinanceML")
+        font_pro = _splash_font(36, QFont.Weight.ExtraLight)
         painter.setFont(font_pro)
         painter.setPen(CYAN)
-        painter.drawText(pro_x, ly, 180, 56,
+        painter.drawText(tx + adv + 8, ty, 160, 50,
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                          "Pro")
 
         # ── Tagline ────────────────────────────────────────────────────────
-        font_tag = QFont("SF Pro Display", 11)
+        font_tag = _splash_font(11)
         painter.setFont(font_tag)
         painter.setPen(FG2)
-        painter.drawText(tx, ly + 60, 460, 26,
+        painter.drawText(tx, ty + 52, 480, 22,
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                          "AI-Powered Cryptocurrency Trading Platform")
 
         # ── Version ────────────────────────────────────────────────────────
-        font_ver = QFont("SF Pro Display", 9)
+        font_ver = _splash_font(9)
         painter.setFont(font_ver)
         painter.setPen(FG3)
-        painter.drawText(tx, ly + 86, 460, 20,
+        painter.drawText(tx, ty + 76, 480, 18,
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                          "Version 2.1  ·  Professional Edition")
 
-        # ── Divider ────────────────────────────────────────────────────────
-        painter.setPen(QPen(QColor("#14142A"), 1))
-        painter.drawLine(56, 186, w - 56, 186)
+        # ── Created by ────────────────────────────────────────────────────
+        font_by = _splash_font(9)
+        painter.setFont(font_by)
+        painter.setPen(FG2)
+        painter.drawText(tx, ty + 96, 480, 18,
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         "Created by Timehub-uk")
 
-        # ── Check results (DB, GPU, etc.) ──────────────────────────────────
+        # ── Divider ────────────────────────────────────────────────────────
+        div_y = 178
+        div_grad = QLinearGradient(0, 0, w, 0)
+        div_grad.setColorAt(0.0, QColor(30, 30, 60, 0))
+        div_grad.setColorAt(0.1, QColor(30, 30, 60, 200))
+        div_grad.setColorAt(0.9, QColor(30, 30, 60, 200))
+        div_grad.setColorAt(1.0, QColor(30, 30, 60, 0))
+        painter.setBrush(QBrush(div_grad))
+        painter.drawRect(pad, div_y, w - pad * 2, 1)
+
+        # ── Check results ──────────────────────────────────────────────────
         if self._checks:
-            font_chk = QFont("SF Pro Mono", 9)
-            if not font_chk.exactMatch():
-                font_chk = QFont("Courier New", 9)
+            font_chk = _splash_mono(9)
             painter.setFont(font_chk)
-            cy_pos = 202
-            col_w  = (w - 112) // 2
-            for i, (label, status) in enumerate(self._checks[-6:]):   # show last 6
+            cy_pos = div_y + 16
+            col_w  = (w - pad * 2) // 2
+            for i, (label, status) in enumerate(self._checks[-8:]):
                 col = i % 2
                 row = i // 2
-                rx  = 56 + col * col_w
-                ry  = cy_pos + row * 18
-                # Colour by first char
+                rx  = pad + col * col_w
+                ry  = cy_pos + row * 20
                 if status.startswith("✓"):
                     sc = QColor(self._GREEN)
                 elif status.startswith("✗"):
@@ -202,55 +283,62 @@ class _SplashScreen(QSplashScreen):
                     sc = QColor(self._YELLOW)
                 else:
                     sc = FG2
+                label_txt = f"{label}: "
+                lbl_w = QFontMetrics(font_chk).horizontalAdvance(label_txt)
                 painter.setPen(FG2)
-                painter.drawText(rx, ry, col_w - 8, 16,
+                painter.drawText(rx, ry, lbl_w + 4, 18,
                                  Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                                 f"{label}:")
+                                 label_txt)
                 painter.setPen(sc)
-                label_w = QFontMetrics(font_chk).horizontalAdvance(f"{label}: ")
-                painter.drawText(rx + label_w, ry, col_w - label_w - 4, 16,
+                painter.drawText(rx + lbl_w + 4, ry, col_w - lbl_w - 8, 18,
                                  Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                                  status)
 
         # ── Progress bar ───────────────────────────────────────────────────
-        bx, by, bw, bh = 56, 330, w - 112, 6
+        pb_y = h - 58
+        bx, by, bw, bh = pad, pb_y, w - pad * 2, self._PB_H
+
+        # track
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(TRACK))
-        painter.drawRoundedRect(bx, by, bw, bh, 3, 3)
+        painter.drawRoundedRect(bx, by, bw, bh, bh // 2, bh // 2)
 
-        fw = int(bw * self._progress / 100)
-        if fw > 0:
-            painter.setBrush(QBrush(CYAN))
-            painter.drawRoundedRect(bx, by, fw, bh, 3, 3)
+        # filled portion (always draw at least a 2px stub so bar is visible)
+        fw = max(2, int(bw * self._progress / 100))
+        pb_grad = QLinearGradient(bx, 0, bx + fw, 0)
+        pb_grad.setColorAt(0.0, QColor(0, 160, 200))
+        pb_grad.setColorAt(1.0, CYAN)
+        painter.setBrush(QBrush(pb_grad))
+        painter.drawRoundedRect(bx, by, fw, bh, bh // 2, bh // 2)
 
-        # Glow dot at leading edge
-        if 0 < fw < bw:
-            painter.setBrush(QBrush(QColor(255, 255, 255, 180)))
-            painter.drawEllipse(bx + fw - 3, by - 1, 8, bh + 2)
+        # glow dot at leading edge
+        if fw < bw:
+            dot_c = QColor(255, 255, 255, 160)
+            painter.setBrush(QBrush(dot_c))
+            painter.drawEllipse(bx + fw - 4, by - 2, bh + 4, bh + 4)
 
-        # ── Percent label ──────────────────────────────────────────────────
-        font_pct = QFont("SF Pro Display", 9, QFont.Weight.Bold)
+        # ── Percent + status ───────────────────────────────────────────────
+        font_pct = _splash_font(9, QFont.Weight.Bold)
         painter.setFont(font_pct)
         painter.setPen(CYAN)
-        painter.drawText(bx + bw + 10, by - 3, 46, 14,
+        painter.drawText(bx + bw + 8, by - 2, 50, bh + 4,
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                          f"{self._progress}%")
 
-        # ── Status message ─────────────────────────────────────────────────
-        font_msg = QFont("SF Pro Display", 10)
+        font_msg = _splash_font(10)
         painter.setFont(font_msg)
         painter.setPen(FG2)
-        painter.drawText(bx, by + 16, bw, 24,
+        painter.drawText(bx, by + bh + 8, bw, 22,
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                          self._step_msg)
 
-        # ── Footer ─────────────────────────────────────────────────────────
-        font_foot = QFont("SF Pro Display", 8)
+        # ── Footer copyright ───────────────────────────────────────────────
+        font_foot = _splash_font(8)
         painter.setFont(font_foot)
         painter.setPen(FG3)
-        painter.drawText(bx, h - 18, bw, 14,
+        painter.drawText(bx, h - self._BAR_H - 18, bw, 14,
                          Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                         "© 2025 BinanceML Pro  ·  All Rights Reserved")
+                         "© 2026 resemble.media  ·  All Rights Reserved")
 
 
 def create_splash(app: QApplication) -> _SplashScreen:
