@@ -36,9 +36,6 @@ tsfresh>=0.20.2
 vectorbt>=0.26.2
 
 # ── Technical Analysis ───────────────────────────────────────
-# pandas-ta is replaced by the local trading_bot/pandas_ta.py shim
-# (pandas-ta on PyPI requires Python >=3.12 and pulls in platform-info
-#  which has no available distribution)
 ta>=0.11.0
 # TA-Lib C wrapper – install system lib first: brew install ta-lib / apt-get install ta-lib
 # ta-lib>=0.4.28
