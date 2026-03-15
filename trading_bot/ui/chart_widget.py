@@ -1603,16 +1603,23 @@ class ChartWidget(QWidget):
         }.get(key, key.upper())
 
     def _update_panel_visibility(self) -> None:
-        visible_heights = [400]   # main price plot
         panel_keys = ["volume", "rsi", "macd", "stoch", "atr", "adx"]
+        sub_visible: list[bool] = []
         for key in panel_keys:
-            pw = self._sub_plots[key]
             is_vis = bool(self._panels.get(key))
             # OBV lives inside volume panel, so volume panel shows if volume OR obv is on
             if key == "volume":
-                is_vis = self._panels.get("volume") or self._panels.get("obv")
-            pw.setVisible(is_vis)
-            visible_heights.append(90 if is_vis else 0)
+                is_vis = bool(self._panels.get("volume") or self._panels.get("obv"))
+            self._sub_plots[key].setVisible(is_vis)
+            sub_visible.append(is_vis)
+
+        sub_panel_height = 90
+        total_sub = sum(sub_panel_height for v in sub_visible if v)
+        # Ensure the main price plot always occupies more than 50% of the splitter.
+        # price_height must be > total_sub so that price / (price + total_sub) > 0.5
+        price_height = max(400, total_sub + 50)
+
+        visible_heights = [price_height] + [sub_panel_height if v else 0 for v in sub_visible]
         self._splitter.setSizes(visible_heights)
 
     # ── Events ─────────────────────────────────────────────────────────
