@@ -82,9 +82,13 @@ class _RateLimiter:
     """
     Thread-safe token-bucket rate limiter.
 
-    Binance published limits (spot):
-      - 1 200 weighted request units / minute (general endpoints)
-      - 10 orders / second (signed trade endpoints)
+    Binance published limits (spot) — https://developers.binance.com/docs/binance-spot-api-docs/rest-api/limits:
+      - 6 000 weighted request units / minute  (REQUEST_WEIGHT; IP-based)
+      - 50 orders / 10 seconds                 (ORDERS; account-based)
+      - 160 000 orders / 24 hours              (ORDERS; account-based)
+
+    The bot targets 80% of each limit to maintain a safety margin and
+    avoid the automated IP ban that follows repeated 429 responses.
     """
 
     def __init__(self, calls: int, period_sec: float) -> None:
@@ -756,7 +760,7 @@ class _WsApiClient:
         result = self._send_request("session.logon", params, timeout=timeout)
         self._session_auth    = True
         self._session_api_key = self._api_key
-        logger.info(f"WS API: session authenticated (key=…{self._api_key[-4:]})")
+        logger.info("WS API: session authenticated")
         return result
 
     def session_status(self, timeout: float = 10.0) -> dict:
@@ -1424,9 +1428,18 @@ class BinanceClient:
         self._redis = RedisClient()
         self._lock  = threading.Lock()
 
-        # Rate limiters — Binance spot: 1200 req/min general, 10 orders/sec
-        self._rl_general = _RateLimiter(calls=1200, period_sec=60)
-        self._rl_orders  = _RateLimiter(calls=10,   period_sec=1)
+        # Rate limiters — Binance spot limits (80% safety margin applied):
+        #   REQUEST_WEIGHT: 6000/min → target 4800/min
+        #   ORDERS:         50/10s  → target 40/10s ; 160000/day → tracked separately
+        self._rl_general = _RateLimiter(calls=4800, period_sec=60)
+        self._rl_orders  = _RateLimiter(calls=40,   period_sec=10)
+
+        # Daily order counter — Binance hard limit: 160 000 orders per 24 h.
+        # Resets at UTC midnight (or when the bot restarts).
+        self._daily_order_count = 0
+        self._daily_order_reset = time.time() + 86400  # next reset in 24 h
+        self._daily_order_lock  = threading.Lock()
+        self._DAILY_ORDER_LIMIT = 128_000  # 80% of 160 000
 
         # Single multiplexed WebSocket connection (market-data streams, started lazily)
         self._ws_mux: _WsMultiplexer | None = None
@@ -1533,6 +1546,22 @@ class BinanceClient:
                     continue
                 raise
 
+            # Proactive rate-limit monitoring via Binance response headers.
+            # X-MBX-USED-WEIGHT-1M: cumulative request weight consumed this minute.
+            # X-MBX-ORDER-COUNT-1D: unfilled order count over the last 24 hours.
+            used_weight = resp.headers.get("X-MBX-USED-WEIGHT-1M")
+            if used_weight and int(used_weight) >= 4800:  # ≥80% of 6000
+                logger.warning(
+                    f"Binance REQUEST_WEIGHT at {used_weight}/6000 — "
+                    "approaching rate limit"
+                )
+            order_count_1d = resp.headers.get("X-MBX-ORDER-COUNT-1D")
+            if order_count_1d and int(order_count_1d) >= 128_000:  # ≥80% of 160 000
+                logger.warning(
+                    f"Binance daily ORDER count at {order_count_1d}/160000 — "
+                    "approaching daily limit"
+                )
+
             # Handle Binance-specific HTTP status codes
             if resp.status_code == 429:
                 wait = float(resp.headers.get("Retry-After", backoff * 2))
@@ -1578,9 +1607,34 @@ class BinanceClient:
             params = self._sign(params or {})
         return self._request("GET", path, params)
 
+    def _check_daily_order_limit(self) -> None:
+        """Raise RuntimeError if the daily order budget (80% of 160 000) is exhausted.
+
+        Resets the counter automatically at the 24-hour boundary.
+        """
+        with self._daily_order_lock:
+            now = time.time()
+            if now >= self._daily_order_reset:
+                self._daily_order_count = 0
+                self._daily_order_reset = now + 86400
+            self._daily_order_count += 1
+            if self._daily_order_count > self._DAILY_ORDER_LIMIT:
+                raise RuntimeError(
+                    f"Daily order budget exceeded ({self._daily_order_count}/"
+                    f"{self._DAILY_ORDER_LIMIT}). "
+                    "Trading paused to comply with Binance 160 000/day limit. "
+                    "Counter resets in "
+                    f"{int(self._daily_order_reset - now)}s."
+                )
+            if self._daily_order_count % 1000 == 0:
+                logger.info(
+                    f"Daily order count: {self._daily_order_count}/{self._DAILY_ORDER_LIMIT}"
+                )
+
     def _post(self, path: str, params: dict | None = None, signed: bool = True) -> Any:
         self._rl_general.acquire()
         self._rl_orders.acquire()
+        self._check_daily_order_limit()
         if signed:
             params = self._sign(params or {})
         return self._request("POST", path, params)
