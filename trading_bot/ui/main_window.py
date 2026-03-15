@@ -23,7 +23,7 @@ from __future__ import annotations
 import threading
 import time
 
-from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -189,6 +189,8 @@ class NavButton(QToolButton):
     • Mouse enter + 5 s  → QToolTip with panel title
     • Mouse enter + 10 s → contextual help QMessageBox
     • Mouse leave        → cancel both timers
+    • set_alert(True)    → icon flashes RED to signal an alert
+    • set_nav_disabled(True) → greyed-out inactive appearance
     """
 
     clicked_index = pyqtSignal(int)
@@ -199,6 +201,9 @@ class NavButton(QToolButton):
         self._icon_name = icon_name
         self._label     = label
         self._active    = False
+        self._alerted   = False
+        self._disabled_nav = False
+        self._flash_on  = False
 
         self.setObjectName("nav_btn")
         self.setFixedHeight(62)
@@ -220,6 +225,11 @@ class NavButton(QToolButton):
         self._pop_timer.setInterval(10000)
         self._pop_timer.timeout.connect(self._show_popup)
 
+        # Alert flash timer — toggles icon colour every 600 ms
+        self._flash_timer = QTimer(self)
+        self._flash_timer.setInterval(600)
+        self._flash_timer.timeout.connect(self._on_flash_tick)
+
         self.clicked.connect(lambda: self.clicked_index.emit(self._index))
 
     def _set_icon(self, color: str) -> None:
@@ -227,11 +237,22 @@ class NavButton(QToolButton):
         self.setIconSize(QSize(22, 22))
 
     def _apply_style(self, active: bool) -> None:
-        col      = ACCENT if active else FG2
-        bg       = BG2    if active else "transparent"
-        top_bar  = (f"border-top:2px solid {ACCENT};"
-                    if active else "border-top:2px solid transparent;")
-        weight   = "700" if active else "500"
+        if self._disabled_nav:
+            col     = BG4
+            bg      = "transparent"
+            top_bar = "border-top:2px solid transparent;"
+            weight  = "400"
+        elif self._alerted:
+            col     = RED
+            bg      = f"{RED}18"
+            top_bar = f"border-top:2px solid {RED};"
+            weight  = "700"
+        else:
+            col     = ACCENT if active else FG2
+            bg      = BG2    if active else "transparent"
+            top_bar = (f"border-top:2px solid {ACCENT};"
+                       if active else "border-top:2px solid transparent;")
+            weight  = "700" if active else "500"
         self.setStyleSheet(f"""
             QToolButton {{
                 background:{bg}; color:{col};
@@ -248,19 +269,43 @@ class NavButton(QToolButton):
 
     def set_active(self, active: bool) -> None:
         self._active = active
-        self._set_icon(ACCENT if active else FG2)
+        if not self._alerted:
+            self._set_icon(ACCENT if active else (BG4 if self._disabled_nav else FG2))
         self._apply_style(active)
 
+    def set_alert(self, alerted: bool) -> None:
+        """Flash the icon red while alerted; restore normal state when cleared."""
+        self._alerted = alerted
+        if alerted:
+            self._flash_timer.start()
+        else:
+            self._flash_timer.stop()
+            self._flash_on = False
+            self._set_icon(ACCENT if self._active else (BG4 if self._disabled_nav else FG2))
+            self._apply_style(self._active)
+
+    def set_nav_disabled(self, disabled: bool) -> None:
+        """Grey out the button to indicate the underlying service is unavailable."""
+        self._disabled_nav = disabled
+        icon_col = BG4 if disabled else (ACCENT if self._active else FG2)
+        self._set_icon(icon_col)
+        self._apply_style(self._active)
+
+    def _on_flash_tick(self) -> None:
+        self._flash_on = not self._flash_on
+        self._set_icon(RED if self._flash_on else FG2)
+        self._apply_style(self._active)
+
     def enterEvent(self, event) -> None:
-        if not self._active:
+        if not self._active and not self._alerted:
             self._set_icon(FG1)
         self._tip_timer.start()
         self._pop_timer.start()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
-        if not self._active:
-            self._set_icon(FG2)
+        if not self._active and not self._alerted:
+            self._set_icon(BG4 if self._disabled_nav else FG2)
         self._tip_timer.stop()
         self._pop_timer.stop()
         super().leaveEvent(event)
@@ -287,9 +332,10 @@ class NavButton(QToolButton):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class HeaderBar(QFrame):
-    """Logo | Brand | Ticker strip | Health dots | Clock."""
+    """☰ Toggle | Logo | Brand | Ticker strip | Health dots | Clock."""
 
     symbol_changed = pyqtSignal(str)
+    nav_toggle     = pyqtSignal()    # emitted when hamburger is clicked
 
     def __init__(self, symbols: list[str], parent=None) -> None:
         super().__init__(parent)
@@ -300,8 +346,26 @@ class HeaderBar(QFrame):
         )
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 0, 12, 0)
+        layout.setContentsMargins(6, 0, 12, 0)
         layout.setSpacing(0)
+
+        # Hamburger — slides the nav sidebar in/out
+        self._ham_btn = QPushButton("☰")
+        self._ham_btn.setFixedSize(34, 34)
+        self._ham_btn.setToolTip("Toggle navigation sidebar  (Ctrl+\\)")
+        self._ham_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {FG2};
+                border: none; border-radius: 4px;
+                font-size: 16px; font-weight: 700;
+            }}
+            QPushButton:hover  {{ background: {BG3}; color: {FG0}; }}
+            QPushButton:pressed {{ background: {BG4}; }}
+        """)
+        self._ham_btn.clicked.connect(self.nav_toggle)
+        layout.addWidget(self._ham_btn)
+
+        layout.addSpacing(6)
 
         # Logo
         logo = QLabel()
@@ -419,7 +483,9 @@ class NavSidebar(QFrame):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setFixedWidth(self._WIDTH)
+        # Use min/max instead of setFixedWidth so we can animate the width
+        self.setMinimumWidth(0)
+        self.setMaximumWidth(self._WIDTH)
         self.setStyleSheet(
             f"NavSidebar {{ background:{BG0}; border-right:1px solid {BORDER}; }}"
         )
@@ -467,6 +533,20 @@ class NavSidebar(QFrame):
 
     def set_active(self, index: int) -> None:
         self._on_nav(index)
+
+    def set_alert(self, page_index: int, alerted: bool) -> None:
+        """Flash the nav button for the given page when an alert is active."""
+        for btn in self._buttons:
+            if btn._index == page_index:
+                btn.set_alert(alerted)
+                break
+
+    def set_nav_disabled(self, page_index: int, disabled: bool) -> None:
+        """Grey out a nav button when its service is unavailable."""
+        for btn in self._buttons:
+            if btn._index == page_index:
+                btn.set_nav_disabled(disabled)
+                break
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -725,6 +805,119 @@ class MultiChartPanel(QWidget):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# DOCK HELPERS — custom title bar, TradeDock, style
+# ══════════════════════════════════════════════════════════════════════════════
+
+_INNER_WIN_STYLE = f"""
+QMainWindow::separator {{
+    background: {BORDER}; width: 4px; height: 4px;
+}}
+QMainWindow::separator:hover {{
+    background: {ACCENT};
+}}
+QDockWidget {{
+    color: {FG1}; font-size: 11px; font-weight: 600;
+}}
+"""
+
+def _dock_btn(symbol: str, tip: str) -> QPushButton:
+    btn = QPushButton(symbol)
+    btn.setToolTip(tip)
+    btn.setFixedSize(20, 20)
+    btn.setStyleSheet(f"""
+        QPushButton {{
+            background: transparent; color: {FG2};
+            border: none; border-radius: 3px;
+            font-size: 10px; padding: 0;
+        }}
+        QPushButton:hover  {{ background: {BG3}; color: {FG0}; }}
+        QPushButton:pressed {{ background: {BG4}; }}
+    """)
+    return btn
+
+
+class DockTitleBar(QWidget):
+    """
+    Custom dock title bar: ⠿ grip · title · ⧉ float · ▼ minimise · ✕ close.
+    Double-click toggles floating.
+    """
+
+    minimize_requested = pyqtSignal()
+
+    def __init__(self, title: str, dock: "TradeDock") -> None:
+        super().__init__(dock)
+        self._dock = dock
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 2, 4, 2)
+        lay.setSpacing(4)
+
+        grip = QLabel("⠿")
+        grip.setStyleSheet(f"color:{BORDER2}; font-size:14px;")
+        lay.addWidget(grip)
+
+        self._lbl = QLabel(title)
+        self._lbl.setStyleSheet(
+            f"color:{FG1}; font-size:11px; font-weight:600; letter-spacing:0.5px;"
+        )
+        lay.addWidget(self._lbl, 1)
+
+        btn_float = _dock_btn("⧉", "Float / re-dock  (or double-click title)")
+        btn_float.clicked.connect(lambda: dock.setFloating(not dock.isFloating()))
+        lay.addWidget(btn_float)
+
+        btn_min = _dock_btn("▼", "Minimise to bottom tray")
+        btn_min.clicked.connect(self.minimize_requested)
+        lay.addWidget(btn_min)
+
+        btn_close = _dock_btn("✕", "Close  (restore via View ▸ Panels menu)")
+        btn_close.clicked.connect(dock.close)
+        lay.addWidget(btn_close)
+
+        self.setFixedHeight(28)
+        self.setStyleSheet(
+            f"DockTitleBar {{ background:{BG1}; border-bottom:1px solid {BORDER}; }}"
+        )
+
+    def set_title(self, text: str) -> None:
+        self._lbl.setText(text)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        self._dock.setFloating(not self._dock.isFloating())
+        super().mouseDoubleClickEvent(event)
+
+
+class TradeDock(QDockWidget):
+    """
+    QDockWidget with a custom dark title bar.
+    • Drag title bar  → move / re-dock
+    • ⧉ button or double-click → float / re-dock
+    • ▼ button        → minimise to bottom tray (emits minimize_requested)
+    • ✕ button        → close (hide)
+    • Resize           → drag the splitter separator between docks
+    """
+
+    minimize_requested = pyqtSignal(object)   # emits self
+
+    def __init__(self, title: str, parent=None) -> None:
+        super().__init__(title, parent)
+        self.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable |
+            QDockWidget.DockWidgetFeature.DockWidgetFloatable |
+            QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+        self._title_bar = DockTitleBar(title, self)
+        self._title_bar.minimize_requested.connect(
+            lambda: self.minimize_requested.emit(self)
+        )
+        self.setTitleBarWidget(self._title_bar)
+
+    def set_title(self, text: str) -> None:
+        self._title_bar.set_title(text)
+        self.setWindowTitle(text)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # TRADING PAGE
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -739,71 +932,75 @@ class TradingPage(QWidget):
         self._forecast_tracker = forecast_tracker
         self._setup_ui()
 
+    # ── build ──────────────────────────────────────────────────────────
+
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ── Two-tab layout: Chart (full-width) | Trading controls ─────
-        self._main_tabs = QTabWidget()
-        self._main_tabs.setStyleSheet(f"""
-            QTabWidget::pane {{ border:none; }}
-            QTabBar::tab {{
-                background:{BG1}; color:{FG2}; padding:6px 18px;
-                border:1px solid {BORDER}; border-bottom:none;
-                font-size:11px; font-weight:600; letter-spacing:1px;
-            }}
-            QTabBar::tab:selected {{ background:{BG3}; color:{ACCENT}; border-color:{ACCENT2}; }}
-            QTabBar::tab:hover    {{ color:{FG0}; }}
-        """)
-        layout.addWidget(self._main_tabs)
+        # ── Inner QMainWindow — hosts chart + side docks ───────────────
+        self._inner = QMainWindow()
+        self._inner.setDockOptions(
+            QMainWindow.DockOption.AnimatedDocks |
+            QMainWindow.DockOption.AllowTabbedDocks |
+            QMainWindow.DockOption.AllowNestedDocks |
+            QMainWindow.DockOption.GroupedDragging
+        )
+        self._inner.setStyleSheet(_INNER_WIN_STYLE)
+        layout.addWidget(self._inner)
 
-        # ── Tab 1: Chart (full width) ──────────────────────────────────
-        chart_tab = QWidget()
-        chart_tab.setStyleSheet(f"background:{BG0};")
-        chart_layout = QVBoxLayout(chart_tab)
-        chart_layout.setContentsMargins(0, 0, 0, 0)
-        chart_layout.setSpacing(0)
-
+        # ── Central widget: full-width chart (always > 50 %) ──────────
         self.chart_panel = MultiChartPanel(
             self._default_symbols, forecast_tracker=self._forecast_tracker
         )
         self.chart_panel.symbol_changed.connect(self.symbol_changed)
-        chart_layout.addWidget(self.chart_panel)
-        self._main_tabs.addTab(chart_tab, "📊  Chart")
+        self._inner.setCentralWidget(self.chart_panel)
 
-        # ── Tab 2: Trading controls ────────────────────────────────────
-        controls_tab = QWidget()
-        controls_layout = QHBoxLayout(controls_tab)
-        controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.setSpacing(0)
-
-        right_split = QSplitter(Qt.Orientation.Vertical)
-
+        # ── Right dock: Order Book ─────────────────────────────────────
         from ui.orderbook_widget import OrderBookWidget
         self.orderbook = OrderBookWidget(self._default_symbols[0])
-        right_split.addWidget(self.orderbook)
+        self._ob_dock = TradeDock("📋  Order Book")
+        self._ob_dock.setWidget(self.orderbook)
+        self._ob_dock.setMinimumWidth(240)
+        self._ob_dock.minimize_requested.connect(self._minimize_to_bottom)
+        self._inner.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._ob_dock)
 
+        # ── Right dock: Trading Panel (stacked below Order Book) ───────
         from ui.trading_panel import TradingPanel
         self.trading_panel = TradingPanel()
         self.trading_panel.order_submitted.connect(self.order_submitted)
         self.trading_panel.cancel_requested.connect(self.cancel_requested)
-        right_split.addWidget(self.trading_panel)
-        right_split.setSizes([300, 420])
-
-        controls_layout.addWidget(right_split)
-        self._main_tabs.addTab(controls_tab, "⚡  Trading")
+        self._tp_dock = TradeDock("⚡  Trading")
+        self._tp_dock.setWidget(self.trading_panel)
+        self._tp_dock.setMinimumWidth(240)
+        self._tp_dock.minimize_requested.connect(self._minimize_to_bottom)
+        self._inner.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._tp_dock)
 
         self.symbol_changed.connect(self.orderbook.set_symbol)
 
-        # Double-click the "Chart" tab title → pop chart out fullscreen
-        self._main_tabs.tabBar().tabBarDoubleClicked.connect(
-            self._on_tab_double_clicked
-        )
+        # ── Bottom tray dock — receives minimised panels as tabs ───────
+        _tray_widget = QWidget()
+        _tray_widget.setStyleSheet(f"background:{BG1};")
+        _tray_widget.setFixedHeight(2)
+        self._tray_dock = QDockWidget("Panels", self._inner)
+        self._tray_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        self._tray_dock.setWidget(_tray_widget)
+        self._tray_dock.setTitleBarWidget(QWidget())   # hide title bar of tray itself
+        self._tray_dock.hide()
+        self._inner.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._tray_dock)
 
-    def _on_tab_double_clicked(self, index: int) -> None:
-        if index == 0:
-            self.chart_panel._open_fullscreen()
+    # ── minimise-to-bottom ─────────────────────────────────────────────
+
+    def _minimize_to_bottom(self, dock: QDockWidget) -> None:
+        """Move dock to the bottom tray and tabify it — minimise-to-tray UX."""
+        self._inner.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
+        self._tray_dock.show()
+        self._inner.tabifyDockWidget(self._tray_dock, dock)
+        # Activate the tray tab so the panel appears 'behind' it (minimised)
+        self._tray_dock.raise_()
+
+    # ── public API (unchanged) ─────────────────────────────────────────
 
     def update_pnl(self, metrics: dict) -> None:
         self.trading_panel.update_pnl(metrics)
@@ -1245,15 +1442,24 @@ class MainWindow(QMainWindow):
     # ──────────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
+        # Enable full dock management: animated moves, tabbing, nesting, group-drag
+        self.setDockOptions(
+            QMainWindow.DockOption.AnimatedDocks |
+            QMainWindow.DockOption.AllowTabbedDocks |
+            QMainWindow.DockOption.AllowNestedDocks |
+            QMainWindow.DockOption.GroupedDragging
+        )
+
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Header
+        # Header (contains hamburger toggle)
         self.header = HeaderBar(self._active_symbols)
         self.header.symbol_changed.connect(self._on_symbol_changed)
+        self.header.nav_toggle.connect(self._toggle_nav)
         root.addWidget(self.header)
 
         # Body
@@ -1268,6 +1474,12 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         body.addWidget(self.stack, 1)
         root.addLayout(body, 1)
+
+        # Slide animation for the nav sidebar (animates maximumWidth)
+        self._nav_collapsed = False
+        self._nav_anim = QPropertyAnimation(self.nav, b"maximumWidth")
+        self._nav_anim.setDuration(220)
+        self._nav_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
 
         # Status bar
         self.status_bar = TradingStatusBar()
@@ -1292,16 +1504,22 @@ class MainWindow(QMainWindow):
         # Toast notification overlay (floats over the window)
         self._toast = ToastOverlay(central)
 
-        # Intel Log dock
+        # Intel Log dock — uses TradeDock for consistent title bar + full dock features
         from ui.intel_log_widget import IntelLogWidget
         self.intel_log  = IntelLogWidget()
-        self.intel_dock = QDockWidget("Intel Log", self)
+        self.intel_dock = TradeDock("📡  Intel Log", self)
         self.intel_dock.setAllowedAreas(
             Qt.DockWidgetArea.BottomDockWidgetArea |
-            Qt.DockWidgetArea.TopDockWidgetArea
+            Qt.DockWidgetArea.TopDockWidgetArea   |
+            Qt.DockWidgetArea.LeftDockWidgetArea  |
+            Qt.DockWidgetArea.RightDockWidgetArea
         )
         self.intel_dock.setWidget(self.intel_log)
-        self.intel_dock.setMinimumHeight(160)
+        self.intel_dock.setMinimumHeight(120)
+        # Minimise Intel Log → tabify with itself (just hides to tab bar at bottom)
+        self.intel_dock.minimize_requested.connect(
+            lambda _: self.intel_dock.hide()
+        )
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.intel_dock)
 
     def _build_trading_page(self) -> None:
@@ -1889,8 +2107,15 @@ class MainWindow(QMainWindow):
         vm.addAction(self._act("Market Watch", lambda: self._navigate_to(12), "Ctrl+Shift+W"))
         vm.addAction(self._act("ML Tools",   lambda: self._navigate_to(13), "Ctrl+Shift+M"))
         vm.addSeparator()
-        vm.addAction(self._act("Toggle Intel Log",   self._toggle_intel_log,   "Ctrl+L"))
-        vm.addAction(self._act("Toggle Order Book",  self._toggle_order_book,  "Ctrl+B"))
+        vm.addAction(self._act("Toggle Nav Sidebar",   self._toggle_nav,              "Ctrl+\\"))
+        vm.addSeparator()
+        # Panels submenu — individual dock visibility + restore
+        panels_menu = vm.addMenu("Panels")
+        panels_menu.addAction(self._act("Toggle Intel Log",     self._toggle_intel_log,        "Ctrl+L"))
+        panels_menu.addAction(self._act("Toggle Order Book",    self._toggle_order_book,       "Ctrl+B"))
+        panels_menu.addAction(self._act("Toggle Trading Panel", self._toggle_trading_panel,    "Ctrl+Shift+B"))
+        panels_menu.addSeparator()
+        panels_menu.addAction(self._act("Restore Trading Docks", self._restore_trading_docks,  "Ctrl+Shift+R"))
         vm.addAction(self._act("Add Chart Tab",      self._add_chart_tab,      "Ctrl++"))
         vm.addAction(self._act("Toggle Fullscreen",  self._toggle_fullscreen,  "F11"))
 
@@ -1997,19 +2222,24 @@ class MainWindow(QMainWindow):
 
     def _build_shortcuts(self) -> None:
         pairs = [
-            ("Ctrl+1",       lambda: self._navigate_to(0)),
-            ("Ctrl+2",       lambda: self._navigate_to(1)),
-            ("Ctrl+3",       lambda: self._navigate_to(2)),
-            ("Ctrl+4",       lambda: self._navigate_to(3)),
-            ("Ctrl+5",       lambda: self._navigate_to(4)),
-            ("Ctrl+6",       lambda: self._navigate_to(5)),
-            ("Ctrl+7",       lambda: self._navigate_to(6)),
-            ("Ctrl+8",       lambda: self._navigate_to(7)),
-            ("Ctrl+9",       lambda: self._navigate_to(8)),
-            ("Ctrl+Shift+W", lambda: self._navigate_to(12)),
-            ("Ctrl+Shift+M", lambda: self._navigate_to(13)),
+            ("Ctrl+1",       lambda: self._navigate_to(0)),   # Trading
+            ("Ctrl+2",       lambda: self._navigate_to(1)),   # AutoTrader
+            ("Ctrl+3",       lambda: self._navigate_to(2)),   # ML Train
+            ("Ctrl+4",       lambda: self._navigate_to(3)),   # Risk
+            ("Ctrl+5",       lambda: self._navigate_to(4)),   # Backtest
+            ("Ctrl+6",       lambda: self._navigate_to(5)),   # Journal
+            ("Ctrl+7",       lambda: self._navigate_to(6)),   # Strategy
+            ("Ctrl+8",       lambda: self._navigate_to(7)),   # Connections
+            ("Ctrl+9",       lambda: self._navigate_to(8)),   # Settings
+            ("Ctrl+Shift+W", lambda: self._navigate_to(12)),   # Market Watch
+            ("Ctrl+Shift+M", lambda: self._navigate_to(13)),   # ML Tools
             ("F11",          self._toggle_fullscreen),
-            ("F1",           lambda: self._navigate_to(9)),
+            ("F1",           lambda: self._navigate_to(9)),    # Help
+            ("Ctrl+\\",      self._toggle_nav),                # Slide nav sidebar
+            ("Ctrl+B",       self._toggle_order_book),         # Order Book dock
+            ("Ctrl+Shift+B", self._toggle_trading_panel),      # Trading Panel dock
+            ("Ctrl+Shift+R", self._restore_trading_docks),     # Restore docks
+            ("Ctrl+L",       self._toggle_intel_log),          # Intel Log dock
         ]
         for key, fn in pairs:
             sc = QShortcut(QKeySequence(key), self)
@@ -2024,10 +2254,36 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_toast"):
             self._toast._reposition()
 
+    # Map intel-log source prefixes → nav page index for alert flashing
+    _INTEL_PAGE_MAP: dict[str, int] = {
+        "autotrader": 1, "auto_trader": 1, "pingpong": 1, "arbitrage": 1,
+        "mltrainer": 2,  "trainer": 2,     "model": 2,
+        "risk": 3,       "drawdown": 3,    "montecarlo": 3,
+        "backtest": 4,
+        "journal": 5,    "trade_journal": 5,
+        "strategy": 6,
+        "connection": 7, "binance": 7,     "websocket": 7,
+        "settings": 8,   "config": 8,
+        "simulation": 10, "simtwin": 10,
+        "report": 11,    "tax": 11,
+        "market": 12,    "cascade": 12,    "whale": 12,    "funding": 12,
+        "ml_central": 13, "mlcentral": 13, "scanner": 13,
+    }
+
     def _on_intel_for_toast(self, entry) -> None:
-        """Called by IntelLogger from any thread; only surfaces ERROR/WARNING as toasts."""
+        """Called by IntelLogger from any thread; surfaces ERROR/WARNING as toasts
+        and flashes the nav icon for the source panel."""
         if entry.level in ("ERROR", "WARNING"):
             self._toast_signal.emit(entry.message[:160], entry.level)
+            # Flash the nav icon for the relevant panel (best-effort source match)
+            src = getattr(entry, "source", "").lower().replace(" ", "_")
+            page = next(
+                (pg for key, pg in self._INTEL_PAGE_MAP.items() if key in src),
+                None,
+            )
+            if page is not None and hasattr(self, "nav"):
+                # Schedule on the GUI thread
+                QTimer.singleShot(0, lambda p=page: self.nav.set_alert(p, True))
 
     def _connect_signals(self) -> None:
         if self._engine:
@@ -2117,6 +2373,21 @@ class MainWindow(QMainWindow):
     def _navigate_to(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
         self.nav.set_active(index)
+        # Clear alert flash for this page once user navigates to it
+        self.nav.set_alert(index, False)
+
+    def _toggle_nav(self) -> None:
+        """Slide the navigation sidebar in or out with an animated transition."""
+        if self._nav_collapsed:
+            # Expand: animate from 0 → _WIDTH
+            self._nav_anim.setStartValue(0)
+            self._nav_anim.setEndValue(NavSidebar._WIDTH)
+        else:
+            # Collapse: animate from _WIDTH → 0
+            self._nav_anim.setStartValue(NavSidebar._WIDTH)
+            self._nav_anim.setEndValue(0)
+        self._nav_collapsed = not self._nav_collapsed
+        self._nav_anim.start()
 
     def _open_sim_tab(self, tab_index: int) -> None:
         """Navigate to simulation page and select a specific tab."""
@@ -2450,8 +2721,27 @@ class MainWindow(QMainWindow):
         self.intel_dock.setVisible(not self.intel_dock.isVisible())
 
     def _toggle_order_book(self) -> None:
-        ob = self.trading_page.orderbook
-        ob.setVisible(not ob.isVisible())
+        """Show/hide the Order Book dock on the Trading page."""
+        dock = getattr(self.trading_page, "_ob_dock", None)
+        if dock:
+            dock.setVisible(not dock.isVisible())
+
+    def _toggle_trading_panel(self) -> None:
+        """Show/hide the Trading Panel dock on the Trading page."""
+        dock = getattr(self.trading_page, "_tp_dock", None)
+        if dock:
+            dock.setVisible(not dock.isVisible())
+
+    def _restore_trading_docks(self) -> None:
+        """Restore all minimised/hidden docks on the Trading page to the right area."""
+        page = self.trading_page
+        inner = getattr(page, "_inner", None)
+        if not inner:
+            return
+        for dock in (getattr(page, "_ob_dock", None), getattr(page, "_tp_dock", None)):
+            if dock:
+                inner.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+                dock.show()
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():
