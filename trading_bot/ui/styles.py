@@ -27,7 +27,7 @@ GLOW    = "#00D4FF33"    # Accent glow (transparent)
 
 FG0 = "#E8E8FF"          # Primary text (slightly blue-white)
 FG1 = "#8888AA"          # Secondary text
-FG2 = "#44446A"          # Disabled / placeholder text
+FG2 = "#565680"          # Disabled / placeholder text (brightened for legibility)
 FG3 = "#BBBBDD"          # Sub-primary text
 
 # ── Derived helpers ───────────────────────────────────────────────────────────
@@ -46,12 +46,29 @@ DARK_THEME = f"""
 * {{
     outline: none;
 }}
+
+/* ── Focus outline: 1px accent border when a widget is clicked / focused ── */
+QLineEdit:focus, QDoubleSpinBox:focus, QSpinBox:focus,
+QTextEdit:focus, QPlainTextEdit:focus,
+QComboBox:focus, QListWidget:focus, QTreeWidget:focus,
+QTableWidget:focus, QTableView:focus,
+QSlider:focus {{
+    border: 1px solid {ACCENT};
+    outline: none;
+}}
+QPushButton:focus, QToolButton:focus {{
+    border: 1px solid {ACCENT}88;
+    outline: none;
+}}
+QGroupBox:focus-within {{
+    border-color: {ACCENT}66;
+}}
 QWidget {{
     background-color: {BG1};
     color: {FG0};
     font-family: "JetBrains Mono", "SF Mono", "Fira Code", "Cascadia Code",
                  "Consolas", "Courier New", monospace;
-    font-size: 12px;
+    font-size: 13px;
 }}
 QMainWindow {{
     background-color: {BG0};
@@ -69,12 +86,12 @@ QMenuBar {{
     background-color: {BG0};
     color: {FG1};
     border-bottom: 1px solid {BORDER};
-    padding: 2px 8px;
-    font-size: 12px;
+    padding: 3px 8px;
+    font-size: 13px;
     spacing: 2px;
 }}
 QMenuBar::item {{
-    padding: 4px 10px;
+    padding: 5px 12px;
     border-radius: 4px;
 }}
 QMenuBar::item:selected {{
@@ -88,10 +105,10 @@ QMenu {{
     border: 1px solid {BORDER2};
     border-radius: 8px;
     padding: 6px 4px;
-    font-size: 12px;
+    font-size: 13px;
 }}
 QMenu::item {{
-    padding: 6px 24px 6px 12px;
+    padding: 8px 28px 8px 14px;
     border-radius: 4px;
     margin: 1px 4px;
 }}
@@ -138,13 +155,13 @@ QTabBar {{
 QTabBar::tab {{
     background-color: {BG3};
     color: {FG2};
-    padding: 7px 18px;
+    padding: 8px 20px;
     border: 1px solid {BORDER};
     border-bottom: none;
     border-top-left-radius: 6px;
     border-top-right-radius: 6px;
     margin-right: 2px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     letter-spacing: 0.3px;
 }}
@@ -167,11 +184,11 @@ QSplitter::handle {{
     background-color: {BORDER};
 }}
 QSplitter::handle:horizontal {{
-    width: 1px;
+    width: 3px;
     margin: 0px;
 }}
 QSplitter::handle:vertical {{
-    height: 1px;
+    height: 3px;
     margin: 0px;
 }}
 QSplitter::handle:hover {{
@@ -224,9 +241,9 @@ QPushButton {{
     color: {FG1};
     border: 1px solid {BORDER2};
     border-radius: 5px;
-    padding: 7px 16px;
+    padding: 8px 18px;
     font-weight: 600;
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.5px;
 }}
 QPushButton:hover {{
@@ -250,7 +267,7 @@ QPushButton#btn_buy {{
     border: 1px solid {GREEN}88;
     color: {GREEN};
     font-weight: 700;
-    font-size: 13px;
+    font-size: 14px;
     letter-spacing: 1px;
 }}
 QPushButton#btn_buy:hover {{
@@ -262,7 +279,7 @@ QPushButton#btn_sell {{
     border: 1px solid {RED}88;
     color: {RED};
     font-weight: 700;
-    font-size: 13px;
+    font-size: 14px;
     letter-spacing: 1px;
 }}
 QPushButton#btn_sell:hover {{
@@ -292,6 +309,40 @@ QPushButton#btn_danger {{
 }}
 QPushButton#btn_danger:hover {{
     background-color: {RED}33;
+}}
+
+/* btn_start — available-to-start; pulses gently via QPropertyAnimation in code */
+QPushButton#btn_start {{
+    background-color: {GREEN}12;
+    border: 1px solid {GREEN}55;
+    color: {GREEN};
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}}
+QPushButton#btn_start:hover {{
+    background-color: {GREEN}28;
+    border-color: {GREEN};
+}}
+QPushButton#btn_start:pressed {{
+    background-color: {GREEN}40;
+}}
+
+/* btn_stop — active; turns grey when already stopped (set disabled=True in code) */
+QPushButton#btn_stop {{
+    background-color: {RED}12;
+    border: 1px solid {RED}55;
+    color: {RED};
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}}
+QPushButton#btn_stop:hover {{
+    background-color: {RED}28;
+    border-color: {RED};
+}}
+QPushButton#btn_stop:disabled {{
+    background-color: {BG3};
+    border-color: {BORDER};
+    color: {FG2};
 }}
 QPushButton#nav_btn {{
     background: transparent;
@@ -323,9 +374,10 @@ QLineEdit, QDoubleSpinBox, QSpinBox, QTextEdit, QPlainTextEdit {{
     color: {FG0};
     border: 1px solid {BORDER2};
     border-radius: 5px;
-    padding: 6px 10px;
+    padding: 7px 12px;
     selection-background-color: {ACCENT}44;
     font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+    font-size: 13px;
 }}
 QLineEdit:focus, QDoubleSpinBox:focus, QSpinBox:focus,
 QTextEdit:focus, QPlainTextEdit:focus {{
@@ -347,8 +399,8 @@ QComboBox {{
     color: {FG0};
     border: 1px solid {BORDER2};
     border-radius: 5px;
-    padding: 6px 10px;
-    font-size: 12px;
+    padding: 7px 12px;
+    font-size: 13px;
 }}
 QComboBox:focus {{
     border-color: {ACCENT};
@@ -406,12 +458,12 @@ QTableWidget, QTableView {{
     gridline-color: {BORDER};
     border: 1px solid {BORDER};
     border-radius: 6px;
-    font-size: 11px;
+    font-size: 12px;
     font-family: "JetBrains Mono", "SF Mono", monospace;
     alternate-background-color: {BG3};
 }}
 QTableWidget::item, QTableView::item {{
-    padding: 4px 8px;
+    padding: 6px 10px;
     border: none;
 }}
 QTableWidget::item:selected, QTableView::item:selected {{
@@ -420,14 +472,14 @@ QTableWidget::item:selected, QTableView::item:selected {{
 }}
 QHeaderView::section {{
     background-color: {BG0};
-    color: {FG2};
+    color: {FG1};
     border: none;
     border-bottom: 1px solid {BORDER};
     border-right: 1px solid {BORDER};
-    padding: 5px 8px;
+    padding: 7px 10px;
     font-weight: 700;
-    font-size: 10px;
-    letter-spacing: 1px;
+    font-size: 11px;
+    letter-spacing: 0.8px;
     text-transform: uppercase;
 }}
 QHeaderView::section:first {{
@@ -455,17 +507,17 @@ QLabel#label_change_neg {{
     color: {RED};
 }}
 QLabel#label_section {{
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 700;
-    color: {FG2};
-    letter-spacing: 2px;
+    color: {FG1};
+    letter-spacing: 1.5px;
     text-transform: uppercase;
 }}
 QLabel#label_value_green  {{ color: {GREEN};  font-weight: 600; }}
 QLabel#label_value_red    {{ color: {RED};    font-weight: 600; }}
 QLabel#label_value_yellow {{ color: {YELLOW}; font-weight: 600; }}
 QLabel#label_accent       {{ color: {ACCENT}; font-weight: 700; }}
-QLabel#label_muted        {{ color: {FG2};    font-size: 11px;  }}
+QLabel#label_muted        {{ color: {FG2};    font-size: 12px;  }}
 
 /* ══════════════════════════════════════════════════════════════════════
    GROUP BOXES
@@ -473,8 +525,8 @@ QLabel#label_muted        {{ color: {FG2};    font-size: 11px;  }}
 QGroupBox {{
     border: 1px solid {BORDER};
     border-radius: 8px;
-    margin-top: 18px;
-    padding: 14px 10px 10px;
+    margin-top: 20px;
+    padding: 16px 12px 12px;
     font-weight: 600;
     color: {FG1};
     background-color: {BG2};
@@ -483,13 +535,13 @@ QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
     left: 14px;
-    top: -9px;
-    padding: 1px 8px;
+    top: -10px;
+    padding: 2px 10px;
     background-color: {BG2};
     color: {ACCENT};
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
-    letter-spacing: 1.5px;
+    letter-spacing: 1.2px;
     text-transform: uppercase;
     border: 1px solid {BORDER};
     border-radius: 4px;
@@ -502,10 +554,10 @@ QProgressBar {{
     background-color: {BG4};
     border: 1px solid {BORDER};
     border-radius: 5px;
-    height: 10px;
+    height: 12px;
     text-align: center;
     color: transparent;
-    font-size: 10px;
+    font-size: 11px;
 }}
 QProgressBar::chunk {{
     background-color: qlineargradient(
@@ -520,8 +572,8 @@ QProgressBar::chunk {{
    ══════════════════════════════════════════════════════════════════════ */
 QCheckBox {{
     color: {FG0};
-    spacing: 8px;
-    font-size: 12px;
+    spacing: 10px;
+    font-size: 13px;
 }}
 QCheckBox::indicator {{
     width: 16px;
@@ -558,9 +610,9 @@ QRadioButton::indicator:checked {{
    ══════════════════════════════════════════════════════════════════════ */
 QStatusBar {{
     background-color: {BG0};
-    color: {FG2};
+    color: {FG1};
     border-top: 1px solid {BORDER};
-    font-size: 10px;
+    font-size: 11px;
     font-family: "JetBrains Mono", monospace;
     letter-spacing: 0.3px;
 }}
@@ -574,16 +626,16 @@ QStatusBar::item {{
 QDockWidget {{
     color: {FG1};
     font-weight: 600;
-    font-size: 11px;
+    font-size: 12px;
     titlebar-close-icon: url(none);
 }}
 QDockWidget::title {{
     background: {BG0};
     border-bottom: 1px solid {BORDER};
-    padding: 6px 12px;
+    padding: 7px 14px;
     text-align: left;
-    letter-spacing: 1px;
-    font-size: 10px;
+    letter-spacing: 0.8px;
+    font-size: 11px;
     color: {ACCENT};
     text-transform: uppercase;
 }}
@@ -612,8 +664,8 @@ QToolTip {{
     color: {FG0};
     border: 1px solid {BORDER2};
     border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 11px;
+    padding: 7px 12px;
+    font-size: 12px;
 }}
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -621,10 +673,74 @@ QToolTip {{
    ══════════════════════════════════════════════════════════════════════ */
 QFormLayout QLabel {{
     color: {FG1};
-    font-size: 11px;
-    min-width: 140px;
+    font-size: 12px;
+    min-width: 150px;
 }}
 """
+
+
+# ── Start-button pulse animation helper ──────────────────────────────────────
+
+def attach_start_pulse(btn) -> None:
+    """
+    Attach a gentle glow-pulse animation to a QPushButton with
+    objectName 'btn_start'.  The button fades its border opacity between
+    0x33 and 0xCC every 1.2 s while it is enabled/idle.
+
+    Usage:
+        btn = QPushButton("▶  Start")
+        btn.setObjectName("btn_start")
+        attach_start_pulse(btn)
+    """
+    try:
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QVariantAnimation
+        from PyQt6.QtGui import QColor
+
+        anim = QVariantAnimation(btn)
+        anim.setStartValue(QColor(f"{GREEN}33"))
+        anim.setEndValue(QColor(f"{GREEN}BB"))
+        anim.setDuration(1200)
+        anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+        anim.setLoopCount(-1)   # infinite
+
+        def _on_value(col: QColor) -> None:
+            if not btn.isEnabled():
+                return
+            hex_col = col.name(QColor.NameFormat.HexArgb)[1:]   # drop leading #
+            # rebuild just the border-color part; rest kept by objectName stylesheet
+            btn.setStyleSheet(
+                f"QPushButton#btn_start {{"
+                f"  background-color:{GREEN}12;"
+                f"  border:1px solid #{hex_col};"
+                f"  color:{GREEN}; font-weight:700; letter-spacing:0.5px;"
+                f"}}"
+                f"QPushButton#btn_start:hover {{"
+                f"  background-color:{GREEN}28; border-color:{GREEN};"
+                f"}}"
+            )
+
+        anim.valueChanged.connect(_on_value)
+        btn._pulse_anim = anim   # keep reference
+
+        def _toggle(enabled: bool) -> None:
+            if enabled:
+                anim.setDirection(QVariantAnimation.Direction.Forward)
+                anim.start()
+            else:
+                anim.stop()
+                # Restore disabled appearance via stylesheet
+                btn.setStyleSheet("")   # falls back to QSS #btn_stop:disabled rule
+
+        # Start pulsing immediately if button is enabled
+        if btn.isEnabled():
+            anim.start()
+
+        # Re-evaluate when enabled state changes
+        btn.setEnabled = lambda state, _orig=btn.setEnabled: (  # type: ignore[method-assign]
+            _orig(state) or _toggle(state)
+        )
+    except Exception:
+        pass   # silently skip if PyQt6 animation not available
 
 
 # ── Available themes registry ─────────────────────────────────────────────────

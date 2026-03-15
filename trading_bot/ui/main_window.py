@@ -206,7 +206,7 @@ class NavButton(QToolButton):
         self._flash_on  = False
 
         self.setObjectName("nav_btn")
-        self.setFixedHeight(62)
+        self.setFixedHeight(70)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.setText(label)
@@ -233,12 +233,12 @@ class NavButton(QToolButton):
         self.clicked.connect(lambda: self.clicked_index.emit(self._index))
 
     def _set_icon(self, color: str) -> None:
-        self.setIcon(svg_icon(self._icon_name, color, 22))
-        self.setIconSize(QSize(22, 22))
+        self.setIcon(svg_icon(self._icon_name, color, 24))
+        self.setIconSize(QSize(24, 24))
 
     def _apply_style(self, active: bool) -> None:
         if self._disabled_nav:
-            col     = BG4
+            col     = FG2
             bg      = "transparent"
             top_bar = "border-top:2px solid transparent;"
             weight  = "400"
@@ -248,7 +248,7 @@ class NavButton(QToolButton):
             top_bar = f"border-top:2px solid {RED};"
             weight  = "700"
         else:
-            col     = ACCENT if active else FG2
+            col     = ACCENT if active else FG1
             bg      = BG2    if active else "transparent"
             top_bar = (f"border-top:2px solid {ACCENT};"
                        if active else "border-top:2px solid transparent;")
@@ -258,11 +258,11 @@ class NavButton(QToolButton):
                 background:{bg}; color:{col};
                 border:none; {top_bar}
                 border-radius:0;
-                font-size:10px; font-weight:{weight};
-                padding:6px 2px 4px 2px;
+                font-size:11px; font-weight:{weight};
+                padding:8px 2px 5px 2px;
             }}
             QToolButton:hover {{
-                background:{BG3}; color:{FG1};
+                background:{BG3}; color:{FG0};
                 border-top:2px solid {BORDER2};
             }}
         """)
@@ -340,22 +340,22 @@ class HeaderBar(QFrame):
     def __init__(self, symbols: list[str], parent=None) -> None:
         super().__init__(parent)
         self._symbols = symbols
-        self.setFixedHeight(46)
+        self.setFixedHeight(52)
         self.setStyleSheet(
             f"HeaderBar {{ background:{BG0}; border-bottom:1px solid {BORDER2}; }}"
         )
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 0, 12, 0)
+        layout.setContentsMargins(6, 4, 12, 4)
         layout.setSpacing(0)
 
         # Hamburger — slides the nav sidebar in/out
         self._ham_btn = QPushButton("☰")
-        self._ham_btn.setFixedSize(34, 34)
+        self._ham_btn.setFixedSize(36, 36)
         self._ham_btn.setToolTip("Toggle navigation sidebar  (Ctrl+\\)")
         self._ham_btn.setStyleSheet(f"""
             QPushButton {{
-                background: transparent; color: {FG2};
+                background: transparent; color: {FG1};
                 border: none; border-radius: 4px;
                 font-size: 16px; font-weight: 700;
             }}
@@ -479,7 +479,7 @@ _NAV_ITEMS = [
 class NavSidebar(QFrame):
     page_requested = pyqtSignal(int)
 
-    _WIDTH = 88   # px — icon centred above text; enough for longest label
+    _WIDTH = 92   # px — icon centred above text; enough for longest label
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -586,18 +586,20 @@ class MultiChartPanel(QWidget):
 
         # ── Toolbar row ───────────────────────────────────────────────
         ctrl = QFrame()
-        ctrl.setFixedHeight(36)
+        ctrl.setFixedHeight(42)
         ctrl.setStyleSheet(
             f"background:{BG0}; border-bottom:1px solid {BORDER};"
         )
         ctl = QHBoxLayout(ctrl)
-        ctl.setContentsMargins(8, 0, 8, 0)
-        ctl.setSpacing(8)
+        ctl.setContentsMargins(10, 0, 10, 0)
+        ctl.setSpacing(10)
 
         # Interval
-        ctl.addWidget(QLabel("Interval:"))
+        lbl_interval = QLabel("Interval:")
+        lbl_interval.setStyleSheet(f"color:{FG1}; font-size:12px;")
+        ctl.addWidget(lbl_interval)
         self.interval_combo = QComboBox()
-        self.interval_combo.setFixedWidth(70)
+        self.interval_combo.setFixedWidth(76)
         for iv in ["1m","3m","5m","15m","30m","1h","4h","1d","1w"]:
             self.interval_combo.addItem(iv)
         self.interval_combo.setCurrentText("1h")
@@ -607,14 +609,16 @@ class MultiChartPanel(QWidget):
         ctl.addWidget(_vsep())
 
         # Overlay pulldown
-        ctl.addWidget(QLabel("Overlays:"))
+        lbl_overlays = QLabel("Overlays:")
+        lbl_overlays.setStyleSheet(f"color:{FG1}; font-size:12px;")
+        ctl.addWidget(lbl_overlays)
         self.overlay_btn = QPushButton("EMA20, EMA50, Volume ▾")
-        self.overlay_btn.setFixedWidth(180)
-        self.overlay_btn.setFixedHeight(26)
+        self.overlay_btn.setFixedWidth(190)
+        self.overlay_btn.setFixedHeight(30)
         self.overlay_btn.setStyleSheet(f"""
             QPushButton {{
                 background:{BG4}; color:{FG1}; border:1px solid {BORDER2};
-                border-radius:4px; font-size:11px; padding:0 8px; text-align:left;
+                border-radius:4px; font-size:12px; padding:0 10px; text-align:left;
             }}
             QPushButton:hover {{ color:{ACCENT}; border-color:{ACCENT}; }}
         """)
@@ -625,9 +629,9 @@ class MultiChartPanel(QWidget):
 
         # Add tab button
         add_btn = QPushButton()
-        add_btn.setIcon(svg_icon("scan", ACCENT, 13))
-        add_btn.setIconSize(QSize(13, 13))
-        add_btn.setFixedSize(28, 28)
+        add_btn.setIcon(svg_icon("scan", ACCENT, 14))
+        add_btn.setIconSize(QSize(14, 14))
+        add_btn.setFixedSize(30, 30)
         add_btn.setToolTip("Add chart tab  (Ctrl++)")
         add_btn.setStyleSheet(
             f"background:{BG4}; border:1px solid {BORDER}; border-radius:4px;"
@@ -639,11 +643,11 @@ class MultiChartPanel(QWidget):
 
         # Fullscreen / pop-out button
         fs_btn = QPushButton("⛶")
-        fs_btn.setFixedSize(28, 28)
+        fs_btn.setFixedSize(30, 30)
         fs_btn.setToolTip("Pop chart out to fullscreen  (double-click tab title)")
         fs_btn.setStyleSheet(
             f"background:{BG4}; border:1px solid {BORDER}; border-radius:4px;"
-            f" color:{FG1}; font-size:14px;"
+            f" color:{FG1}; font-size:15px;"
         )
         fs_btn.clicked.connect(self._open_fullscreen)
         ctl.addWidget(fs_btn)
@@ -653,8 +657,8 @@ class MultiChartPanel(QWidget):
         # Current symbol label
         self.sym_lbl = QLabel("BTCUSDT")
         self.sym_lbl.setStyleSheet(
-            f"color:{ACCENT}; font-weight:700; font-size:13px; "
-            f"font-family:monospace; padding-right:8px;"
+            f"color:{ACCENT}; font-weight:700; font-size:14px; "
+            f"font-family:monospace; padding-right:10px;"
         )
         ctl.addWidget(self.sym_lbl)
 
@@ -823,15 +827,15 @@ QDockWidget {{
 def _dock_btn(symbol: str, tip: str) -> QPushButton:
     btn = QPushButton(symbol)
     btn.setToolTip(tip)
-    btn.setFixedSize(20, 20)
+    btn.setFixedSize(24, 24)
     btn.setStyleSheet(f"""
         QPushButton {{
-            background: transparent; color: {FG2};
-            border: none; border-radius: 3px;
-            font-size: 10px; padding: 0;
+            background: transparent; color: {FG1};
+            border: none; border-radius: 4px;
+            font-size: 12px; padding: 0;
         }}
-        QPushButton:hover  {{ background: {BG3}; color: {FG0}; }}
-        QPushButton:pressed {{ background: {BG4}; }}
+        QPushButton:hover  {{ background: {BG4}; color: {FG0}; }}
+        QPushButton:pressed {{ background: {BG5}; }}
     """)
     return btn
 
@@ -849,16 +853,16 @@ class DockTitleBar(QWidget):
         self._dock = dock
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 2, 4, 2)
-        lay.setSpacing(4)
+        lay.setContentsMargins(10, 3, 6, 3)
+        lay.setSpacing(6)
 
         grip = QLabel("⠿")
-        grip.setStyleSheet(f"color:{BORDER2}; font-size:14px;")
+        grip.setStyleSheet(f"color:{BORDER2}; font-size:16px;")
         lay.addWidget(grip)
 
         self._lbl = QLabel(title)
         self._lbl.setStyleSheet(
-            f"color:{FG1}; font-size:11px; font-weight:600; letter-spacing:0.5px;"
+            f"color:{FG0}; font-size:12px; font-weight:600; letter-spacing:0.4px;"
         )
         lay.addWidget(self._lbl, 1)
 
@@ -874,9 +878,9 @@ class DockTitleBar(QWidget):
         btn_close.clicked.connect(dock.close)
         lay.addWidget(btn_close)
 
-        self.setFixedHeight(28)
+        self.setFixedHeight(32)
         self.setStyleSheet(
-            f"DockTitleBar {{ background:{BG1}; border-bottom:1px solid {BORDER}; }}"
+            f"DockTitleBar {{ background:{BG2}; border-bottom:1px solid {BORDER2}; }}"
         )
 
     def set_title(self, text: str) -> None:
@@ -1122,21 +1126,21 @@ class TradingStatusBar(QStatusBar):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setFixedHeight(26)
+        self.setFixedHeight(28)
         self._status_dialog = None   # lazy-created SystemStatusDialog
 
-        def lbl(text: str, col: str = FG2) -> QLabel:
+        def lbl(text: str, col: str = FG1) -> QLabel:
             l = QLabel(text)
             l.setStyleSheet(
-                f"color:{col}; font-size:10px; padding:0 8px; font-family:monospace;"
+                f"color:{col}; font-size:11px; padding:0 10px; font-family:monospace;"
             )
             return l
 
-        def clbl(text: str, col: str = FG2) -> _ClickableLabel:
+        def clbl(text: str, col: str = FG1) -> _ClickableLabel:
             """Clickable label — opens system status popup."""
             l = _ClickableLabel(text)
             l.setStyleSheet(
-                f"color:{col}; font-size:10px; padding:0 8px; font-family:monospace;"
+                f"color:{col}; font-size:11px; padding:0 10px; font-family:monospace;"
             )
             l.setToolTip("Click to open System Status dashboard")
             l.clicked.connect(self._open_status_popup)
@@ -1149,7 +1153,7 @@ class TradingStatusBar(QStatusBar):
         # P&L — clickable, coloured, prominent
         self.pnl_lbl = _ClickableLabel("P&L: $0.00")
         self.pnl_lbl.setStyleSheet(
-            f"color:{FG2}; font-size:10px; padding:0 8px; font-family:monospace;"
+            f"color:{FG2}; font-size:11px; padding:0 10px; font-family:monospace;"
         )
         self.pnl_lbl.setToolTip("Today's realised P&L — click for full report")
         self.pnl_lbl.clicked.connect(self._open_status_popup)
@@ -1243,7 +1247,7 @@ class TradingStatusBar(QStatusBar):
                "PAPER": ACCENT2, "PAUSED": RED}.get(mode.upper(), FG1)
         self.mode_lbl.setText(f"MODE: {mode.upper()}")
         self.mode_lbl.setStyleSheet(
-            f"color:{col}; font-size:10px; padding:0 8px; font-family:monospace;"
+            f"color:{col}; font-size:11px; padding:0 10px; font-family:monospace;"
         )
 
     def set_at_state(self, state: str) -> None:
@@ -1252,7 +1256,7 @@ class TradingStatusBar(QStatusBar):
                "exiting": YELLOW, "cooldown": RED}.get(state, FG2)
         self.at_lbl.setText(f"AT: {state.upper()}")
         self.at_lbl.setStyleSheet(
-            f"color:{col}; font-size:10px; padding:0 8px; font-family:monospace;"
+            f"color:{col}; font-size:11px; padding:0 10px; font-family:monospace;"
         )
 
     def set_service(self, name: str, ok: bool) -> None:
@@ -1275,7 +1279,7 @@ class TradingStatusBar(QStatusBar):
             status = "ONLINE" if ok else "OFFLINE"
             widget.setText(f"● {short}: {status}")
             widget.setStyleSheet(
-                f"color:{col}; font-size:10px; padding:0 8px; font-family:monospace;"
+                f"color:{col}; font-size:11px; padding:0 10px; font-family:monospace;"
             )
 
 
@@ -2426,7 +2430,7 @@ class MainWindow(QMainWindow):
         self.status_bar.trades_lbl.setText(f"TRADES: {n}")
         self.status_bar.pnl_lbl.setText(f"P&L: ${pnl:+,.2f}")
         self.status_bar.pnl_lbl.setStyleSheet(
-            f"color:{col}; font-size:10px; padding:0 8px; font-family:monospace;"
+            f"color:{col}; font-size:11px; padding:0 10px; font-family:monospace;"
         )
 
     def _on_trade_event(self, trade: dict) -> None:
