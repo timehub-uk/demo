@@ -11,15 +11,15 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Callable, Optional
 
+import sys as _sys, pathlib as _pathlib
+_sys.path.insert(0, str(_pathlib.Path(__file__).parent.parent))
+
 import numpy as np
 import pandas as pd
-try:
-    import pandas_ta as ta
-except ImportError:
-    import sys as _sys, pathlib as _pathlib
-    _sys.path.insert(0, str(_pathlib.Path(__file__).parent.parent))
-    import pandas_ta as ta
+import pandas_ta as ta  # router shim handles real-package fallback automatically
 from loguru import logger
+
+_REAL_TA = hasattr(ta, "Strategy")  # True when real pandas-ta package is active
 from sqlalchemy.dialects.postgresql import insert
 
 from config import get_settings
@@ -154,24 +154,123 @@ class DataCollector:
         low = df["low"]
         volume = df["volume"]
 
+        # ── Core indicators (always stored as named columns) ─────────────────
         df["rsi"] = ta.rsi(close, length=14)
-        macd = ta.macd(close)
-        if macd is not None and not macd.empty:
-            df["macd"] = macd.get("MACD_12_26_9")
-            df["macd_signal"] = macd.get("MACDs_12_26_9")
-        bb = ta.bbands(close, length=20)
-        if bb is not None and not bb.empty:
-            df["bb_upper"] = bb.get("BBU_20_2.0")
-            df["bb_lower"] = bb.get("BBL_20_2.0")
+        _macd = ta.macd(close)
+        if _macd is not None and not _macd.empty:
+            df["macd"] = _macd.get("MACD_12_26_9")
+            df["macd_signal"] = _macd.get("MACDs_12_26_9")
+        _bb = ta.bbands(close, length=20)
+        if _bb is not None and not _bb.empty:
+            df["bb_upper"] = _bb.get("BBU_20_2.0")
+            df["bb_lower"] = _bb.get("BBL_20_2.0")
         df["ema_20"] = ta.ema(close, length=20)
         df["ema_50"] = ta.ema(close, length=50)
         df["ema_200"] = ta.ema(close, length=200)
         df["atr"] = ta.atr(high, low, close, length=14)
         df["obv"] = ta.obv(close, volume)
         df["adx"] = ta.adx(high, low, close, length=14).get("ADX_14")
-
-        # VWAP (rolling)
         df["vwap"] = (close * volume).cumsum() / volume.cumsum()
+
+        # ── Extended indicators stored as JSON (for ML feature store) ────────
+        ext: dict[str, pd.Series] = {}
+        try:
+            if _REAL_TA:
+                # Use all available pandas-ta categories via Strategy
+                _tmp = df[["open", "high", "low", "close", "volume"]].copy()
+                _tmp.ta.strategy(ta.Strategy(
+                    name="ml_extended",
+                    ta=[
+                        # Trend
+                        {"kind": "sma", "length": 10}, {"kind": "sma", "length": 21},
+                        {"kind": "sma", "length": 50}, {"kind": "sma", "length": 100},
+                        {"kind": "ema", "length": 9}, {"kind": "ema", "length": 21},
+                        {"kind": "dema", "length": 20}, {"kind": "tema", "length": 20},
+                        {"kind": "wma", "length": 20},
+                        {"kind": "psar"},
+                        {"kind": "ichimoku"},
+                        {"kind": "supertrend"},
+                        # Momentum
+                        {"kind": "rsi", "length": 7}, {"kind": "rsi", "length": 21},
+                        {"kind": "stoch"}, {"kind": "stochrsi"},
+                        {"kind": "willr"}, {"kind": "cci"},
+                        {"kind": "mfi"}, {"kind": "roc", "length": 10},
+                        {"kind": "cmo"}, {"kind": "tsi"},
+                        {"kind": "ppo"}, {"kind": "mom", "length": 10},
+                        {"kind": "er"}, {"kind": "fisher"},
+                        # Volatility
+                        {"kind": "bbands", "length": 10}, {"kind": "bbands", "length": 50},
+                        {"kind": "atr", "length": 7}, {"kind": "atr", "length": 21},
+                        {"kind": "natr"}, {"kind": "kc"}, {"kind": "donchian"},
+                        {"kind": "massi"},
+                        # Volume
+                        {"kind": "cmf"}, {"kind": "vpt"}, {"kind": "ad"},
+                        {"kind": "mfi", "length": 7},
+                        {"kind": "efi"}, {"kind": "pvol"},
+                        # Trend strength
+                        {"kind": "adx", "length": 7}, {"kind": "adx", "length": 21},
+                        {"kind": "aroon"}, {"kind": "dpo"},
+                        {"kind": "pvo"},
+                    ],
+                ))
+                for col in _tmp.columns:
+                    if col not in df.columns:
+                        ext[col] = _tmp[col]
+            else:
+                # Shim extended indicators
+                _stoch = ta.stoch(high, low, close)
+                ext.update({c: _stoch[c] for c in _stoch.columns})
+                ext["WILLR_14"] = ta.willr(high, low, close)
+                ext["CCI_14"] = ta.cci(high, low, close)
+                ext["MFI_14"] = ta.mfi(high, low, close, volume)
+                ext["ROC_10"] = ta.roc(close)
+                ext["CMO_14"] = ta.cmo(close)
+                ext["TSI_13_25"] = ta.tsi(close)
+                ext["NATR_14"] = ta.natr(high, low, close)
+                ext["CMF_20"] = ta.cmf(high, low, close, volume)
+                ext["VPT"] = ta.vpt(close, volume)
+                ext["AD"] = ta.ad(high, low, close, volume)
+                _aroon = ta.aroon(high, low)
+                ext.update({c: _aroon[c] for c in _aroon.columns})
+                _ichi = ta.ichimoku(high, low, close)
+                ext.update({c: _ichi[c] for c in _ichi.columns})
+                _kc = ta.kc(high, low, close)
+                ext.update({c: _kc[c] for c in _kc.columns})
+                _dc = ta.donchian(high, low)
+                ext.update({c: _dc[c] for c in _dc.columns})
+                for p in (7, 21):
+                    ext[f"RSI_{p}"] = ta.rsi(close, length=p)
+                    ext[f"ATR_{p}"] = ta.atr(high, low, close, length=p)
+                for s in (10, 21, 50, 100):
+                    ext[f"SMA_{s}"] = ta.sma(close, length=s)
+                ext["EMA_9"] = ta.ema(close, length=9)
+                ext["EMA_21"] = ta.ema(close, length=21)
+                ext["DEMA_20"] = ta.dema(close, length=20)
+                ext["TEMA_20"] = ta.tema(close, length=20)
+                ext["WMA_20"] = ta.wma(close, length=20)
+        except Exception as _e:
+            logger.debug(f"Extended indicators error: {_e}")
+
+        if ext:
+            # Attach as row-wise dicts; NaN → None for JSON serialisation
+            df["extra_indicators"] = [
+                {k: (None if (v := s.iloc[i]) != v else float(v))
+                 for k, s in ext.items()}
+                for i in range(len(df))
+            ]
+
+        # One-line indicator snapshot for the latest row
+        if len(df) >= 1:
+            r = df.iloc[-1]
+            def _f(v, dec=1): return f"{v:.{dec}f}" if pd.notna(v) else "n/a"
+            logger.debug(
+                f"TA | rsi={_f(r.get('rsi'))} macd={_f(r.get('macd'),2)} "
+                f"bb={_f(r.get('bb_upper'))}/{_f(r.get('bb_lower'))} "
+                f"ema20={_f(r.get('ema_20'))} adx={_f(r.get('adx'))} "
+                f"atr={_f(r.get('atr'),3)} obv={_f(r.get('obv'),0)} "
+                f"ext={len(ext)} indicators"
+            )
+
         return df
 
     # ── Database upsert ────────────────────────────────────────────────
@@ -197,6 +296,7 @@ class DataCollector:
                         "ema_20","ema_50","ema_200","atr","obv","vwap","adx"]:
                 v = row.get(ind)
                 rec[ind] = float(v) if v is not None and not (isinstance(v, float) and np.isnan(v)) else None
+            rec["extra_indicators"] = row.get("extra_indicators") or None
             records.append(rec)
 
         if not records:
@@ -211,7 +311,8 @@ class DataCollector:
                         col: stmt.excluded[col]
                         for col in ["open","high","low","close","volume",
                                     "rsi","macd","macd_signal","bb_upper","bb_lower",
-                                    "ema_20","ema_50","ema_200","atr","obv","vwap","adx"]
+                                    "ema_20","ema_50","ema_200","atr","obv","vwap","adx",
+                                    "extra_indicators"]
                     }
                 )
                 db.execute(stmt)

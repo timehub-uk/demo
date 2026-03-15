@@ -177,6 +177,46 @@ class ZeroXConfig(BaseModel):
     base_url: str = "https://api.0x.org"
 
 
+class CCXTExchangeEntry(BaseModel):
+    """Credentials + options for a single CCXT-managed exchange."""
+    enabled: bool = False
+    exchange_id: str = ""          # ccxt exchange id, e.g. "kraken"
+    api_key: str = ""
+    api_secret: str = ""
+    passphrase: str = ""           # required by KuCoin, OKX, etc.
+    testnet: bool = False
+    rate_limit: int = 1200         # ms between requests (ccxt default)
+    default_type: str = "spot"     # spot | future | swap | option
+
+
+class CCXTConfig(BaseModel):
+    """Multi-exchange connectivity via CCXT (100+ exchanges)."""
+    enabled: bool = False
+
+    # Pre-configured slots for the most-used exchanges
+    kraken:   CCXTExchangeEntry = CCXTExchangeEntry(exchange_id="kraken")
+    coinbase: CCXTExchangeEntry = CCXTExchangeEntry(exchange_id="coinbase")
+    kucoin:   CCXTExchangeEntry = CCXTExchangeEntry(exchange_id="kucoin")
+    bybit:    CCXTExchangeEntry = CCXTExchangeEntry(exchange_id="bybit")
+    okx:      CCXTExchangeEntry = CCXTExchangeEntry(exchange_id="okx")
+    gate:     CCXTExchangeEntry = CCXTExchangeEntry(exchange_id="gate")
+    htx:      CCXTExchangeEntry = CCXTExchangeEntry(exchange_id="htx")   # Huobi
+
+    # Two free-form custom slots for any other ccxt-supported exchange
+    custom_1: CCXTExchangeEntry = CCXTExchangeEntry()
+    custom_2: CCXTExchangeEntry = CCXTExchangeEntry()
+
+    def active_exchanges(self) -> list[CCXTExchangeEntry]:
+        """Return only enabled exchange entries that have an exchange_id set."""
+        return [
+            e for e in [
+                self.kraken, self.coinbase, self.kucoin, self.bybit,
+                self.okx, self.gate, self.htx, self.custom_1, self.custom_2,
+            ]
+            if e.enabled and e.exchange_id
+        ]
+
+
 # ── Main settings class ───────────────────────────────────────────────────────
 
 class Settings:
@@ -206,6 +246,7 @@ class Settings:
         self.coingecko = CoinGeckoConfig()
         self.codex = CodexConfig()
         self.zerox = ZeroXConfig()
+        self.ccxt = CCXTConfig()
         self.first_run: bool = True
         self._loaded = True
 
@@ -226,6 +267,7 @@ class Settings:
             "coingecko": self.coingecko.model_dump(),
             "codex": self.codex.model_dump(),
             "zerox": self.zerox.model_dump(),
+            "ccxt": self.ccxt.model_dump(),
             "first_run": self.first_run,
         }
         from .encryption import EncryptionManager
@@ -266,6 +308,12 @@ class Settings:
         self.coingecko = CoinGeckoConfig(**data.get("coingecko", {}))
         self.codex = CodexConfig(**data.get("codex", {}))
         self.zerox = ZeroXConfig(**data.get("zerox", {}))
+        raw_ccxt = data.get("ccxt", {})
+        # Nested exchange entries need to be hydrated from dicts
+        for slot in ["kraken","coinbase","kucoin","bybit","okx","gate","htx","custom_1","custom_2"]:
+            if slot in raw_ccxt and isinstance(raw_ccxt[slot], dict):
+                raw_ccxt[slot] = CCXTExchangeEntry(**raw_ccxt[slot])
+        self.ccxt = CCXTConfig(**raw_ccxt)
         self.first_run = data.get("first_run", True)
 
     def effective_api_key(self) -> str:

@@ -175,6 +175,9 @@ class TokenMetrics(Base):
     vwap = Column(Float)
     adx = Column(Float)
 
+    # Extended indicators for ML (populated when real pandas-ta is available)
+    extra_indicators = Column(JSON)
+
     created_at = now_utc()
 
     __table_args__ = (
