@@ -91,6 +91,7 @@ class DynamicRiskManager:
         # Tracking state
         self._portfolio_peak: float = 0.0
         self._day_start_value: float = 0.0
+        self._current_value: float = 0.0
         self._today: date = date.today()
 
         # Rolling trade outcomes (True=win, False=loss)
@@ -145,6 +146,7 @@ class DynamicRiskManager:
                 self._day_start_value = current_value
             if current_value > self._portfolio_peak:
                 self._portfolio_peak = current_value
+            self._current_value = current_value
 
     @property
     def circuit_broken(self) -> bool:
@@ -153,6 +155,22 @@ class DynamicRiskManager:
     @property
     def circuit_reason(self) -> str:
         return self._circuit_reason
+
+    @property
+    def portfolio_value(self) -> float:
+        """Most recent portfolio value passed to update_portfolio()."""
+        return self._current_value
+
+    @property
+    def position_risk_pct(self) -> float:
+        """Fraction of portfolio to risk per trade (e.g. 0.01 = 1%)."""
+        if self._base:
+            try:
+                from config import get_settings
+                return get_settings().trading.risk_per_trade_pct / 100.0
+            except Exception:
+                pass
+        return 0.01
 
     @property
     def status(self) -> dict:

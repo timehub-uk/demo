@@ -63,7 +63,8 @@ class DataCleaner:
                 continue
             cleaned.append(c)
 
-        # Stage 2: Convert to float, remove non-numeric
+        # Stage 2: Convert to float, remove non-numeric and NaN/inf values
+        import math
         result = []
         for c in cleaned:
             try:
@@ -72,6 +73,9 @@ class DataCleaner:
                 c["low"] = float(c["low"])
                 c["close"] = float(c["close"])
                 c["volume"] = float(c["volume"])
+                if any(not math.isfinite(c[f]) for f in ("open", "high", "low", "close", "volume")):
+                    reasons["non_numeric"] = reasons.get("non_numeric", 0) + 1
+                    continue
                 result.append(c)
             except (ValueError, TypeError):
                 reasons["non_numeric"] = reasons.get("non_numeric", 0) + 1

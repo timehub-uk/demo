@@ -174,7 +174,8 @@ class OrderManager:
             return False
 
     def cancel_all(self, symbol: str) -> None:
-        orders = [o for o in self._open_orders.values() if o["symbol"] == symbol]
+        with self._lock:
+            orders = [o for o in self._open_orders.values() if o["symbol"] == symbol]
         for o in orders:
             self.cancel_order(symbol, o["id"])
 
@@ -189,7 +190,8 @@ class OrderManager:
         if not self._client:
             return
         try:
-            symbols = {o["symbol"] for o in self._open_orders.values()}
+            with self._lock:
+                symbols = {o["symbol"] for o in self._open_orders.values()}
             for sym in symbols:
                 live = self._client.get_open_orders(sym)
                 live_ids = {str(o["orderId"]) for o in live}

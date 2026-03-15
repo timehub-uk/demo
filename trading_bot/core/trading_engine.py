@@ -19,7 +19,6 @@ from .binance_client import BinanceClient
 from .order_manager import OrderManager
 from .portfolio import PortfolioManager
 from .risk_manager import RiskManager, RiskMetrics, TradeProposal
-from db.redis_client import RedisClient
 
 
 class EngineMode(str, Enum):
