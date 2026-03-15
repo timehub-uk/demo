@@ -99,13 +99,21 @@ class ApprovalWorkflowEngine:
         required_approvers: Optional[List[str]] = None,
         expire_hours: float = 24.0,
     ) -> ApprovalRequest:
+        resolved_approvers = required_approvers or ["admin"]
+        # Guard: an empty approvers list would let any approval slip through
+        # because quorum math resolves to 0 needed.
+        if not resolved_approvers:
+            raise ValueError(
+                "required_approvers must contain at least one approver; "
+                "an empty list would allow immediate quorum bypass."
+            )
         req = ApprovalRequest(
             request_id=f"REQ-{uuid.uuid4().hex[:8].upper()}",
             request_type=request_type,
             requester=requester,
             description=description,
             payload=payload,
-            required_approvers=required_approvers or ["admin"],
+            required_approvers=resolved_approvers,
             expires_at=time.time() + expire_hours * 3600,
         )
         with self._lock:

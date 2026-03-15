@@ -34,6 +34,17 @@ from config import get_settings
 from db.redis_client import RedisClient
 from utils.logger import get_intel_logger
 
+try:
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
+    _LIMITER_AVAILABLE = True
+except ImportError:
+    _LIMITER_AVAILABLE = False
+    logger.warning(
+        "[APIServer] flask-limiter not installed – rate limiting disabled. "
+        "Run: pip install flask-limiter"
+    )
+
 _api_server: "APIServer | None" = None
 
 
@@ -74,6 +85,25 @@ def create_app(engine=None, portfolio=None, predictor=None,
     redis_client = RedisClient()
     intel = get_intel_logger()
     _services = services or {}
+
+    # ── Rate limiting (requires flask-limiter) ──────────────────────────
+    if _LIMITER_AVAILABLE:
+        limiter = Limiter(
+            get_remote_address,
+            app=app,
+            default_limits=["200 per minute", "30 per second"],
+            storage_uri="memory://",
+            headers_enabled=True,
+        )
+        # Tighter limit on mutating endpoints
+        _order_limit = limiter.limit("10 per minute")
+    else:
+        # No-op decorator so route definitions below are unchanged
+        class _NoopLimiter:
+            def limit(self, *_a, **_kw):
+                return lambda f: f
+        limiter = _NoopLimiter()
+        _order_limit = lambda f: f  # noqa: E731
 
     # ── Status ─────────────────────────────────────────────────────────
     @app.route("/api/v1/status")
@@ -171,6 +201,7 @@ def create_app(engine=None, portfolio=None, predictor=None,
     # ── Place order ─────────────────────────────────────────────────────
     @app.route("/api/v1/order", methods=["POST"])
     @require_token
+    @_order_limit
     def place_order():
         body = request.get_json(silent=True) or {}
         required = ["symbol", "side", "quantity"]

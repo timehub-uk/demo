@@ -105,6 +105,9 @@ def init_db(db_url: str, pool_size: int = 10, max_overflow: int = 20) -> None:
             pool_pre_ping=True,
             pool_recycle=3600,
             echo=False,
+            # READ_COMMITTED prevents dirty reads while still allowing
+            # reasonable concurrency for concurrent order placement.
+            isolation_level="READ_COMMITTED",
             connect_args={
                 "connect_timeout": 10,
                 "options": "-c statement_timeout=30000",

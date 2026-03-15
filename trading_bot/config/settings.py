@@ -223,11 +223,18 @@ class Settings:
     """Singleton settings store – load/save encrypted JSON."""
 
     _instance: "Settings | None" = None
+    _init_lock: "threading.Lock" = None  # type: ignore[assignment]
 
     def __new__(cls) -> "Settings":
+        # Double-checked locking to avoid race condition on first instantiation.
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._loaded = False
+            if cls._init_lock is None:
+                import threading as _threading
+                cls._init_lock = _threading.Lock()
+            with cls._init_lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._loaded = False
         return cls._instance
 
     def __init__(self) -> None:
@@ -318,10 +325,22 @@ class Settings:
 
     def effective_api_key(self) -> str:
         """Bearer token used by the REST API and webhooks.
-        Falls back to the first 16 chars of the Binance API key when no
-        explicit key has been set."""
+
+        Priority:
+          1. Settings → Notifications → API Key  (recommended – set this explicitly)
+          2. Warning fallback: first 16 chars of Binance API key (insecure – if
+             the Binance key is ever leaked, the REST API token is trivially known)
+
+        To remove the fallback, set a dedicated token in Settings → Notifications.
+        """
         if self.notifications.api_key:
             return self.notifications.api_key
+        # Fallback: warn loudly so operators know this is insecure
+        from loguru import logger as _logger
+        _logger.warning(
+            "[Settings] REST API is using the Binance key prefix as its bearer token. "
+            "Set a dedicated API key in Settings → Notifications → API Key to fix this."
+        )
         return self.binance.api_key[:16] if self.binance.api_key else "dev"
 
     @property

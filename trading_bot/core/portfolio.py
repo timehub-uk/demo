@@ -57,6 +57,7 @@ class PortfolioManager:
         self._positions: dict[str, Position] = {}
         self._balances: dict[str, dict] = {}
         self._gbp_rate: Decimal = Decimal("0.79")  # USD→GBP multiplier default (1/1.27)
+        self._gbp_rate_updated_at: float = 0.0     # epoch – 0 means "never refreshed"
         self._snapshot = PortfolioSnapshot()
         self._callbacks: list = []
 
@@ -185,15 +186,25 @@ class PortfolioManager:
         for cb in self._callbacks:
             try:
                 cb(snap)
-            except Exception:
-                pass
+            except Exception as _cb_exc:
+                logger.warning(f"[Portfolio] Snapshot callback raised: {_cb_exc}")
 
     def _get_gbp_rate(self) -> Decimal:
         """Approximate GBP/USD using GBPUSDT if available."""
+        import time as _time
         try:
             if self._client:
                 price = self._client.get_price("GBPUSDT")
-                return Decimal("1") / price
-        except Exception:
-            pass
-        return Decimal("0.79")  # fallback
+                rate = Decimal("1") / price
+                self._gbp_rate_updated_at = _time.time()
+                return rate
+        except Exception as exc:
+            logger.warning(f"[Portfolio] Could not refresh GBP/USD rate: {exc}")
+        # Fallback – warn if the cached rate is more than 1 hour old
+        age = _time.time() - self._gbp_rate_updated_at
+        if age > 3600:
+            logger.warning(
+                f"[Portfolio] GBP/USD rate is stale ({age / 3600:.1f} h old). "
+                "Using hardcoded fallback 0.79 – P&L values in GBP may be inaccurate."
+            )
+        return self._gbp_rate

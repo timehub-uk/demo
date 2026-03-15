@@ -229,8 +229,12 @@ class IntelLogger:
         for cb in callbacks:
             try:
                 cb(entry)
-            except Exception:
-                pass
+            except Exception as _cb_exc:
+                # Use the stdlib logger to avoid recursion with IntelLogger itself
+                import logging as _stdlib_logging
+                _stdlib_logging.getLogger(__name__).warning(
+                    "IntelLogger callback raised an exception: %s", _cb_exc
+                )
 
 
 _intel_logger: IntelLogger | None = None
