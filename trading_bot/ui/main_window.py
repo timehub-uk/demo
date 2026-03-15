@@ -1538,11 +1538,100 @@ class MainWindow(QMainWindow):
             )
 
     def _on_settings_saved(self) -> None:
-        """Called when settings are saved – re-evaluate API nav state."""
+        """Called when settings are saved – re-evaluate API nav state and
+        check whether PostgreSQL just became available after SQLite was active."""
         self._settings = get_settings()
         self._apply_api_nav_state()
         if self._settings.binance.api_key:
             self._binance_api_ignored = False
+
+        # If we were on SQLite and PostgreSQL may now be reachable, try to
+        # connect and offer a migration dialog.
+        from db.postgres import is_sqlite
+        if is_sqlite():
+            QTimer.singleShot(0, self._try_postgres_and_migrate)
+
+    def _try_postgres_and_migrate(self) -> None:
+        """
+        Attempt a PostgreSQL connection after settings save.
+        If successful and SQLite data exists, show the migration dialog.
+        Runs the connection probe in a background thread to avoid blocking the UI.
+        """
+        import threading
+
+        def _probe():
+            try:
+                from sqlalchemy import create_engine, text
+                test_eng = create_engine(
+                    self._settings.db_url,
+                    pool_pre_ping=True,
+                    connect_args={"connect_timeout": 5},
+                )
+                with test_eng.connect() as conn:
+                    conn.execute(text("SELECT 1"))
+                test_eng.dispose()
+                # PG is reachable — schedule dialog on the GUI thread
+                QTimer.singleShot(0, self._offer_migration)
+            except Exception:
+                pass   # Still unreachable — stay on SQLite silently
+
+        threading.Thread(target=_probe, daemon=True, name="pg-probe").start()
+
+    def _offer_migration(self) -> None:
+        """
+        Called on the GUI thread once PostgreSQL is confirmed reachable.
+        If SQLite has data show the migration dialog; otherwise switch engines
+        directly with a toast notification.
+        """
+        from db.sqlite_to_postgres import sqlite_has_data
+
+        if sqlite_has_data():
+            try:
+                from ui.db_migration_dialog import DbMigrationDialog
+                dlg = DbMigrationDialog(
+                    pg_url=self._settings.db_url,
+                    pg_pool_size=self._settings.database.pool_size,
+                    pg_max_overflow=self._settings.database.max_overflow,
+                    parent=self,
+                )
+                dlg.run()   # blocks until user closes (auto-closes on success)
+            except Exception as exc:
+                self._intel.warning("Migration", f"Could not open migration dialog: {exc}")
+                return
+        else:
+            self._intel.system("Migration", "No SQLite data to migrate.")
+
+        # Reinitialise the active DB engine to PostgreSQL for this session
+        self._reinit_postgres_engine()
+
+    def _reinit_postgres_engine(self) -> None:
+        """
+        Reset the module-level SQLAlchemy engine to PostgreSQL.
+        Called after a successful migration (or when PG is available but SQLite
+        has no data worth migrating).
+        """
+        import db.postgres as pg_mod
+        try:
+            with pg_mod._lock:
+                # Dispose existing SQLite engine cleanly
+                if pg_mod._engine is not None:
+                    try:
+                        pg_mod._engine.dispose()
+                    except Exception:
+                        pass
+                pg_mod._engine = None
+                pg_mod._SessionLocal = None
+                pg_mod._using_sqlite = False
+
+            # Re-connect to PostgreSQL
+            pg_mod.init_db(
+                self._settings.db_url,
+                pool_size=self._settings.database.pool_size,
+                max_overflow=self._settings.database.max_overflow,
+            )
+            self._intel.system("Migration", "PostgreSQL is now the active database.")
+        except Exception as exc:
+            self._intel.warning("Migration", f"Could not switch to PostgreSQL: {exc}")
 
     # ──────────────────────────────────────────────────────────────────
     # UI

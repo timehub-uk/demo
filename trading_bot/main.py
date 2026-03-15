@@ -72,6 +72,37 @@ def create_splash(app: QApplication) -> QSplashScreen:
     return splash
 
 
+def _migrate_sqlite_if_needed_headless(pg_url: str) -> None:
+    """
+    Called after a successful PostgreSQL connection at startup.
+    If a local SQLite fallback DB exists with data, run the migration
+    in a background thread (no UI — progress goes to the Intel log only).
+    """
+    try:
+        from db.sqlite_to_postgres import sqlite_has_data, migrate_sqlite_to_postgres
+        if not sqlite_has_data():
+            return
+
+        intel.warning(
+            "Startup",
+            "SQLite data detected – migrating to PostgreSQL in the background…"
+        )
+
+        def _progress(table: str, copied: int, total: int) -> None:
+            if total > 0 and copied >= total:
+                intel.system("Migration", f"Table '{table}': {copied} rows migrated.")
+
+        def _done(success: bool, message: str) -> None:
+            if success:
+                intel.system("Migration", f"SQLite→PostgreSQL migration complete. {message}")
+            else:
+                intel.warning("Migration", f"Migration failed: {message}")
+
+        migrate_sqlite_to_postgres(pg_url=pg_url, progress_cb=_progress, done_cb=_done)
+    except Exception as exc:
+        logger.warning(f"SQLite migration check failed: {exc}")
+
+
 def init_databases() -> tuple[bool, str]:
     """Initialise PostgreSQL and Redis connections (no UI retry)."""
     from config import get_settings
@@ -84,6 +115,8 @@ def init_databases() -> tuple[bool, str]:
             max_overflow=settings.database.max_overflow,
         )
         intel.system("Startup", "PostgreSQL connected.")
+        # If a SQLite fallback DB exists with data, migrate it now (headless)
+        _migrate_sqlite_if_needed_headless(settings.db_url)
     except Exception as exc:
         logger.warning(f"PostgreSQL unavailable ({exc}) – switching to SQLite")
         intel.warning("Startup", "PostgreSQL unavailable – using local SQLite database")
@@ -127,6 +160,7 @@ def _init_postgres_with_retry(app, settings) -> bool:
                 max_overflow=settings.database.max_overflow,
             )
             intel.system("Startup", "PostgreSQL connected.")
+            _migrate_sqlite_if_needed_headless(settings.db_url)
             return True
 
         except Exception as exc:
