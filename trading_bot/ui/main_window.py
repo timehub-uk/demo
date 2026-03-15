@@ -1222,12 +1222,15 @@ class TradingStatusBar(QStatusBar):
 
     def _check_network(self) -> None:
         import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            socket.setdefaulttimeout(2)
-            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
+            sock.settimeout(2)
+            sock.connect(("8.8.8.8", 53))
             self.set_service("network", True)
         except Exception:
             self.set_service("network", False)
+        finally:
+            sock.close()
 
     def _open_status_popup(self) -> None:
         """Open (or raise) the live System Status dialog."""
@@ -2284,126 +2287,180 @@ class MainWindow(QMainWindow):
     def _build_menu(self) -> None:
         mb = self.menuBar()
 
-        # File
+        # ── File ──────────────────────────────────────────────────────────────
         fm = mb.addMenu("&File")
-        fm.addAction(self._act("Settings", lambda: self._navigate_to(8), "Ctrl+,"))
+        fm.addAction(self._act("Settings",       lambda: self._navigate_to(8), "Ctrl+,"))
         fm.addSeparator()
-        fm.addAction(self._act("Exit", self.close, "Ctrl+Q"))
+        fm.addAction(self._act("Exit",           self.close,                   "Ctrl+Q"))
 
-        # View
+        # ── View ─────────────────────────────────────────────────────────────
         vm = mb.addMenu("&View")
-        labels = [
-            "Trading", "AutoTrader", "ML", "Risk",
-            "Backtest", "Trade Journal", "Strategy Builder",
-            "Connections", "Settings", "Help",
-        ]
-        for i, lbl in enumerate(labels):
-            sc = f"Ctrl+{i+1}" if i < 9 else ""
-            vm.addAction(self._act(lbl, lambda _, idx=i: self._navigate_to(idx), sc))
-        vm.addAction(self._act("Reports",    lambda: self._navigate_to(11), "F2"))
-        vm.addAction(self._act("Market Watch", lambda: self._navigate_to(12), "Ctrl+Shift+W"))
-        vm.addAction(self._act("ML Tools",   lambda: self._navigate_to(13), "Ctrl+Shift+M"))
+        vm.addAction(self._act("Toggle Nav Sidebar",    self._toggle_nav,       "Ctrl+\\"))
+        vm.addAction(self._act("Toggle Fullscreen",     self._toggle_fullscreen,"F11"))
+        vm.addAction(self._act("Add Chart Tab",         self._add_chart_tab,    "Ctrl++"))
         vm.addSeparator()
-        vm.addAction(self._act("Toggle Nav Sidebar",   self._toggle_nav,              "Ctrl+\\"))
-        vm.addSeparator()
-        # Panels submenu — individual dock visibility + restore
         panels_menu = vm.addMenu("Panels")
-        panels_menu.addAction(self._act("Toggle Intel Log",     self._toggle_intel_log,        "Ctrl+L"))
-        panels_menu.addAction(self._act("Toggle Order Book",    self._toggle_order_book,       "Ctrl+B"))
-        panels_menu.addAction(self._act("Toggle Trading Panel", self._toggle_trading_panel,    "Ctrl+Shift+B"))
+        panels_menu.addAction(self._act("Toggle Intel Log",     self._toggle_intel_log,     "Ctrl+L"))
+        panels_menu.addAction(self._act("Toggle Order Book",    self._toggle_order_book,    "Ctrl+B"))
+        panels_menu.addAction(self._act("Toggle Trading Panel", self._toggle_trading_panel, "Ctrl+Shift+B"))
         panels_menu.addSeparator()
-        panels_menu.addAction(self._act("Restore Trading Docks", self._restore_trading_docks,  "Ctrl+Shift+R"))
-        vm.addAction(self._act("Add Chart Tab",      self._add_chart_tab,      "Ctrl++"))
-        vm.addAction(self._act("Toggle Fullscreen",  self._toggle_fullscreen,  "F11"))
+        panels_menu.addAction(self._act("Restore Trading Docks",self._restore_trading_docks,"Ctrl+Shift+R"))
 
-        # Trading
+        # ── Trading ───────────────────────────────────────────────────────────
         tm = mb.addMenu("&Trading")
-        for mode in ["Manual","Auto","Hybrid","Paper","Paused"]:
-            tm.addAction(self._act(f"{mode} Mode",
-                lambda _, m=mode: self._set_engine_mode(m.lower())))
-        tm.addSeparator()
-        tm.addAction(self._act("Cancel All Orders", self._cancel_all_orders, "Ctrl+Shift+X"))
-        tm.addSeparator()
 
-        at_menu = tm.addMenu("🤖 AutoTrader")
-        at_menu.addAction(self._act("Semi-Auto Mode",    lambda: self._set_at_mode("semi_auto")))
-        at_menu.addAction(self._act("Full-Auto Mode",    lambda: self._set_at_mode("full_auto")))
+        # Trading sub-menu
+        trading_panel_m = tm.addMenu("📊  Trading Panel")
+        trading_panel_m.addAction(self._act("Open Trading Panel",    lambda: self._navigate_to(0),  "Ctrl+1"))
+        trading_panel_m.addSeparator()
+        trading_panel_m.addAction(self._act("Toggle Order Book",     self._toggle_order_book,       "Ctrl+B"))
+        trading_panel_m.addAction(self._act("Toggle Trading Panel",  self._toggle_trading_panel,    "Ctrl+Shift+B"))
+        trading_panel_m.addAction(self._act("Restore Trading Docks", self._restore_trading_docks,   "Ctrl+Shift+R"))
+        trading_panel_m.addAction(self._act("Add Chart Tab",         self._add_chart_tab,           "Ctrl++"))
+
+        # AutoTrader sub-menu
+        at_menu = tm.addMenu("🤖  AutoTrader")
+        at_menu.addAction(self._act("Open AutoTrader",           lambda: self._navigate_to(1),         "Ctrl+2"))
         at_menu.addSeparator()
-        at_menu.addAction(self._act("🎯 Take Aim",       self._at_take_aim,    "Ctrl+Shift+A"))
-        at_menu.addAction(self._act("🛑 Exit Trade",     self._at_manual_exit, "Ctrl+Shift+E"))
-        at_menu.addAction(self._act("🔭 Scan Now",       self._at_scan_now,    "Ctrl+Shift+N"))
+        at_menu.addAction(self._act("🔔  Alerts Tab",             lambda: self._open_at_tab(1)))
+        at_menu.addAction(self._act("⚡  Ping-Pong Tab",          lambda: self._open_at_tab(2)))
+        at_menu.addAction(self._act("🧠  Strategies Tab",         lambda: self._open_at_tab(3)))
+        at_menu.addAction(self._act("⚡  Arbitrage Tab",          lambda: self._open_at_tab(4)))
+        at_menu.addSeparator()
+        at_menu.addAction(self._act("Semi-Auto Mode",            lambda: self._set_at_mode("semi_auto")))
+        at_menu.addAction(self._act("Full-Auto Mode",            lambda: self._set_at_mode("full_auto")))
+        at_menu.addSeparator()
+        at_menu.addAction(self._act("🎯 Take Aim",               self._at_take_aim,    "Ctrl+Shift+A"))
+        at_menu.addAction(self._act("🛑 Exit Trade",             self._at_manual_exit, "Ctrl+Shift+E"))
+        at_menu.addAction(self._act("🔭 Scan Now",               self._at_scan_now,    "Ctrl+Shift+N"))
 
-        # ML
+        tm.addSeparator()
+
+        # Analysis tools sub-menus
+        risk_m = tm.addMenu("📉  Risk Dashboard")
+        risk_m.addAction(self._act("Open Risk Dashboard",        lambda: self._navigate_to(3), "Ctrl+4"))
+
+        backtest_m = tm.addMenu("🧪  Backtesting")
+        backtest_m.addAction(self._act("Open Backtest Engine",   lambda: self._navigate_to(4), "Ctrl+5"))
+
+        journal_m = tm.addMenu("📒  Trade Journal")
+        journal_m.addAction(self._act("Open Trade Journal",      lambda: self._navigate_to(5), "Ctrl+6"))
+
+        strategy_m = tm.addMenu("🔧  Strategy Builder")
+        strategy_m.addAction(self._act("Open Strategy Builder",  lambda: self._navigate_to(6), "Ctrl+7"))
+
+        tm.addSeparator()
+
+        # Trading mode switcher
+        modes_m = tm.addMenu("⚙  Trading Mode")
+        for mode in ["Manual", "Auto", "Hybrid", "Paper", "Paused"]:
+            modes_m.addAction(self._act(f"{mode} Mode",
+                lambda _, m=mode: self._set_engine_mode(m.lower())))
+
+        tm.addSeparator()
+        tm.addAction(self._act("❌ Cancel All Orders", self._cancel_all_orders, "Ctrl+Shift+X"))
+
+        # ── ML ────────────────────────────────────────────────────────────────
         mlm = mb.addMenu("&ML")
-        mlm.addAction(self._act("ML Training Panel",    lambda: self._navigate_to(2)))
-        mlm.addAction(self._act("ML Tools Panel",       lambda: self._navigate_to(13), "Ctrl+Shift+M"))
-        mlm.addSeparator()
-        mlm.addAction(self._act("Start Training",       self._start_training,       "Ctrl+T"))
-        mlm.addAction(self._act("Stop Training",        self._stop_training,        "Ctrl+Shift+T"))
-        mlm.addSeparator()
-        mlm.addAction(self._act("Reload Model",         self._reload_model,         "Ctrl+R"))
-        mlm.addAction(self._act("Data Integrity Check", self._run_integrity_check,  "Ctrl+I"))
 
-        # Simulation
-        simm = mb.addMenu("&Simulation")
-        simm.addAction(self._act(
-            "Open Simulation Panel",
-            lambda: self._navigate_to(10), "Ctrl+Shift+S"
-        ))
-        simm.addSeparator()
-        simm.addAction(self._act(
-            "🔮 Live Simulation Twin",
-            lambda: self._open_sim_tab(0), "Ctrl+Shift+V"
-        ))
-        simm.addAction(self._act(
-            "🧬 Strategy Mutation Lab",
-            lambda: self._open_sim_tab(1), "Ctrl+Alt+M"
-        ))
-        simm.addAction(self._act(
-            "🛡  Safety Scanner",
-            lambda: self._open_sim_tab(2), "Ctrl+Shift+F"
-        ))
-        simm.addSeparator()
-        # Layer shortcuts
-        layers_menu = simm.addMenu("⚙  Layer Settings (Shift+Alt+N)")
+        # ML Training sub-menu
+        mlt_m = mlm.addMenu("🧠  ML Training")
+        mlt_m.addAction(self._act("Open ML Training Panel",  lambda: self._navigate_to(2),  "Ctrl+3"))
+        mlt_m.addSeparator()
+        mlt_m.addAction(self._act("▶  Start Training",       self._start_training,          "Ctrl+T"))
+        mlt_m.addAction(self._act("■  Stop Training",        self._stop_training,           "Ctrl+Shift+T"))
+        mlt_m.addSeparator()
+        mlt_m.addAction(self._act("↺  Reload Model",         self._reload_model,            "Ctrl+R"))
+        mlt_m.addAction(self._act("✓  Data Integrity Check", self._run_integrity_check,     "Ctrl+I"))
+
+        # ML Tools sub-menu (each sub-tab in ML Tools page)
+        mltools_m = mlm.addMenu("⚡  ML Tools")
+        mltools_m.addAction(self._act("Open ML Tools Panel",         lambda: self._navigate_to(13),     "Ctrl+Shift+M"))
+        mltools_m.addSeparator()
+        mltools_m.addAction(self._act("⚡  ML Central Command",      lambda: self._open_ml_tools_tab(0)))
+        mltools_m.addAction(self._act("📈  Trends",                  lambda: self._open_ml_tools_tab(1)))
+        mltools_m.addAction(self._act("🔍  Pairs Scanner",           lambda: self._open_ml_tools_tab(2)))
+        mltools_m.addAction(self._act("🕵  Accumulation Detector",   lambda: self._open_ml_tools_tab(3)))
+        mltools_m.addAction(self._act("💧  Liquidity Analyzer",      lambda: self._open_ml_tools_tab(4)))
+        mltools_m.addAction(self._act("💥  Breakout Detector",       lambda: self._open_ml_tools_tab(5)))
+        mltools_m.addAction(self._act("↕  Gap Detector",             lambda: self._open_ml_tools_tab(6)))
+        mltools_m.addAction(self._act("🕯  Large Candle Watcher",    lambda: self._open_ml_tools_tab(7)))
+        mltools_m.addAction(self._act("🧊  Iceberg Detector",        lambda: self._open_ml_tools_tab(8)))
+
+        # ── Market ────────────────────────────────────────────────────────────
+        mktm = mb.addMenu("&Market")
+
+        # Market Watch sub-menu (sub-tabs)
+        mw_m = mktm.addMenu("📡  Market Watch")
+        mw_m.addAction(self._act("Open Market Watch",           lambda: self._navigate_to(12), "Ctrl+Shift+W"))
+        mw_m.addSeparator()
+        mw_m.addAction(self._act("📊  Volume Alerts",           lambda: self._open_market_watch_tab(0)))
+        mw_m.addAction(self._act("🤖  ML Watch",                lambda: self._open_market_watch_tab(1)))
+        mw_m.addAction(self._act("📈  Order Flow",              lambda: self._open_market_watch_tab(2)))
+        mw_m.addAction(self._act("🗺  Portfolio Heatmap",        lambda: self._open_market_watch_tab(3)))
+        mw_m.addAction(self._act("🌊  Regime & Cascade",        lambda: self._open_market_watch_tab(4)))
+        mw_m.addAction(self._act("🛑  Kill Switch",             lambda: self._open_market_watch_tab(5)))
+
+        # Reports sub-menu
+        rep_m = mktm.addMenu("📋  Reports")
+        rep_m.addAction(self._act("Open Reports Panel",         lambda: self._navigate_to(11), "F2"))
+
+        # Simulation sub-menu
+        sim_m = mktm.addMenu("🔮  Simulation")
+        sim_m.addAction(self._act("Open Simulation Panel",      lambda: self._navigate_to(10),  "Ctrl+Shift+S"))
+        sim_m.addSeparator()
+        sim_m.addAction(self._act("🔮  Live Simulation Twin",   lambda: self._open_sim_tab(0),  "Ctrl+Shift+V"))
+        sim_m.addAction(self._act("🧬  Strategy Mutation Lab",  lambda: self._open_sim_tab(1),  "Ctrl+Alt+M"))
+        sim_m.addAction(self._act("🛡  Safety Scanner",         lambda: self._open_sim_tab(2),  "Ctrl+Shift+F"))
+
+        # ── Network ───────────────────────────────────────────────────────────
+        netm = mb.addMenu("&Network")
+        netm.addAction(self._act("🔗  Connections Panel",       lambda: self._navigate_to(7),  "Ctrl+8"))
+        netm.addAction(self._act("✓  Check All Connections",    self._check_connections,        "Ctrl+Shift+C"))
+        netm.addSeparator()
+        netm.addAction(self._act("▶  Start REST API Server",    self._start_api_server))
+        netm.addAction(self._act("📄  View API Endpoints",      self._show_api_docs))
+        netm.addSeparator()
+        netm.addAction(self._act("📡  System Status Dashboard", self._open_system_status_popup, "Ctrl+Shift+D"))
+
+        # ── Settings ─────────────────────────────────────────────────────────
+        setm = mb.addMenu("&Settings")
+        setm.addAction(self._act("Open Settings",               lambda: self._navigate_to(8),  "Ctrl+9"))
+        setm.addSeparator()
+
+        # Settings sub-tabs
+        sys_m = setm.addMenu("⚙  System Settings")
+        sys_m.addAction(self._act("Open System Settings",       lambda: self._open_settings_tab(0)))
+        sys_m.addSeparator()
+        sys_m.addAction(self._act("CoinGecko DEX Setup",        self._open_coingecko_setup))
+
+        layers_m = setm.addMenu("🧩  Layers")
+        layers_m.addAction(self._act("Open Layers Settings",    lambda: self._open_settings_tab(1)))
+        layers_m.addSeparator()
         for n in range(1, 11):
             key = "0" if n == 10 else str(n)
-            layers_menu.addAction(
-                self._act(f"Layer {n}", lambda _, lnum=n: self._open_layer(lnum),
-                         f"Shift+Alt+{key}")
-            )
+            layers_m.addAction(self._act(f"Layer {n}", lambda _, lnum=n: self._open_layer(lnum),
+                                         f"Shift+Alt+{key}"))
 
-        # Tax
-        taxm = mb.addMenu("&Tax")
-        taxm.addAction(self._act("Monthly Report",      self._generate_tax_report))
-        taxm.addAction(self._act("Annual CGT Summary",  self._generate_annual_tax))
-        taxm.addAction(self._act("Send Email Now",      self._send_tax_email))
+        setm.addMenu("🦊  MetaMask").addAction(
+            self._act("Open MetaMask Settings",  lambda: self._open_settings_tab(2))
+        )
+        setm.addMenu("📡  System Status").addAction(
+            self._act("Open Status / Health",    self._open_system_status_popup, "Ctrl+Shift+D")
+        )
+        setm.addSeparator()
 
-        # Network
-        netm = mb.addMenu("&Network")
-        netm.addAction(self._act("Check All Connections", self._check_connections, "Ctrl+Shift+C"))
-        netm.addAction(self._act("Start REST API Server", self._start_api_server))
-        netm.addAction(self._act("View API Endpoints",    self._show_api_docs))
-        netm.addSeparator()
-        netm.addAction(self._act("📡  System Status Dashboard",
-                                  self._open_system_status_popup, "Ctrl+Shift+D"))
+        # Tax sub-menu
+        tax_m = setm.addMenu("💷  Tax (UK CGT)")
+        tax_m.addAction(self._act("Monthly Report",             self._generate_tax_report))
+        tax_m.addAction(self._act("Annual CGT Summary",         self._generate_annual_tax))
+        tax_m.addAction(self._act("Send Email Now",             self._send_tax_email))
 
-        # Setup
-        setupm = mb.addMenu("&Setup")
-        sysm = setupm.addMenu("⚙  System")
-        sysm.addAction(self._act("System Settings",   lambda: self._navigate_to(8)))
-        sysm.addAction(self._act("📡  Status / Health", self._open_system_status_popup,
-                                  "Ctrl+Shift+D"))
-        sysm.addSeparator()
-        sysm.addAction(self._act("Connections",        lambda: self._navigate_to(7)))
-        setupm.addSeparator()
-        setupm.addAction(self._act("API Keys",         lambda: self._navigate_to(8)))
-        setupm.addAction(self._act("CoinGecko DEX",    self._open_coingecko_setup))
-
-        # Help
+        # ── Help ─────────────────────────────────────────────────────────────
         hm = mb.addMenu("&Help")
-        hm.addAction(self._act("Help Panel", lambda: self._navigate_to(9), "F1"))
-        hm.addAction(self._act("About",      self._show_about))
+        hm.addAction(self._act("Help Panel",                    lambda: self._navigate_to(9), "F1"))
+        hm.addSeparator()
+        hm.addAction(self._act("About BinanceML Pro",           self._show_about))
 
     @staticmethod
     def _act(label: str, fn, shortcut: str = "") -> QAction:
@@ -2418,29 +2475,50 @@ class MainWindow(QMainWindow):
     # ──────────────────────────────────────────────────────────────────
 
     def _build_shortcuts(self) -> None:
+        # IMPORTANT: QShortcut objects MUST be stored in self._shortcuts.
+        # Without a reference they are immediately garbage-collected and never fire.
+        self._shortcuts: list[QShortcut] = []
         pairs = [
-            ("Ctrl+1",       lambda: self._navigate_to(0)),   # Trading
-            ("Ctrl+2",       lambda: self._navigate_to(1)),   # AutoTrader
-            ("Ctrl+3",       lambda: self._navigate_to(2)),   # ML Train
-            ("Ctrl+4",       lambda: self._navigate_to(3)),   # Risk
-            ("Ctrl+5",       lambda: self._navigate_to(4)),   # Backtest
-            ("Ctrl+6",       lambda: self._navigate_to(5)),   # Journal
-            ("Ctrl+7",       lambda: self._navigate_to(6)),   # Strategy
-            ("Ctrl+8",       lambda: self._navigate_to(7)),   # Connections
-            ("Ctrl+9",       lambda: self._navigate_to(8)),   # Settings
+            ("Ctrl+1",       lambda: self._navigate_to(0)),    # Trading
+            ("Ctrl+2",       lambda: self._navigate_to(1)),    # AutoTrader
+            ("Ctrl+3",       lambda: self._navigate_to(2)),    # ML Train
+            ("Ctrl+4",       lambda: self._navigate_to(3)),    # Risk
+            ("Ctrl+5",       lambda: self._navigate_to(4)),    # Backtest
+            ("Ctrl+6",       lambda: self._navigate_to(5)),    # Journal
+            ("Ctrl+7",       lambda: self._navigate_to(6)),    # Strategy
+            ("Ctrl+8",       lambda: self._navigate_to(7)),    # Connections
+            ("Ctrl+9",       lambda: self._navigate_to(8)),    # Settings
+            ("Ctrl+0",       lambda: self._navigate_to(9)),    # Help
+            ("F1",           lambda: self._navigate_to(9)),    # Help
+            ("F2",           lambda: self._navigate_to(11)),   # Reports
             ("Ctrl+Shift+W", lambda: self._navigate_to(12)),   # Market Watch
             ("Ctrl+Shift+M", lambda: self._navigate_to(13)),   # ML Tools
+            ("Ctrl+Shift+S", lambda: self._navigate_to(10)),   # Simulation
             ("F11",          self._toggle_fullscreen),
-            ("F1",           lambda: self._navigate_to(9)),    # Help
             ("Ctrl+\\",      self._toggle_nav),                # Slide nav sidebar
             ("Ctrl+B",       self._toggle_order_book),         # Order Book dock
             ("Ctrl+Shift+B", self._toggle_trading_panel),      # Trading Panel dock
             ("Ctrl+Shift+R", self._restore_trading_docks),     # Restore docks
             ("Ctrl+L",       self._toggle_intel_log),          # Intel Log dock
+            ("Ctrl+,",       lambda: self._navigate_to(8)),    # Settings (alt)
+            ("Ctrl+Shift+A", self._at_take_aim),               # AutoTrader: Take Aim
+            ("Ctrl+Shift+E", self._at_manual_exit),            # AutoTrader: Exit Trade
+            ("Ctrl+Shift+N", self._at_scan_now),               # AutoTrader: Scan Now
+            ("Ctrl+T",       self._start_training),            # ML: Start Training
+            ("Ctrl+Shift+T", self._stop_training),             # ML: Stop Training
+            ("Ctrl+R",       self._reload_model),              # ML: Reload Model
+            ("Ctrl+I",       self._run_integrity_check),       # ML: Integrity Check
+            ("Ctrl+Shift+X", self._cancel_all_orders),         # Trading: Cancel All
+            ("Ctrl+Shift+C", self._check_connections),         # Network: Check All
+            ("Ctrl+Shift+D", self._open_system_status_popup),  # Network: System Status
+            ("Ctrl+Shift+V", lambda: self._open_sim_tab(0)),   # Sim: Twin
+            ("Ctrl+Alt+M",   lambda: self._open_sim_tab(1)),   # Sim: Mutation Lab
+            ("Ctrl+Shift+F", lambda: self._open_sim_tab(2)),   # Sim: Safety Scanner
         ]
         for key, fn in pairs:
             sc = QShortcut(QKeySequence(key), self)
             sc.activated.connect(fn)
+            self._shortcuts.append(sc)   # keep reference to prevent GC
 
     # ──────────────────────────────────────────────────────────────────
     # Signal connections
@@ -2597,6 +2675,42 @@ class MainWindow(QMainWindow):
         try:
             if hasattr(self, "simulation_page") and hasattr(self.simulation_page, "setCurrentIndex"):
                 self.simulation_page.setCurrentIndex(tab_index)
+        except Exception:
+            pass
+
+    def _open_at_tab(self, tab_index: int) -> None:
+        """Navigate to AutoTrader page and select a specific tab."""
+        self._navigate_to(1)
+        try:
+            if hasattr(self, "at_page") and hasattr(self.at_page, "setCurrentIndex"):
+                self.at_page.setCurrentIndex(tab_index)
+        except Exception:
+            pass
+
+    def _open_ml_tools_tab(self, tab_index: int) -> None:
+        """Navigate to ML Tools page and select a specific tab."""
+        self._navigate_to(13)
+        try:
+            if hasattr(self, "ml_tools_page") and hasattr(self.ml_tools_page, "setCurrentIndex"):
+                self.ml_tools_page.setCurrentIndex(tab_index)
+        except Exception:
+            pass
+
+    def _open_market_watch_tab(self, tab_index: int) -> None:
+        """Navigate to Market Watch page and select a specific tab."""
+        self._navigate_to(12)
+        try:
+            if hasattr(self, "market_watch_page") and hasattr(self.market_watch_page, "setCurrentIndex"):
+                self.market_watch_page.setCurrentIndex(tab_index)
+        except Exception:
+            pass
+
+    def _open_settings_tab(self, tab_index: int) -> None:
+        """Navigate to Settings page and select a specific tab."""
+        self._navigate_to(8)
+        try:
+            if hasattr(self, "settings_page") and hasattr(self.settings_page, "setCurrentIndex"):
+                self.settings_page.setCurrentIndex(tab_index)
         except Exception:
             pass
 

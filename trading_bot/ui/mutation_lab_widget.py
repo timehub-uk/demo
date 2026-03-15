@@ -63,8 +63,8 @@ class MutationLabWidget(QWidget):
         self._setup_shortcut()
 
     def _setup_shortcut(self):
-        sc = QShortcut(QKeySequence("Shift+Alt+8"), self)
-        sc.activated.connect(self.show)
+        self._sc = QShortcut(QKeySequence("Shift+Alt+8"), self)
+        self._sc.activated.connect(self.show)
 
     def _setup_ui(self):
         root = QVBoxLayout(self)

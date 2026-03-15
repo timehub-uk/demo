@@ -587,9 +587,13 @@ class SystemStatusWidget(QWidget):
         """Quick connectivity check via /proc/net/route default gateway."""
         try:
             import socket
-            socket.setdefaulttimeout(1)
-            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
-            return True
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.settimeout(1)
+                sock.connect(("8.8.8.8", 53))
+                return True
+            finally:
+                sock.close()
         except Exception:
             pass
         # Fallback: check default route

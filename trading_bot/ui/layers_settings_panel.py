@@ -687,10 +687,12 @@ class LayersSettingsPanel(QWidget):
 
     def _setup_shortcuts(self):
         """Shift+Alt+1…0 to jump to each layer."""
+        self._shortcuts: list[QShortcut] = []   # keep refs to prevent GC
         for num in range(1, 11):
             key = "0" if num == 10 else str(num)
             sc = QShortcut(QKeySequence(f"Shift+Alt+{key}"), self)
             sc.activated.connect(lambda n=num: self._jump_to_layer(n))
+            self._shortcuts.append(sc)
 
     def _jump_to_layer(self, layer_num: int):
         idx = self._layer_tabs.get(layer_num, 0)
