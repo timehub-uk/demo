@@ -159,7 +159,7 @@ class Backtester:
             if position is not None:
                 exit_reason = self._check_exit(position, row, config)
                 if exit_reason:
-                    position = self._close_position(position, close, exit_reason, capital)
+                    position = self._close_position(position, close, exit_reason, capital, config)
                     trades.append(position)
                     capital += position.pnl
                     position = None
@@ -216,7 +216,7 @@ class Backtester:
         # Close any open position at end
         if position is not None and len(df) > 0:
             last_close = float(df.iloc[-1]["close"])
-            position = self._close_position(position, last_close, "EOD", capital)
+            position = self._close_position(position, last_close, "EOD", capital, config)
             trades.append(position)
             capital += position.pnl
 
@@ -300,8 +300,10 @@ class Backtester:
         return None
 
     def _close_position(self, pos: BacktestTrade, exit_price: float,
-                        reason: str, capital: float) -> BacktestTrade:
-        fee = exit_price * pos.quantity * 0.001  # 0.1% taker fee per side
+                        reason: str, capital: float,
+                        config: BacktestConfig | None = None) -> BacktestTrade:
+        fee_rate = config.fee_pct if config is not None else 0.001
+        fee = exit_price * pos.quantity * fee_rate  # taker fee on exit side
         if pos.direction == "BUY":
             gross = (exit_price - pos.entry_price) * pos.quantity
         else:
@@ -330,9 +332,19 @@ class Backtester:
         result.total_return_pct = (result.final_capital - initial_capital) / initial_capital * 100
         result.total_trades = len(trades)
 
+        # Bars per year depends on the configured interval
+        _bars_per_year = {
+            "1m": 365 * 24 * 60, "3m": 365 * 24 * 20, "5m": 365 * 24 * 12,
+            "15m": 365 * 24 * 4, "30m": 365 * 24 * 2,
+            "1h": 365 * 24, "2h": 365 * 12, "4h": 365 * 6,
+            "6h": 365 * 4, "8h": 365 * 3, "12h": 365 * 2,
+            "1d": 365, "3d": 122, "1w": 52, "1M": 12,
+        }
+        bars_per_year = _bars_per_year.get(result.config.interval, 365 * 24)
+
         # CAGR
         if len(eq) > 1:
-            years = len(eq) / (365 * 24)   # Assuming 1h bars → bars/year
+            years = len(eq) / bars_per_year
             if years > 0 and result.final_capital > 0:
                 result.cagr_pct = ((result.final_capital / initial_capital) ** (1 / max(years, 0.01)) - 1) * 100
 
@@ -344,8 +356,8 @@ class Backtester:
             downside = rets[rets < 0]
             downside_std = np.std(downside) if len(downside) > 0 else std_ret
 
-            result.sharpe_ratio  = float(mean_ret / (std_ret + 1e-9) * np.sqrt(8760))
-            result.sortino_ratio = float(mean_ret / (downside_std + 1e-9) * np.sqrt(8760))
+            result.sharpe_ratio  = float(mean_ret / (std_ret + 1e-9) * np.sqrt(bars_per_year))
+            result.sortino_ratio = float(mean_ret / (downside_std + 1e-9) * np.sqrt(bars_per_year))
 
         # Max drawdown
         peak = np.maximum.accumulate(eq)
