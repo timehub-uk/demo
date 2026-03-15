@@ -27,7 +27,7 @@ from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QFrame, QSplitter, QSizePolicy, QStackedWidget,
+    QPushButton, QToolButton, QFrame, QSplitter, QSizePolicy, QStackedWidget,
     QDockWidget, QMessageBox, QComboBox, QStatusBar, QMenu,
     QTabWidget, QInputDialog,
 )
@@ -165,9 +165,9 @@ _PANEL_HELP: dict[int, tuple[str, str]] = {
 # NAV BUTTON
 # ══════════════════════════════════════════════════════════════════════════════
 
-class NavButton(QPushButton):
+class NavButton(QToolButton):
     """
-    Sidebar navigation button — icon on the left, label text on the right.
+    Sidebar navigation button — icon centred on top, label text below.
     • Mouse enter + 5 s  → QToolTip with panel title
     • Mouse enter + 10 s → contextual help QMessageBox
     • Mouse leave        → cancel both timers
@@ -183,8 +183,9 @@ class NavButton(QPushButton):
         self._active    = False
 
         self.setObjectName("nav_btn")
-        self.setFixedHeight(42)
+        self.setFixedHeight(62)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.setText(label)
         self._set_icon(FG2)
         self._apply_style(False)
@@ -204,25 +205,26 @@ class NavButton(QPushButton):
         self.clicked.connect(lambda: self.clicked_index.emit(self._index))
 
     def _set_icon(self, color: str) -> None:
-        self.setIcon(svg_icon(self._icon_name, color, 18))
-        self.setIconSize(QSize(18, 18))
+        self.setIcon(svg_icon(self._icon_name, color, 22))
+        self.setIconSize(QSize(22, 22))
 
     def _apply_style(self, active: bool) -> None:
-        col        = ACCENT if active else FG2
-        bg         = BG2    if active else "transparent"
-        left_bar   = f"border-left:3px solid {ACCENT};" if active else f"border-left:3px solid transparent;"
-        weight     = "700" if active else "500"
+        col      = ACCENT if active else FG2
+        bg       = BG2    if active else "transparent"
+        top_bar  = (f"border-top:2px solid {ACCENT};"
+                    if active else "border-top:2px solid transparent;")
+        weight   = "700" if active else "500"
         self.setStyleSheet(f"""
-            QPushButton {{
+            QToolButton {{
                 background:{bg}; color:{col};
-                border:none; {left_bar}
+                border:none; {top_bar}
                 border-radius:0;
-                text-align:left; padding-left:10px;
-                font-size:11px; font-weight:{weight}; letter-spacing:0.5px;
+                font-size:10px; font-weight:{weight};
+                padding:6px 2px 4px 2px;
             }}
-            QPushButton:hover {{
+            QToolButton:hover {{
                 background:{BG3}; color:{FG1};
-                border-left:3px solid {BORDER2};
+                border-top:2px solid {BORDER2};
             }}
         """)
 
@@ -394,7 +396,7 @@ _NAV_ITEMS = [
 class NavSidebar(QFrame):
     page_requested = pyqtSignal(int)
 
-    _WIDTH = 168  # px — wide enough for "Market Watch" + icon
+    _WIDTH = 88   # px — icon centred above text; enough for longest label
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
