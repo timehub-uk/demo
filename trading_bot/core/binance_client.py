@@ -65,6 +65,13 @@ TESTNET_URL = "https://testnet.binance.vision"
 _WS_PRIMARY  = "wss://data-stream.binance.vision/ws"
 _WS_FALLBACK = "wss://stream.binance.com:443/ws"
 
+# ── WebSocket options market-data endpoint (European Vanilla Options) ────────
+# Spec: https://developers.binance.com/docs/derivatives/options-trading/websocket-market-streams
+# Stream format: <underlying>@optionOpenInterest@<expirationDate>  (60 s update)
+# expirationDate format: YYMMDD  (e.g. "221125" for 2022-11-25)
+_WS_OPTIONS_PRIMARY  = "wss://nbstream.binance.com/eoptions/ws"
+_WS_OPTIONS_FALLBACK = "wss://nbstream.binance.com/eoptions/ws"  # single PoP; retry same host
+
 # ── WebSocket API endpoints (authenticated trading API) ──────────────────────
 # Distinct from market-data streams — supports request/response trading
 # Security types: NONE, USER_STREAM, TRADE, USER_DATA (SIGNED)
@@ -142,7 +149,13 @@ class _WsMultiplexer:
     _MAX_STREAMS  = 1024
     _FAIL_SWITCH  = 3           # consecutive failures before trying fallback URL
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        primary_url: str = _WS_PRIMARY,
+        fallback_url: str = _WS_FALLBACK,
+    ) -> None:
+        self._primary_url   = primary_url
+        self._fallback_url  = fallback_url
         self._lock          = threading.Lock()
         self._cbs: dict[str, list[Callable]] = {}   # stream → [callback, …]
         self._ws_lock       = threading.Lock()
@@ -260,7 +273,7 @@ class _WsMultiplexer:
         backoff = 2.0
 
         while self._active:
-            url = _WS_FALLBACK if self._use_fallback else _WS_PRIMARY
+            url = self._fallback_url if self._use_fallback else self._primary_url
 
             # -- Callbacks are defined fresh each iteration so closures are clean --
 
@@ -1445,6 +1458,11 @@ class BinanceClient:
         self._ws_mux: _WsMultiplexer | None = None
         self._ws_mux_lock = threading.Lock()
 
+        # Options market-data multiplexer (European Vanilla Options, started lazily)
+        # Uses a separate connection to wss://nbstream.binance.com/eoptions/ws
+        self._ws_opts_mux: _WsMultiplexer | None = None
+        self._ws_opts_mux_lock = threading.Lock()
+
         # WebSocket API client (authenticated request/response, started lazily)
         self._ws_api_client: _WsApiClient | None = None
         self._ws_api_lock = threading.Lock()
@@ -1457,6 +1475,22 @@ class BinanceClient:
                 self._ws_mux = _WsMultiplexer()
                 self._ws_mux.start()
             return self._ws_mux
+
+    def _get_opts_mux(self) -> _WsMultiplexer:
+        """Return the options WS multiplexer, creating and starting it if needed.
+
+        Uses the Binance European Vanilla Options stream endpoint
+        (wss://nbstream.binance.com/eoptions/ws) which is separate from the
+        standard spot market-data endpoint.
+        """
+        with self._ws_opts_mux_lock:
+            if self._ws_opts_mux is None:
+                self._ws_opts_mux = _WsMultiplexer(
+                    primary_url=_WS_OPTIONS_PRIMARY,
+                    fallback_url=_WS_OPTIONS_FALLBACK,
+                )
+                self._ws_opts_mux.start()
+            return self._ws_opts_mux
 
     def _get_ws_api(self) -> _WsApiClient:
         """Return the WS API client, creating and starting it if needed.
@@ -1768,14 +1802,19 @@ class BinanceClient:
     # SUBSCRIBE / UNSUBSCRIBE lifecycle transparently.
     #
     # Stream name formats (Binance spec):
-    #   ticker      <symbol>@ticker
-    #   miniTicker  <symbol>@miniTicker
-    #   bookTicker  <symbol>@bookTicker        (best bid/ask, real-time)
-    #   avgPrice    <symbol>@avgPrice
-    #   kline       <symbol>@kline_<interval>
-    #   aggTrade    <symbol>@aggTrade          (aggregated trades)
-    #   trade       <symbol>@trade             (individual trades)
-    #   depth       <symbol>@depth<N>@100ms   (N ∈ {5, 10, 20} only)
+    #   ticker             <symbol>@ticker
+    #   miniTicker         <symbol>@miniTicker
+    #   bookTicker         <symbol>@bookTicker        (best bid/ask, real-time)
+    #   avgPrice           <symbol>@avgPrice
+    #   kline              <symbol>@kline_<interval>
+    #   aggTrade           <symbol>@aggTrade          (aggregated trades)
+    #   trade              <symbol>@trade             (individual trades)
+    #   depth              <symbol>@depth<N>@100ms   (N ∈ {5, 10, 20} only)
+    #
+    # Options stream name formats (Binance European Vanilla Options — separate endpoint):
+    #   optionOpenInterest <underlying>@optionOpenInterest@<expirationDate>  (60 s update)
+    #                      expirationDate: YYMMDD  e.g. "221125" for 2022-11-25
+    #                      Payload fields: e, E, s (symbol), o (OI contracts), h (OI USDT)
 
     def subscribe_ticker(self, symbol: str, callback: Callable) -> None:
         """24-hour rolling ticker statistics (1 000 ms update)."""
@@ -1830,6 +1869,53 @@ class BinanceClient:
             levels = 20
         self._get_mux().subscribe(f"{symbol.lower()}@depth{levels}@100ms", callback)
 
+    def subscribe_option_open_interest(
+        self,
+        underlying: str,
+        expiration_date: str,
+        callback: Callable,
+    ) -> None:
+        """Options open interest stream for one underlying/expiry pair (60 s update).
+
+        Connects to the Binance European Vanilla Options endpoint
+        (wss://nbstream.binance.com/eoptions/ws), which is separate from the
+        standard spot market-data connection.
+
+        Args:
+            underlying:      Underlying asset symbol, e.g. ``"ETHUSDT"`` or
+                             ``"BTCUSDT"``.  Case-insensitive; lowercased
+                             internally as required by Binance.
+            expiration_date: Contract expiry in ``YYMMDD`` format, e.g.
+                             ``"221125"`` for 25 November 2022.
+            callback:        Callable invoked with each payload ``dict``.
+
+        Payload fields (Binance spec):
+            ``e``  – event type (``"openInterest"``)
+            ``E``  – event time (Unix ms)
+            ``s``  – option symbol, e.g. ``"ETH-221125-2700-C"``
+            ``o``  – open interest in contracts
+            ``h``  – open interest value in USDT
+        """
+        stream = f"{underlying.lower()}@optionOpenInterest@{expiration_date}"
+        self._get_opts_mux().subscribe(stream, callback)
+
+    def unsubscribe_option_open_interest(
+        self,
+        underlying: str,
+        expiration_date: str,
+        callback: Callable | None = None,
+    ) -> None:
+        """Remove *callback* from the open-interest stream for *underlying*/*expiration_date*.
+
+        Sends UNSUBSCRIBE to the options endpoint when the last listener is
+        removed.  Pass ``callback=None`` to remove all listeners at once.
+        """
+        mux = self._ws_opts_mux
+        if mux is None:
+            return
+        stream = f"{underlying.lower()}@optionOpenInterest@{expiration_date}"
+        mux.unsubscribe(stream, callback)
+
     def unsubscribe_stream(
         self,
         stream: str,
@@ -1856,6 +1942,11 @@ class BinanceClient:
             self._ws_mux = None
         if mux:
             mux.close()
+        with self._ws_opts_mux_lock:
+            opts_mux = self._ws_opts_mux
+            self._ws_opts_mux = None
+        if opts_mux:
+            opts_mux.close()
         with self._ws_api_lock:
             ws_api = self._ws_api_client
             self._ws_api_client = None
