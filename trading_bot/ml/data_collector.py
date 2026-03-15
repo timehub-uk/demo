@@ -13,7 +13,12 @@ from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
+try:
+    import pandas_ta as ta
+except ImportError:
+    import sys as _sys, pathlib as _pathlib
+    _sys.path.insert(0, str(_pathlib.Path(__file__).parent.parent))
+    import pandas_ta as ta
 from loguru import logger
 from sqlalchemy.dialects.postgresql import insert
 

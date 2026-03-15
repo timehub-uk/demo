@@ -38,7 +38,6 @@ def init_redis(
             decode_responses=True,
             socket_connect_timeout=5,
             socket_keepalive=True,
-            retry_on_timeout=True,
         )
         _client.ping()
         logger.info(f"Redis connected at {host}:{port}/{db}")

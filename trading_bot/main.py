@@ -603,24 +603,30 @@ def start_background_services(services: dict, settings) -> None:
     mem_mgr.start_monitoring(interval_sec=30.0)
     intel.system("Startup", "Memory monitor started.")
 
-    engine = services["engine"]
+    engine = services.get("engine")
+    if not engine:
+        intel.warning("Startup", "Trading engine not available – running in demo mode")
+        return
     engine.start()
     intel.system("Startup", "Trading engine started.")
 
-    predictor = services["predictor"]
-    predictor.start()
-    intel.system("Startup", "ML predictor started.")
+    predictor = services.get("predictor")
+    if predictor:
+        predictor.start()
+        intel.system("Startup", "ML predictor started.")
 
     # Subscribe default symbols
     default_symbols = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT"]
     for sym in default_symbols:
         engine.add_symbol(sym)
-        predictor.add_symbol(sym)
+        if predictor:
+            predictor.add_symbol(sym)
 
     # Continuous learner
-    cl = services["continuous_learner"]
-    cl.start(default_symbols)
-    intel.system("Startup", f"Continuous learner started | {len(default_symbols)} symbols")
+    cl = services.get("continuous_learner")
+    if cl:
+        cl.start(default_symbols)
+        intel.system("Startup", f"Continuous learner started | {len(default_symbols)} symbols")
 
     # Regime detector
     regime = services.get("regime_detector")
