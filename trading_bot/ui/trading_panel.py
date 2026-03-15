@@ -261,7 +261,7 @@ class TradingPanel(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._setup_ui()
-        self._refresh_timer = QTimer()
+        self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._refresh)
         self._refresh_timer.start(5000)
 

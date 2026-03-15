@@ -1288,7 +1288,7 @@ class ChartWidget(QWidget):
         self._update_panel_visibility()
 
     def _setup_timer(self) -> None:
-        self._refresh_timer = QTimer()
+        self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._refresh_data)
         self._refresh_timer.start(5000)
 

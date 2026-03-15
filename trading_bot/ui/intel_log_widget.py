@@ -262,7 +262,7 @@ class IntelLogWidget(QWidget):
 
         # Rate counter timer
         self._rate_count = 0
-        self._rate_timer = QTimer()
+        self._rate_timer = QTimer(self)
         self._rate_timer.timeout.connect(self._update_rate)
         self._rate_timer.start(1000)
 

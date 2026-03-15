@@ -643,7 +643,7 @@ class MLTrainingWidget(QWidget):
 
     # ── Status polling ─────────────────────────────────────────────────
     def _start_status_timer(self) -> None:
-        self._status_timer = QTimer()
+        self._status_timer = QTimer(self)
         self._status_timer.timeout.connect(self._poll_status)
         self._status_timer.start(5000)
 

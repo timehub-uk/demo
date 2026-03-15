@@ -287,9 +287,25 @@ def _parse_csv_to_df(csv_path: Path) -> pd.DataFrame:
         },
         on_bad_lines="skip",
     )
-    # Drop Binance's optional header row if present
+    # Drop Binance's optional header row and any non-numeric open_time values
     df = df[pd.to_numeric(df["open_time"], errors="coerce").notna()]
-    df["open_time"] = pd.to_datetime(df["open_time"].astype("int64"), unit="ms", utc=True)
+    ts = df["open_time"].astype("int64")
+    # Binance timestamps are milliseconds; guard against rows where the value
+    # was accidentally stored as seconds (13-digit ms vs 10-digit s).
+    # Values below 1e10 are almost certainly seconds – multiply up to ms.
+    ts = ts.where(ts >= 1_000_000_000_000, ts * 1000)
+    # Drop any timestamps that would produce an out-of-range datetime
+    # (valid Binance data: 2017-07-14 launch to ~year 2100 upper bound)
+    _MS_MIN = 1_500_000_000_000   # 2017-07-14
+    _MS_MAX = 4_102_444_800_000   # 2100-01-01
+    mask = (ts >= _MS_MIN) & (ts <= _MS_MAX)
+    if not mask.all():
+        import warnings
+        n_dropped = (~mask).sum()
+        warnings.warn(f"Dropping {n_dropped} rows with out-of-range open_time values")
+    df = df[mask].copy()
+    ts  = ts[mask]
+    df["open_time"] = pd.to_datetime(ts, unit="ms", utc=True)
     df = df.drop(columns=["close_time", "ignore"], errors="ignore")
     df = df.sort_values("open_time").drop_duplicates("open_time").reset_index(drop=True)
     return df

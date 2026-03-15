@@ -31,7 +31,7 @@ class OrderBookWidget(QWidget):
         super().__init__(parent)
         self._symbol = symbol
         self._setup_ui()
-        self._timer = QTimer()
+        self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._timer.start(500)
 

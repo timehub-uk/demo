@@ -205,7 +205,7 @@ class MutationLabWidget(QWidget):
         return frame
 
     def _setup_timer(self):
-        self._timer = QTimer()
+        self._timer = QTimer(self)
         self._timer.setInterval(2000)
         self._timer.timeout.connect(self._refresh)
         self._timer.start()

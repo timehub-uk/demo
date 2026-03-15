@@ -270,7 +270,7 @@ class SafetyWidget(QWidget):
         return lbl
 
     def _setup_timer(self):
-        self._timer = QTimer()
+        self._timer = QTimer(self)
         self._timer.setInterval(5000)
         self._timer.timeout.connect(self._refresh_feed)
         self._timer.start()
