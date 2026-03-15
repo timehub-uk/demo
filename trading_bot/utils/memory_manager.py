@@ -1,7 +1,7 @@
 """
-Memory manager for Apple Silicon unified memory architecture.
+Memory manager for trading bot processes.
 Monitors usage and triggers garbage collection / cache clearing
-to stay within the 20 GB unified budget.
+based on actual system memory (85% cleanup threshold, 92% emergency).
 """
 
 from __future__ import annotations
@@ -16,10 +16,13 @@ import psutil
 from loguru import logger
 
 
-# 20 GB unified memory budget for Mac Mini M4
-TOTAL_BUDGET_GB = 20.0
-# Trigger cleanup when > 80% used
-CLEANUP_THRESHOLD_PCT = 80.0
+def _total_memory_gb() -> float:
+    """Return actual installed system memory in GB."""
+    return psutil.virtual_memory().total / 1e9
+
+
+# Trigger cleanup when > 85% used
+CLEANUP_THRESHOLD_PCT = 85.0
 # Emergency mode when > 92%
 EMERGENCY_THRESHOLD_PCT = 92.0
 
@@ -75,7 +78,7 @@ class MemoryManager:
             "system_pct": mem.percent,
             "process_rss_mb": proc_mem.rss / 1e6,
             "process_vms_mb": proc_mem.vms / 1e6,
-            "budget_gb": TOTAL_BUDGET_GB,
+            "budget_gb": mem.total / 1e9,
             "budget_used_pct": mem.percent,
         }
 
