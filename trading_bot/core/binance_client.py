@@ -90,6 +90,7 @@ class BinanceClient:
         self._redis = RedisClient()
         self._ws_threads: dict[str, threading.Thread] = {}
         self._ws_active: dict[str, bool] = {}
+        self._ws_objects: dict[str, Any] = {}
         self._callbacks: dict[str, list[Callable]] = {}
         self._lock = threading.Lock()
 
@@ -231,6 +232,10 @@ class BinanceClient:
         self._redis.cache_ticker(symbol, {"price": float(price)})
         return price
 
+    def get_all_tickers(self) -> list[dict]:
+        """Return all symbol prices from /api/v3/ticker/price (single round-trip)."""
+        return self._get("/api/v3/ticker/price")
+
     def get_orderbook(self, symbol: str, limit: int = 20) -> dict:
         cached = self._redis.get_orderbook(symbol)
         if cached:
@@ -344,7 +349,9 @@ class BinanceClient:
             import json
             try:
                 data = json.loads(message)
-                for cb in self._callbacks.get(stream, []):
+                with self._lock:
+                    callbacks = list(self._callbacks.get(stream, []))
+                for cb in callbacks:
                     try:
                         cb(data)
                     except Exception as e:
@@ -368,7 +375,9 @@ class BinanceClient:
                 on_error=_on_error,
                 on_close=_on_close,
             )
-            self._ws_active[stream] = True
+            with self._lock:
+                self._ws_active[stream] = True
+                self._ws_objects[stream] = ws
             ws.run_forever(ping_interval=20, ping_timeout=10)
 
         t = threading.Thread(target=_run, daemon=True, name=f"ws-{stream}")
@@ -376,6 +385,16 @@ class BinanceClient:
         self._ws_threads[stream] = t
 
     def close_all(self) -> None:
-        for stream in list(self._ws_active):
-            self._ws_active[stream] = False
+        with self._lock:
+            streams = list(self._ws_active.keys())
+            for stream in streams:
+                self._ws_active[stream] = False
+            ws_objects = dict(self._ws_objects)
+        for ws in ws_objects.values():
+            try:
+                ws.close()
+            except Exception:
+                pass
+        for stream, t in list(self._ws_threads.items()):
+            t.join(timeout=3)
         self._session.close()

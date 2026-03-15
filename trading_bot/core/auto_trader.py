@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 
 from loguru import logger
 from utils.logger import get_intel_logger
+from db.redis_client import RedisClient
 
 
 class AutoTraderMode(str, Enum):
@@ -312,13 +313,13 @@ class AutoTrader:
         for cb in self._rec_callbacks:
             try:
                 cb(rec, summary)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"rec_callback error: {exc}")
         for cb in self._chart_callbacks:
             try:
                 cb(rec.symbol)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"chart_callback error: {exc}")
 
         # In recovery mode lower the bar slightly so we can get back in fast
         effective_threshold = (
@@ -596,8 +597,8 @@ class AutoTrader:
         for cb in self._result_callbacks:
             try:
                 cb(result)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"result_callback error: {exc}")
 
         # Update dynamic risk
         if self._drm:
@@ -621,7 +622,6 @@ class AutoTrader:
 
     def _get_live_price(self, symbol: str) -> Optional[float]:
         try:
-            from db.redis_client import RedisClient
             t = RedisClient().get_ticker(symbol)
             if t:
                 return float(t.get("price", 0))
@@ -650,5 +650,5 @@ class AutoTrader:
         for cb in self._state_callbacks:
             try:
                 cb(state)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"state_callback error: {exc}")

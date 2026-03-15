@@ -141,15 +141,15 @@ class RedisClient:
 
     # ── Pub/Sub ───────────────────────────────────────────────────────────
     def subscribe(self, channel: str, callback: Callable) -> None:
-        def _listener():
-            ps = self._r.pubsub()
-            ps.subscribe(**{f"bml:{channel}": callback})
-            ps.run_in_thread(sleep_time=0.001, daemon=True)
-        t = threading.Thread(target=_listener, daemon=True)
-        t.start()
-        _pubsub_threads.append(t)
+        ps = self._r.pubsub()
+        ps.subscribe(**{f"bml:{channel}": callback})
+        ps_thread = ps.run_in_thread(sleep_time=0.001, daemon=True)
+        _pubsub_threads.append(ps_thread)
 
     # ── Health ─────────────────────────────────────────────────────────────
+    def ping(self) -> bool:
+        return self._r.ping()
+
     def health_check(self) -> bool:
         try:
             return self._r.ping()

@@ -202,6 +202,11 @@ class OrderManager:
                     self._mark_filled(oid)
         except Exception as exc:
             logger.error(f"Order sync failed: {exc}")
+            try:
+                from utils.logger import get_intel_logger
+                get_intel_logger().warning("OrderManager", f"Order sync failed – portfolio may be stale: {exc}")
+            except Exception:
+                pass
 
     def _mark_filled(self, order_id: str) -> None:
         with self._lock:

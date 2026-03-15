@@ -458,8 +458,8 @@ class ArbitrageAutoTrader:
 
     def _emit_event(self, event_type: str, position: dict) -> None:
         event = {"type": event_type, **position}
-        for cb in self._callbacks:
+        for cb in list(self._callbacks):
             try:
                 cb(event)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"ArbitrageAutoTrader callback error [{event_type}]: {exc}")

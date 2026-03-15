@@ -14,6 +14,7 @@ from typing import Callable, Optional
 from loguru import logger
 
 from config import get_settings
+from db.redis_client import RedisClient
 from .binance_client import BinanceClient
 from .order_manager import OrderManager
 from .portfolio import PortfolioManager
@@ -62,6 +63,7 @@ class TradingEngine:
         self._heartbeat_thread: threading.Thread | None = None
         self._sync_thread: threading.Thread | None = None
         self._active_symbols: set[str] = set()
+        self._cb_lock = threading.Lock()
         self._callbacks: dict[str, list[Callable]] = {
             "trade": [], "signal": [], "mode_change": [],
             "error": [], "heartbeat": [], "whale": [], "token_signal": [],
@@ -295,7 +297,6 @@ class TradingEngine:
 
     def _get_last_price(self, symbol: str) -> float:
         try:
-            from db.redis_client import RedisClient
             t = RedisClient().get_ticker(symbol)
             return float(t.get("price", 0)) if t else 0.0
         except Exception:
@@ -347,7 +348,8 @@ class TradingEngine:
         if side == "HOLD":
             return
 
-        price = Decimal(str(signal.get("price", 0)))
+        raw_price = signal.get("price") or 0
+        price = Decimal(str(raw_price))
 
         if side not in ("BUY", "SELL") or price <= 0:
             return
@@ -454,8 +456,10 @@ class TradingEngine:
             if not ok:
                 logger.debug(f"[{symbol}] Regime blocked: {reason}")
                 return "HOLD", 0.0
-            # Scale confidence by regime confidence
-            confidence *= self._regime_detector.current.confidence or 0.8
+            # Blend confidence with regime confidence (weighted average, not multiply)
+            regime_conf = float(self._regime_detector.current.confidence or 0.8)
+            confidence = float(confidence)
+            confidence = min(1.0, max(0.0, (confidence + regime_conf) / 2.0))
 
         # ── 2. MTF confluence gate ─────────────────────────────────────
         mtf_result = None
@@ -618,11 +622,14 @@ class TradingEngine:
 
     # ── Event emission ─────────────────────────────────────────────────
     def on(self, event: str, callback: Callable) -> None:
-        if event in self._callbacks:
-            self._callbacks[event].append(callback)
+        with self._cb_lock:
+            if event in self._callbacks:
+                self._callbacks[event].append(callback)
 
     def _emit(self, event: str, data) -> None:
-        for cb in self._callbacks.get(event, []):
+        with self._cb_lock:
+            callbacks = list(self._callbacks.get(event, []))
+        for cb in callbacks:
             try:
                 cb(data)
             except Exception as exc:

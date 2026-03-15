@@ -89,6 +89,9 @@ class TelegramBot:
 
     def stop(self) -> None:
         self._running = False
+        for t in (getattr(self, "_send_thread", None), getattr(self, "_poll_thread", None)):
+            if t and t.is_alive():
+                t.join(timeout=5)
 
     def on_command(self, command: str, callback: Callable) -> None:
         """Register a command handler (e.g. '/pause')."""

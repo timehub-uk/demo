@@ -306,6 +306,8 @@ class ContinuousLearner:
             self._retrain_timer.cancel()
         if self._integrity_timer:
             self._integrity_timer.cancel()
+        if self._collect_thread and self._collect_thread.is_alive():
+            self._collect_thread.join(timeout=10)
         self._intel.ml("ContinuousLearner", "Continuous learning stopped.")
 
     def on_signal(self, callback: Callable) -> None:

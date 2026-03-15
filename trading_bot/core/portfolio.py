@@ -123,21 +123,41 @@ class PortfolioManager:
 
     def _compute_snapshot(self) -> None:
         import time
+        # Take a consistent snapshot of balances and positions under the lock,
+        # then do all I/O (price fetches) outside the lock to avoid holding it.
+        with self._lock:
+            balances_snapshot = dict(self._balances)
+            positions_snapshot = dict(self._positions)
+
+        # Batch-fetch prices for all non-USDT assets in one pass to avoid N+1
+        non_usdt = [a for a in balances_snapshot if a != "USDT"]
+        prices: dict[str, Decimal] = {}
+        if self._client and non_usdt:
+            try:
+                all_tickers = self._client.get_all_tickers()
+                ticker_map = {t["symbol"]: Decimal(str(t["price"])) for t in all_tickers}
+                for asset in non_usdt:
+                    sym = f"{asset}USDT"
+                    if sym in ticker_map:
+                        prices[asset] = ticker_map[sym]
+            except Exception as exc:
+                logger.debug(f"Batch price fetch failed, falling back per-asset: {exc}")
+                for asset in non_usdt:
+                    try:
+                        prices[asset] = self._client.get_price(f"{asset}USDT")
+                    except Exception:
+                        pass
+
         total_usdt = Decimal("0")
         assets = {}
-        for asset, b in self._balances.items():
-            free = Decimal(b["free"])
-            locked = Decimal(b["locked"])
+        for asset, b in balances_snapshot.items():
+            free = Decimal(str(b["free"]))
+            locked = Decimal(str(b["locked"]))
             total = free + locked
-            usd_val = Decimal("0")
             if asset == "USDT":
                 usd_val = total
-            elif self._client:
-                try:
-                    price = self._client.get_price(f"{asset}USDT")
-                    usd_val = total * price
-                except Exception as exc:
-                    logger.debug(f"Could not get price for {asset}USDT: {exc}")
+            else:
+                usd_val = total * prices.get(asset, Decimal("0"))
             total_usdt += usd_val
             assets[asset] = {
                 "free": float(free),
@@ -147,7 +167,7 @@ class PortfolioManager:
             }
 
         unrealized = sum(
-            p.unrealized_pnl for p in self._positions.values()
+            p.unrealized_pnl for p in positions_snapshot.values()
         )
 
         snap = PortfolioSnapshot(
@@ -155,7 +175,7 @@ class PortfolioManager:
             total_gbp=total_usdt * self._gbp_rate,
             unrealized_pnl=unrealized,
             assets=assets,
-            positions=list(self._positions.values()),
+            positions=list(positions_snapshot.values()),
             timestamp=__import__("time").time(),
         )
         self._snapshot = snap

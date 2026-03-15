@@ -69,6 +69,8 @@ class EmailNotifier:
 
     def stop(self) -> None:
         self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
 
     @property
     def enabled(self) -> bool:

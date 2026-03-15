@@ -71,6 +71,7 @@ class RiskManager:
         # Cap at max position size
         max_qty = (portfolio_value * Decimal(str(max_size_pct))) / entry_price
         qty = min(qty, max_qty)
+        qty = max(qty, Decimal("0"))   # never return negative quantity
         return qty.quantize(Decimal("0.00001"))
 
     def calculate_stop_loss(self, entry_price: Decimal, side: str) -> Decimal:
