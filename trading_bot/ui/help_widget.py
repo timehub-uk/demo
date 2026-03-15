@@ -611,7 +611,7 @@ class HelpWidget(QWidget):
         title.setStyleSheet(f"color:{ACCENT}; font-size:13px; font-weight:700; letter-spacing:3px;")
         hdr_layout.addWidget(title)
         hdr_layout.addStretch()
-        version = QLabel("BinanceML Pro  v2.0")
+        version = QLabel("BinanceML Pro  v0.0.1")
         version.setStyleSheet(f"color:{FG2}; font-size:11px;")
         hdr_layout.addWidget(version)
         root.addWidget(hdr)
@@ -696,7 +696,7 @@ class HelpWidget(QWidget):
         name_lbl.setStyleSheet(f"color:{ACCENT}; font-size:22px; font-weight:700; letter-spacing:4px;")
         layout.addWidget(name_lbl)
 
-        ver_lbl = QLabel("Version 2.0  ·  Professional AI Trading Platform")
+        ver_lbl = QLabel("Version 0.0.1  ·  Professional AI Trading Platform")
         ver_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ver_lbl.setStyleSheet(f"color:{FG2}; font-size:12px; letter-spacing:1px;")
         layout.addWidget(ver_lbl)
