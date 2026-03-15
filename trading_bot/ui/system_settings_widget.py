@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox, QCheckBox,
     QGroupBox, QTabWidget, QFormLayout, QFrame, QScrollArea,
-    QSizePolicy,
+    QSizePolicy, QRadioButton, QButtonGroup,
 )
 
 from ui.styles import (
@@ -159,6 +159,7 @@ class SystemSettingsWidget(QWidget):
         self._build_trading_tab()
         self._build_tax_tab()
         self._build_notifications_tab()
+        self._build_email_schedule_tab()
         self._build_ui_tab()
 
     # ── Tab builders ───────────────────────────────────────────────────
@@ -590,6 +591,250 @@ class SystemSettingsWidget(QWidget):
         form.addRow("", test_btn)
         form.addRow("", self.n_test_lbl)
 
+    def _build_email_schedule_tab(self) -> None:
+        _, form = self._scrollable_tab("Email Schedule", "info")
+
+        _btn_style = (
+            f"QPushButton {{ background:{BG4}; color:{ACCENT}; border:1px solid {ACCENT}; "
+            f"border-radius:4px; padding:4px 12px; }}"
+            f"QPushButton:hover {{ background:{ACCENT}; color:#000; }}"
+        )
+
+        # ── Daily P&L Report ─────────────────────────────────────────
+        form.addRow(_section_label("DAILY P&L REPORT"))
+
+        self.es_daily_enabled = QCheckBox("Send daily P&L report email")
+        self.es_daily_enabled.setChecked(True)
+        form.addRow("Enable:", self.es_daily_enabled)
+
+        self.es_daily_time = QLineEdit()
+        self.es_daily_time.setPlaceholderText("HH:MM  (UTC, 24-hour)")
+        self.es_daily_time.setMaximumWidth(120)
+        self.es_daily_time.setText("08:00")
+        form.addRow("Send Time (UTC):", self.es_daily_time)
+
+        days_widget = QWidget()
+        days_layout = QHBoxLayout(days_widget)
+        days_layout.setContentsMargins(0, 0, 0, 0)
+        days_layout.setSpacing(8)
+        self.es_daily_days: list[QCheckBox] = []
+        for i, day in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
+            cb = QCheckBox(day)
+            cb.setChecked(i < 5)  # weekdays default
+            self.es_daily_days.append(cb)
+            days_layout.addWidget(cb)
+        days_layout.addStretch()
+        form.addRow("Send Days:", days_widget)
+
+        # Select-all helper buttons
+        days_btn_w = QWidget()
+        days_btn_l = QHBoxLayout(days_btn_w)
+        days_btn_l.setContentsMargins(0, 0, 0, 0)
+        days_btn_l.setSpacing(6)
+        for label, indices in [("Weekdays", range(5)), ("Weekend", range(5, 7)), ("All", range(7))]:
+            btn = QPushButton(label)
+            btn.setFixedHeight(24)
+            btn.setStyleSheet(
+                f"QPushButton {{ background:{BG4}; color:{FG1}; border:1px solid {BORDER};"
+                f" border-radius:3px; padding:0 8px; font-size:10px; }}"
+                f"QPushButton:hover {{ border-color:{ACCENT}; color:{ACCENT}; }}"
+            )
+            _idxs = list(indices)
+            btn.clicked.connect(lambda _, ix=_idxs: [
+                [cb.setChecked(i in ix) for i, cb in enumerate(self.es_daily_days)]
+            ])
+            days_btn_l.addWidget(btn)
+        days_btn_l.addStretch()
+        form.addRow("", days_btn_w)
+
+        # ── Trade Alerts ─────────────────────────────────────────────
+        form.addRow(_section_label("TRADE ALERTS"))
+
+        self.es_trade_enabled = QCheckBox("Send email on each trade execution")
+        form.addRow("Enable:", self.es_trade_enabled)
+
+        delivery_w = QWidget()
+        delivery_l = QHBoxLayout(delivery_w)
+        delivery_l.setContentsMargins(0, 0, 0, 0)
+        delivery_l.setSpacing(16)
+        self.es_trade_grp = QButtonGroup(self)
+        self.es_trade_immediate = QRadioButton("Immediate")
+        self.es_trade_immediate.setChecked(True)
+        self.es_trade_batched = QRadioButton("Batched")
+        self.es_trade_grp.addButton(self.es_trade_immediate)
+        self.es_trade_grp.addButton(self.es_trade_batched)
+        delivery_l.addWidget(self.es_trade_immediate)
+        delivery_l.addWidget(self.es_trade_batched)
+        delivery_l.addStretch()
+        form.addRow("Delivery:", delivery_w)
+
+        batch_w = QWidget()
+        batch_l = QHBoxLayout(batch_w)
+        batch_l.setContentsMargins(0, 0, 0, 0)
+        batch_l.setSpacing(8)
+        self.es_trade_batch_min = QSpinBox()
+        self.es_trade_batch_min.setRange(1, 120)
+        self.es_trade_batch_min.setValue(15)
+        self.es_trade_batch_min.setSuffix(" min")
+        self.es_trade_batch_min.setMaximumWidth(100)
+        batch_l.addWidget(self.es_trade_batch_min)
+        batch_l.addWidget(QLabel("(only used when Batched delivery is selected)"))
+        batch_l.addStretch()
+        form.addRow("Batch Window:", batch_w)
+
+        # ── Error & Warning Digest ────────────────────────────────────
+        form.addRow(_section_label("ERROR & WARNING DIGEST"))
+
+        self.es_error_enabled = QCheckBox("Send daily error/warning digest")
+        self.es_error_enabled.setChecked(True)
+        form.addRow("Enable:", self.es_error_enabled)
+
+        self.es_error_time = QLineEdit()
+        self.es_error_time.setPlaceholderText("HH:MM  (UTC)")
+        self.es_error_time.setMaximumWidth(120)
+        self.es_error_time.setText("08:00")
+        form.addRow("Send Time (UTC):", self.es_error_time)
+
+        # ── Monthly Tax Report ────────────────────────────────────────
+        form.addRow(_section_label("MONTHLY TAX REPORT"))
+
+        self.es_tax_enabled = QCheckBox("Send monthly CGT / tax report")
+        self.es_tax_enabled.setChecked(True)
+        form.addRow("Enable:", self.es_tax_enabled)
+
+        self.es_tax_day = QSpinBox()
+        self.es_tax_day.setRange(1, 28)
+        self.es_tax_day.setValue(1)
+        self.es_tax_day.setSuffix(" (day of month)")
+        form.addRow("Send Day:", self.es_tax_day)
+
+        self.es_tax_time = QLineEdit()
+        self.es_tax_time.setPlaceholderText("HH:MM  (UTC)")
+        self.es_tax_time.setMaximumWidth(120)
+        self.es_tax_time.setText("09:00")
+        form.addRow("Send Time (UTC):", self.es_tax_time)
+
+        # ── Weekly Summary ────────────────────────────────────────────
+        form.addRow(_section_label("WEEKLY SUMMARY"))
+
+        self.es_weekly_enabled = QCheckBox("Send weekly performance summary")
+        form.addRow("Enable:", self.es_weekly_enabled)
+
+        self.es_weekly_day = QComboBox()
+        for d in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]:
+            self.es_weekly_day.addItem(d)
+        form.addRow("Day:", self.es_weekly_day)
+
+        self.es_weekly_time = QLineEdit()
+        self.es_weekly_time.setPlaceholderText("HH:MM  (UTC)")
+        self.es_weekly_time.setMaximumWidth(120)
+        self.es_weekly_time.setText("07:00")
+        form.addRow("Send Time (UTC):", self.es_weekly_time)
+
+        # ── Report Content ────────────────────────────────────────────
+        form.addRow(_section_label("REPORT CONTENT"))
+
+        self.es_content_balance = QCheckBox("Include current account balance")
+        self.es_content_balance.setChecked(True)
+        form.addRow("Balance:", self.es_content_balance)
+
+        self.es_content_positions = QCheckBox("Include open positions summary")
+        self.es_content_positions.setChecked(True)
+        form.addRow("Positions:", self.es_content_positions)
+
+        self.es_content_top = QCheckBox("Include top-performing pair")
+        self.es_content_top.setChecked(True)
+        form.addRow("Top Performer:", self.es_content_top)
+
+        self.es_content_chart = QCheckBox("Include win/loss chart (HTML inline)")
+        self.es_content_chart.setChecked(True)
+        form.addRow("PnL Chart:", self.es_content_chart)
+
+        self.es_content_risk = QCheckBox("Include risk metrics (drawdown, Sharpe)")
+        self.es_content_risk.setChecked(True)
+        form.addRow("Risk Metrics:", self.es_content_risk)
+
+        # ── Timezone Override ─────────────────────────────────────────
+        form.addRow(_section_label("TIMEZONE"))
+
+        self.es_timezone = QComboBox()
+        for tz in ["UTC", "Europe/London", "America/New_York", "America/Chicago",
+                   "Asia/Tokyo", "Asia/Singapore", "Asia/Hong_Kong"]:
+            self.es_timezone.addItem(tz)
+        form.addRow("Report Timezone:", self.es_timezone)
+
+        tz_note = QLabel("Times shown in reports will use this timezone. Send times are always UTC.")
+        tz_note.setStyleSheet(f"color:{FG2}; font-size:10px;")
+        tz_note.setWordWrap(True)
+        form.addRow("", tz_note)
+
+        # ── Actions ───────────────────────────────────────────────────
+        form.addRow(_section_label("ACTIONS"))
+
+        self.es_send_preview_lbl = QLabel("")
+        self.es_send_preview_lbl.setStyleSheet(f"color:{FG2}; font-size:10px; font-family:monospace;")
+
+        preview_btn = QPushButton("Send Schedule Preview Now")
+        preview_btn.setStyleSheet(_btn_style)
+        preview_btn.clicked.connect(self._send_schedule_preview)
+        form.addRow("", preview_btn)
+        form.addRow("", self.es_send_preview_lbl)
+
+    def _send_schedule_preview(self) -> None:
+        """Send a preview of the scheduled email config immediately."""
+        self.es_send_preview_lbl.setText("Sending preview…")
+        self.es_send_preview_lbl.setStyleSheet(f"color:{YELLOW}; font-size:10px; font-family:monospace;")
+
+        days = [cb.text() for cb in self.es_daily_days if cb.isChecked()]
+        delivery = "Immediate" if self.es_trade_immediate.isChecked() else f"Batched ({self.es_trade_batch_min.value()} min)"
+
+        html_rows = f"""
+        <tr><td style="padding:4px 12px">Daily P&L Report</td>
+            <td style="padding:4px 12px">{'Enabled' if self.es_daily_enabled.isChecked() else 'Disabled'}
+            – {self.es_daily_time.text()} UTC – {', '.join(days) or 'No days selected'}</td></tr>
+        <tr><td style="padding:4px 12px">Trade Alerts</td>
+            <td style="padding:4px 12px">{'Enabled' if self.es_trade_enabled.isChecked() else 'Disabled'}
+            – {delivery}</td></tr>
+        <tr><td style="padding:4px 12px">Error Digest</td>
+            <td style="padding:4px 12px">{'Enabled' if self.es_error_enabled.isChecked() else 'Disabled'}
+            – {self.es_error_time.text()} UTC</td></tr>
+        <tr><td style="padding:4px 12px">Tax Report</td>
+            <td style="padding:4px 12px">{'Enabled' if self.es_tax_enabled.isChecked() else 'Disabled'}
+            – Day {self.es_tax_day.value()} at {self.es_tax_time.text()} UTC</td></tr>
+        <tr><td style="padding:4px 12px">Weekly Summary</td>
+            <td style="padding:4px 12px">{'Enabled' if self.es_weekly_enabled.isChecked() else 'Disabled'}
+            – {self.es_weekly_day.currentText()} at {self.es_weekly_time.text()} UTC</td></tr>
+        <tr><td style="padding:4px 12px">Timezone</td>
+            <td style="padding:4px 12px">{self.es_timezone.currentText()}</td></tr>
+        """
+
+        def _run() -> None:
+            try:
+                from alerts.email_notifier import get_email_notifier, _wrap_email, EmailMessage
+                notifier = get_email_notifier()
+                if not notifier.enabled:
+                    msg, col = "✗ Email not configured. Check Notifications tab for SMTP settings.", RED
+                else:
+                    notifier._enqueue(EmailMessage(
+                        subject="[BinanceML Pro] Email Schedule Preview",
+                        html_body=_wrap_email(
+                            f"<h2>Email Schedule Configuration</h2>"
+                            f"<table style='border-collapse:collapse;width:100%'>{html_rows}</table>"
+                        ),
+                        text_body="Email schedule preview – see HTML version for full details.",
+                    ))
+                    msg, col = "✓ Preview queued for delivery", GREEN
+            except Exception as exc:
+                msg, col = f"✗ {exc}", RED
+            QTimer.singleShot(0, lambda: (
+                self.es_send_preview_lbl.setText(msg),
+                self.es_send_preview_lbl.setStyleSheet(
+                    f"color:{col}; font-size:10px; font-family:monospace;"
+                ),
+            ))
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def _test_email(self) -> None:
         self.n_test_lbl.setText("Sending…")
         self.n_test_lbl.setStyleSheet(f"color:{YELLOW}; font-size:10px; font-family:monospace;")
@@ -828,6 +1073,38 @@ class SystemSettingsWidget(QWidget):
             except Exception:
                 pass
 
+            # Email Schedule tab
+            try:
+                n = getattr(s, "notifications", None)
+                if n:
+                    self.es_daily_enabled.setChecked(bool(getattr(n, "sched_daily_enabled", True)))
+                    self.es_daily_time.setText(getattr(n, "sched_daily_time", "08:00"))
+                    days_str = getattr(n, "sched_daily_days", "Mon,Tue,Wed,Thu,Fri")
+                    active = set(days_str.split(",")) if days_str else set()
+                    for cb in self.es_daily_days:
+                        cb.setChecked(cb.text() in active)
+                    self.es_trade_enabled.setChecked(bool(getattr(n, "sched_trade_enabled", False)))
+                    batched = bool(getattr(n, "sched_trade_batched", False))
+                    self.es_trade_immediate.setChecked(not batched)
+                    self.es_trade_batched.setChecked(batched)
+                    self.es_trade_batch_min.setValue(int(getattr(n, "sched_trade_batch_min", 15)))
+                    self.es_error_enabled.setChecked(bool(getattr(n, "sched_error_enabled", True)))
+                    self.es_error_time.setText(getattr(n, "sched_error_time", "08:00"))
+                    self.es_tax_enabled.setChecked(bool(getattr(n, "sched_tax_enabled", True)))
+                    self.es_tax_day.setValue(int(getattr(n, "sched_tax_day", 1)))
+                    self.es_tax_time.setText(getattr(n, "sched_tax_time", "09:00"))
+                    self.es_weekly_enabled.setChecked(bool(getattr(n, "sched_weekly_enabled", False)))
+                    _set_combo(self.es_weekly_day, getattr(n, "sched_weekly_day", "Monday"))
+                    self.es_weekly_time.setText(getattr(n, "sched_weekly_time", "07:00"))
+                    self.es_content_balance.setChecked(bool(getattr(n, "sched_content_balance", True)))
+                    self.es_content_positions.setChecked(bool(getattr(n, "sched_content_positions", True)))
+                    self.es_content_top.setChecked(bool(getattr(n, "sched_content_top", True)))
+                    self.es_content_chart.setChecked(bool(getattr(n, "sched_content_chart", True)))
+                    self.es_content_risk.setChecked(bool(getattr(n, "sched_content_risk", True)))
+                    _set_combo(self.es_timezone, getattr(n, "sched_timezone", "UTC"))
+            except Exception:
+                pass
+
             self._flash_status("Settings loaded", GREEN)
         except Exception as e:
             self._flash_status(f"Load error: {e}", RED)
@@ -951,6 +1228,35 @@ class SystemSettingsWidget(QWidget):
                     codex.api_key  = self.codex_api_key.text()
                     codex.base_url = self.codex_base_url.text()
                     codex.enabled  = self.codex_enabled.isChecked()
+            except Exception:
+                pass
+
+            # Email Schedule tab
+            try:
+                n = getattr(s, "notifications", None)
+                if n is not None:
+                    n.sched_daily_enabled    = self.es_daily_enabled.isChecked()
+                    n.sched_daily_time       = self.es_daily_time.text().strip() or "08:00"
+                    n.sched_daily_days       = ",".join(
+                        cb.text() for cb in self.es_daily_days if cb.isChecked()
+                    )
+                    n.sched_trade_enabled    = self.es_trade_enabled.isChecked()
+                    n.sched_trade_batched    = self.es_trade_batched.isChecked()
+                    n.sched_trade_batch_min  = self.es_trade_batch_min.value()
+                    n.sched_error_enabled    = self.es_error_enabled.isChecked()
+                    n.sched_error_time       = self.es_error_time.text().strip() or "08:00"
+                    n.sched_tax_enabled      = self.es_tax_enabled.isChecked()
+                    n.sched_tax_day          = self.es_tax_day.value()
+                    n.sched_tax_time         = self.es_tax_time.text().strip() or "09:00"
+                    n.sched_weekly_enabled   = self.es_weekly_enabled.isChecked()
+                    n.sched_weekly_day       = self.es_weekly_day.currentText()
+                    n.sched_weekly_time      = self.es_weekly_time.text().strip() or "07:00"
+                    n.sched_content_balance  = self.es_content_balance.isChecked()
+                    n.sched_content_positions = self.es_content_positions.isChecked()
+                    n.sched_content_top      = self.es_content_top.isChecked()
+                    n.sched_content_chart    = self.es_content_chart.isChecked()
+                    n.sched_content_risk     = self.es_content_risk.isChecked()
+                    n.sched_timezone         = self.es_timezone.currentText()
             except Exception:
                 pass
 

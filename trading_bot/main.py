@@ -50,26 +50,292 @@ from loguru import logger
 try:
     from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen
     from PyQt6.QtCore import Qt, QTimer
-    from PyQt6.QtGui import QPixmap, QFont, QColor
+    from PyQt6.QtGui import QPixmap, QFont, QColor, QPainter, QPen, QBrush, QFontMetrics
 except ImportError as e:
     print(f"PyQt6 not available: {e}")
     print("Install with: pip install PyQt6 PyQt6-Qt6")
     sys.exit(1)
 
 
-def create_splash(app: QApplication) -> QSplashScreen:
-    """Simple splash screen while services start."""
-    pixmap = QPixmap(600, 300)
-    pixmap.fill(QColor("#0A0A12"))
-    splash = QSplashScreen(pixmap, Qt.WindowType.WindowStaysOnTopHint)
-    splash.showMessage(
-        "BinanceML Pro  ·  Starting…",
-        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
-        QColor("#00D4FF"),
-    )
-    splash.show()
-    app.processEvents()
-    return splash
+class _SplashScreen(QSplashScreen):
+    """Branded splash screen with logo, title, and cyan progress bar."""
+
+    _CYAN     = "#00D4FF"
+    _CYAN_DIM = "#0F2530"
+    _BG       = "#0A0A12"
+    _FG       = "#E0E0F0"
+    _FG2      = "#7A7A9A"
+    _FG3      = "#3A3A5A"
+    _GREEN    = "#00C853"
+    _RED      = "#FF3D3D"
+    _YELLOW   = "#FFD600"
+
+    def __init__(self, app: QApplication) -> None:
+        pixmap = QPixmap(740, 400)
+        pixmap.fill(QColor(self._BG))
+        super().__init__(pixmap, Qt.WindowType.WindowStaysOnTopHint)
+        self._app      = app
+        self._progress = 0
+        self._step_msg = "Initialising BinanceML Pro…"
+        self._checks: list[tuple[str, str]] = []   # (label, status)
+        self.show()
+        app.processEvents()
+
+    # ── Public API ──────────────────────────────────────────────────────────
+
+    def advance(self, progress: int, message: str, pause: float = 1.0) -> None:
+        """Update progress bar and status, process events, then pause."""
+        self._progress = max(0, min(100, progress))
+        self._step_msg = message
+        self.repaint()
+        self._app.processEvents()
+        if pause > 0:
+            time.sleep(pause)
+            self._app.processEvents()
+
+    def add_check(self, label: str, status: str) -> None:
+        """Append a check-result line (e.g. 'PostgreSQL', '✓ Connected')."""
+        self._checks.append((label, status))
+        self.repaint()
+        self._app.processEvents()
+
+    # ── Painting ────────────────────────────────────────────────────────────
+
+    def drawContents(self, painter: QPainter) -> None:  # type: ignore[override]
+        w, h = self.width(), self.height()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+
+        CYAN  = QColor(self._CYAN)
+        FG    = QColor(self._FG)
+        FG2   = QColor(self._FG2)
+        FG3   = QColor(self._FG3)
+        TRACK = QColor(self._CYAN_DIM)
+
+        # ── Logo icon ──────────────────────────────────────────────────────
+        lx, ly, lsz = 56, 52, 84
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(CYAN))
+        painter.drawRoundedRect(lx, ly, lsz, lsz, 18, 18)
+
+        font_logo = QFont("SF Pro Display", 44, QFont.Weight.Bold)
+        painter.setFont(font_logo)
+        painter.setPen(QColor(self._BG))
+        painter.drawText(lx, ly, lsz, lsz, Qt.AlignmentFlag.AlignCenter, "B")
+
+        # ── App title ──────────────────────────────────────────────────────
+        tx = lx + lsz + 22
+
+        font_main = QFont("SF Pro Display", 40, QFont.Weight.Bold)
+        painter.setFont(font_main)
+        fm = QFontMetrics(font_main)
+        painter.setPen(FG)
+        painter.drawText(tx, ly, 520, 56,
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         "BinanceML")
+
+        pro_x = tx + fm.horizontalAdvance("BinanceML") + 10
+        font_pro = QFont("SF Pro Display", 40, QFont.Weight.ExtraLight)
+        painter.setFont(font_pro)
+        painter.setPen(CYAN)
+        painter.drawText(pro_x, ly, 180, 56,
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         "Pro")
+
+        # ── Tagline ────────────────────────────────────────────────────────
+        font_tag = QFont("SF Pro Display", 11)
+        painter.setFont(font_tag)
+        painter.setPen(FG2)
+        painter.drawText(tx, ly + 60, 460, 26,
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         "AI-Powered Cryptocurrency Trading Platform")
+
+        # ── Version ────────────────────────────────────────────────────────
+        font_ver = QFont("SF Pro Display", 9)
+        painter.setFont(font_ver)
+        painter.setPen(FG3)
+        painter.drawText(tx, ly + 86, 460, 20,
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         "Version 2.1  ·  Professional Edition")
+
+        # ── Divider ────────────────────────────────────────────────────────
+        painter.setPen(QPen(QColor("#14142A"), 1))
+        painter.drawLine(56, 186, w - 56, 186)
+
+        # ── Check results (DB, GPU, etc.) ──────────────────────────────────
+        if self._checks:
+            font_chk = QFont("SF Pro Mono", 9)
+            if not font_chk.exactMatch():
+                font_chk = QFont("Courier New", 9)
+            painter.setFont(font_chk)
+            cy_pos = 202
+            col_w  = (w - 112) // 2
+            for i, (label, status) in enumerate(self._checks[-6:]):   # show last 6
+                col = i % 2
+                row = i // 2
+                rx  = 56 + col * col_w
+                ry  = cy_pos + row * 18
+                # Colour by first char
+                if status.startswith("✓"):
+                    sc = QColor(self._GREEN)
+                elif status.startswith("✗"):
+                    sc = QColor(self._RED)
+                elif status.startswith("⚠"):
+                    sc = QColor(self._YELLOW)
+                else:
+                    sc = FG2
+                painter.setPen(FG2)
+                painter.drawText(rx, ry, col_w - 8, 16,
+                                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                                 f"{label}:")
+                painter.setPen(sc)
+                label_w = QFontMetrics(font_chk).horizontalAdvance(f"{label}: ")
+                painter.drawText(rx + label_w, ry, col_w - label_w - 4, 16,
+                                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                                 status)
+
+        # ── Progress bar ───────────────────────────────────────────────────
+        bx, by, bw, bh = 56, 330, w - 112, 6
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(TRACK))
+        painter.drawRoundedRect(bx, by, bw, bh, 3, 3)
+
+        fw = int(bw * self._progress / 100)
+        if fw > 0:
+            painter.setBrush(QBrush(CYAN))
+            painter.drawRoundedRect(bx, by, fw, bh, 3, 3)
+
+        # Glow dot at leading edge
+        if 0 < fw < bw:
+            painter.setBrush(QBrush(QColor(255, 255, 255, 180)))
+            painter.drawEllipse(bx + fw - 3, by - 1, 8, bh + 2)
+
+        # ── Percent label ──────────────────────────────────────────────────
+        font_pct = QFont("SF Pro Display", 9, QFont.Weight.Bold)
+        painter.setFont(font_pct)
+        painter.setPen(CYAN)
+        painter.drawText(bx + bw + 10, by - 3, 46, 14,
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         f"{self._progress}%")
+
+        # ── Status message ─────────────────────────────────────────────────
+        font_msg = QFont("SF Pro Display", 10)
+        painter.setFont(font_msg)
+        painter.setPen(FG2)
+        painter.drawText(bx, by + 16, bw, 24,
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         self._step_msg)
+
+        # ── Footer ─────────────────────────────────────────────────────────
+        font_foot = QFont("SF Pro Display", 8)
+        painter.setFont(font_foot)
+        painter.setPen(FG3)
+        painter.drawText(bx, h - 18, bw, 14,
+                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                         "© 2025 BinanceML Pro  ·  All Rights Reserved")
+
+
+def create_splash(app: QApplication) -> _SplashScreen:
+    """Create and show the branded startup splash screen."""
+    return _SplashScreen(app)
+
+
+def _check_database_integrity(splash: _SplashScreen) -> None:
+    """
+    Run a lightweight DB integrity check during startup and report via splash.
+    Checks: connection, required tables present, SQLite PRAGMA (if applicable).
+    """
+    try:
+        from db.postgres import get_db
+        from sqlalchemy import text, inspect as sa_inspect
+
+        with get_db() as db:
+            # Basic connectivity
+            db.execute(text("SELECT 1"))
+
+            # Check required tables exist
+            engine = db.get_bind()
+            inspector = sa_inspect(engine)
+            existing = set(inspector.get_table_names())
+            required = {"trades", "orders", "ml_models", "portfolio_snapshots"}
+            missing  = required - existing
+
+            if missing:
+                splash.add_check("Database", f"⚠ Missing tables: {', '.join(sorted(missing))}")
+            else:
+                splash.add_check("Database", "✓ Schema OK")
+
+            # SQLite PRAGMA integrity check (cheap, fast)
+            if "sqlite" in str(engine.url):
+                result = db.execute(text("PRAGMA integrity_check")).scalar()
+                if result == "ok":
+                    splash.add_check("DB Integrity", "✓ PRAGMA OK")
+                else:
+                    splash.add_check("DB Integrity", f"✗ {result}")
+
+    except Exception as exc:
+        splash.add_check("Database", f"✗ {exc!s:.40}")
+
+
+def _check_redis_connectivity(splash: _SplashScreen) -> None:
+    """Ping Redis and report status on the splash screen."""
+    try:
+        from db.redis_client import get_redis_client
+        client = get_redis_client()
+        if client and client.ping():
+            splash.add_check("Redis", "✓ Connected")
+        else:
+            splash.add_check("Redis", "⚠ Unavailable (cache disabled)")
+    except Exception as exc:
+        splash.add_check("Redis", f"⚠ {exc!s:.40}")
+
+
+def _check_gpu_and_configure(splash: _SplashScreen, settings) -> None:
+    """
+    Detect GPU availability (CUDA or Apple MPS) and auto-configure ML settings.
+    Updates settings.ml.use_gpu and reports result on the splash screen.
+    """
+    gpu_name   = None
+    gpu_avail  = False
+    device_tag = "cpu"
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            gpu_avail  = True
+            device_tag = "cuda"
+            gpu_name   = torch.cuda.get_device_name(0)
+        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            gpu_avail  = True
+            device_tag = "mps"
+            gpu_name   = "Apple MPS (Metal)"
+
+    except ImportError:
+        pass
+    except Exception as exc:
+        logger.debug(f"GPU check error: {exc}")
+
+    if gpu_avail and gpu_name:
+        # Auto-enable GPU if not already set
+        try:
+            if not settings.ml.use_gpu:
+                settings.ml.use_gpu = True
+                settings.save()
+                intel.system("Startup", f"GPU detected – ML switched to {device_tag.upper()}: {gpu_name}")
+        except Exception:
+            pass
+        splash.add_check("ML Device", f"✓ GPU – {gpu_name[:32]}")
+    else:
+        # Ensure use_gpu is False to avoid CUDA errors
+        try:
+            if settings.ml.use_gpu:
+                settings.ml.use_gpu = False
+                settings.save()
+                intel.system("Startup", "No GPU found – ML using CPU")
+        except Exception:
+            pass
+        splash.add_check("ML Device", "⚠ No GPU – using CPU")
 
 
 def _migrate_sqlite_if_needed_headless(pg_url: str) -> None:
@@ -1462,16 +1728,16 @@ def main() -> int:
 
     splash = create_splash(app)
     intel.system("Startup", "BinanceML Pro starting…")
+    splash.advance(0, "Initialising BinanceML Pro…", pause=1.0)
 
     # ── Settings ──────────────────────────────────────────────────────
+    splash.advance(8, "Loading encrypted configuration…", pause=1.0)
     from config import get_settings
     settings = get_settings()
 
-    # Attempt to load config (may fail on first run)
     try:
         from config.encryption import EncryptionManager
         enc = EncryptionManager()
-        # Try with empty password (unencrypted plain config)
         try:
             enc.initialise("placeholder")
         except Exception:
@@ -1489,9 +1755,13 @@ def main() -> int:
         settings.load()
         splash.show()
 
-    # ── Database init ──────────────────────────────────────────────────
-    splash.showMessage("Connecting to databases…", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, QColor("#00D4FF"))
+    # ── GPU / CPU detection ────────────────────────────────────────────
+    splash.advance(15, "Detecting compute device (GPU / CPU)…", pause=1.0)
+    _check_gpu_and_configure(splash, settings)
     app.processEvents()
+
+    # ── Database init ──────────────────────────────────────────────────
+    splash.advance(25, "Connecting to databases…", pause=1.0)
 
     # PostgreSQL — with interactive credential recovery on auth failure
     splash.hide()
@@ -1512,9 +1782,16 @@ def main() -> int:
     except Exception as exc:
         logger.warning(f"Redis unavailable ({exc}) – caching disabled")
 
-    # ── Services ───────────────────────────────────────────────────────
-    splash.showMessage("Starting trading services…", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, QColor("#00D4FF"))
+    # ── Database integrity check ───────────────────────────────────────
+    splash.advance(35, "Running database integrity checks…", pause=1.0)
+    _check_database_integrity(splash)
+    _check_redis_connectivity(splash)
     app.processEvents()
+    time.sleep(0.5)
+    app.processEvents()
+
+    # ── Services ───────────────────────────────────────────────────────
+    splash.advance(50, "Initialising trading services…", pause=1.0)
 
     try:
         services = build_services(settings)
@@ -1528,8 +1805,7 @@ def main() -> int:
         }
 
     # ── Background services ────────────────────────────────────────────
-    splash.showMessage("Starting background services…", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, QColor("#00D4FF"))
-    app.processEvents()
+    splash.advance(75, "Starting background services…", pause=1.0)
 
     try:
         start_background_services(services, settings)
@@ -1537,8 +1813,7 @@ def main() -> int:
         logger.warning(f"Some background services failed: {exc}")
 
     # ── Main window ────────────────────────────────────────────────────
-    splash.showMessage("Loading UI…", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, QColor("#00D4FF"))
-    app.processEvents()
+    splash.advance(90, "Loading user interface…", pause=1.0)
 
     from ui.main_window import MainWindow
     window = MainWindow(
@@ -1603,6 +1878,7 @@ def main() -> int:
         cascade_detector=services.get("cascade_detector"),
         stream_deck=services.get("stream_deck"),
     )
+    splash.advance(100, "BinanceML Pro ready ✅", pause=0.5)
     splash.finish(window)
     window.showMaximized()
 
