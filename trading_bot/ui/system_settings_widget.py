@@ -563,13 +563,27 @@ class SystemSettingsWidget(QWidget):
         self.n_daily_report  = QCheckBox("Email daily P&L report"); self.n_daily_report.setChecked(True); form.addRow("Daily Report:", self.n_daily_report)
         self.n_tax_reports   = QCheckBox("Email monthly tax reports"); self.n_tax_reports.setChecked(True); form.addRow("Tax Reports:", self.n_tax_reports)
 
-        form.addRow(_section_label("TEST"))
-        test_btn = QPushButton("Send Test Email")
-        test_btn.setStyleSheet(
+        form.addRow(_section_label("DAILY REPORTS"))
+        self.n_report_time = QLineEdit(); self.n_report_time.setPlaceholderText("HH:MM  (UTC, 24-hour)")
+        self.n_report_time.setMaximumWidth(120)
+        form.addRow("Send Time (UTC):", self.n_report_time)
+
+        _btn_style = (
             f"QPushButton {{ background:{BG4}; color:{ACCENT}; border:1px solid {ACCENT}; "
             f"border-radius:4px; padding:4px 12px; }}"
             f"QPushButton:hover {{ background:{ACCENT}; color:#000; }}"
         )
+        send_now_btn = QPushButton("Send Daily Reports Now")
+        send_now_btn.setStyleSheet(_btn_style)
+        self.n_send_now_lbl = QLabel("")
+        self.n_send_now_lbl.setStyleSheet(f"color:{FG2}; font-size:10px; font-family:monospace;")
+        send_now_btn.clicked.connect(self._send_daily_reports_now)
+        form.addRow("", send_now_btn)
+        form.addRow("", self.n_send_now_lbl)
+
+        form.addRow(_section_label("TEST"))
+        test_btn = QPushButton("Send Test Email")
+        test_btn.setStyleSheet(_btn_style)
         self.n_test_lbl = QLabel("")
         self.n_test_lbl.setStyleSheet(f"color:{FG2}; font-size:10px; font-family:monospace;")
         test_btn.clicked.connect(self._test_email)
@@ -595,6 +609,30 @@ class SystemSettingsWidget(QWidget):
             QTimer.singleShot(0, lambda: (
                 self.n_test_lbl.setText(("✓ " if ok else "✗ ") + msg),
                 self.n_test_lbl.setStyleSheet(f"color:{col}; font-size:10px; font-family:monospace;"),
+            ))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _send_daily_reports_now(self) -> None:
+        """Trigger both daily reports immediately via the running scheduler."""
+        self.n_send_now_lbl.setText("Sending…")
+        self.n_send_now_lbl.setStyleSheet(
+            f"color:{YELLOW}; font-size:10px; font-family:monospace;"
+        )
+
+        def _run() -> None:
+            try:
+                from alerts.daily_scheduler import get_daily_scheduler
+                sched = get_daily_scheduler()
+                sched.send_now()
+                msg, col = "✓ Reports queued for delivery", GREEN
+            except Exception as exc:
+                msg, col = f"✗ {exc}", RED
+            QTimer.singleShot(0, lambda: (
+                self.n_send_now_lbl.setText(msg),
+                self.n_send_now_lbl.setStyleSheet(
+                    f"color:{col}; font-size:10px; font-family:monospace;"
+                ),
             ))
 
         threading.Thread(target=_run, daemon=True).start()
@@ -786,6 +824,7 @@ class SystemSettingsWidget(QWidget):
                     self.n_trade_alerts.setChecked(bool(getattr(n, "email_trade_alerts", False)))
                     self.n_daily_report.setChecked(bool(getattr(n, "email_daily_report", True)))
                     self.n_tax_reports.setChecked(bool(getattr(n, "email_tax_reports", True)))
+                    self.n_report_time.setText(getattr(n, "daily_report_time", "08:00"))
             except Exception:
                 pass
 
@@ -890,9 +929,10 @@ class SystemSettingsWidget(QWidget):
                     n.smtp_use_tls   = self.n_smtp_tls.isChecked()
                     n.email_from     = self.n_email_from.text()
                     n.email_to       = self.n_email_to.text()
-                    n.email_trade_alerts = self.n_trade_alerts.isChecked()
-                    n.email_daily_report = self.n_daily_report.isChecked()
-                    n.email_tax_reports  = self.n_tax_reports.isChecked()
+                    n.email_trade_alerts   = self.n_trade_alerts.isChecked()
+                    n.email_daily_report   = self.n_daily_report.isChecked()
+                    n.email_tax_reports    = self.n_tax_reports.isChecked()
+                    n.daily_report_time    = self.n_report_time.text().strip() or "08:00"
             except Exception:
                 pass
 

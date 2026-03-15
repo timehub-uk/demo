@@ -290,6 +290,13 @@ def build_services(settings):
     from alerts.email_notifier import get_email_notifier
     email_notifier = get_email_notifier()
 
+    intel.system("Startup", "Initialising daily report scheduler…")
+    from alerts.daily_scheduler import get_daily_scheduler
+    daily_scheduler = get_daily_scheduler(
+        email_notifier=email_notifier,
+        trade_journal=None,   # wired after trade_journal is built below
+    )
+
     intel.system("Startup", "Initialising new token launch watcher…")
     from ml.new_token_watcher import NewTokenWatcher
     new_token_watcher = NewTokenWatcher(binance_client=binance)
@@ -331,6 +338,7 @@ def build_services(settings):
     intel.system("Startup", "Initialising trade journal…")
     from core.trade_journal import TradeJournal
     trade_journal = TradeJournal(ensemble=ensemble, dynamic_risk=dynamic_risk)
+    daily_scheduler._journal = trade_journal   # wire journal now that it is built
 
     intel.system("Startup", "Initialising market pulse monitor…")
     from ml.market_pulse import MarketPulse
@@ -641,6 +649,7 @@ def build_services(settings):
         "discord":             discord,
         "slack":               slack,
         "email_notifier":      email_notifier,
+        "daily_scheduler":     daily_scheduler,
     }
 
 
@@ -781,6 +790,12 @@ def start_background_services(services: dict, settings) -> None:
         slack_ref.start()
     if email_ref:
         email_ref.start()
+
+    # Daily report scheduler (error digest + trade P&L statement)
+    daily_sched = services.get("daily_scheduler")
+    if daily_sched:
+        daily_sched.start()
+        intel.system("Startup", "Daily report scheduler started (error digest + trade statement)")
 
     # Wire trade alerts → voice + telegram + discord + slack + email
     engine_ref = engine

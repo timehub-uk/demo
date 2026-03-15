@@ -100,6 +100,7 @@ class NotificationsConfig(BaseModel):
     email_trade_alerts: bool = False
     email_daily_report: bool = True
     email_tax_reports: bool = True
+    daily_report_time: str = "08:00"    # HH:MM UTC – when daily reports are sent
 
 
 class MLConfig(BaseModel):
