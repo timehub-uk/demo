@@ -378,19 +378,41 @@ class NavSidebar(QFrame):
             f"NavSidebar {{ background:{BG0}; border-right:1px solid {BORDER}; }}"
         )
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 8, 0, 8)
-        layout.setSpacing(2)
-        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        # Build buttons in a plain container so they can scroll
+        container = QWidget()
+        container.setStyleSheet(f"background:{BG0};")
+        btn_layout = QVBoxLayout(container)
+        btn_layout.setContentsMargins(0, 8, 0, 8)
+        btn_layout.setSpacing(2)
+        btn_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self._buttons: list[NavButton] = []
         for idx, icon, label in _NAV_ITEMS:
             btn = NavButton(idx, icon, label)
             btn.clicked_index.connect(self._on_nav)
-            layout.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
+            btn_layout.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
             self._buttons.append(btn)
 
-        layout.addStretch()
+        btn_layout.addStretch()
+
+        # Wrap in a scroll area so all buttons stay reachable on small screens
+        from PyQt6.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidget(container)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            f"QScrollBar:vertical {{ background:{BG1}; width:4px; }}"
+            f"QScrollBar::handle:vertical {{ background:{BORDER2}; border-radius:2px; }}"
+        )
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(scroll)
 
     def _on_nav(self, index: int) -> None:
         for btn in self._buttons:
@@ -423,9 +445,10 @@ class MultiChartPanel(QWidget):
         "ATR", "Stochastic", "Ichimoku Cloud",
     ]
 
-    def __init__(self, default_symbols: list[str], parent=None) -> None:
+    def __init__(self, default_symbols: list[str], forecast_tracker=None, parent=None) -> None:
         super().__init__(parent)
         self._default_symbols = default_symbols
+        self._forecast_tracker = forecast_tracker
         self._chart_widgets: dict[str, QWidget] = {}
         self._active_overlays: set[str] = {"EMA 20", "EMA 50", "Volume Profile"}
         self._setup_ui()
@@ -486,6 +509,19 @@ class MultiChartPanel(QWidget):
         add_btn.clicked.connect(self._prompt_add_tab)
         ctl.addWidget(add_btn)
 
+        ctl.addWidget(_vsep())
+
+        # Fullscreen / pop-out button
+        fs_btn = QPushButton("⛶")
+        fs_btn.setFixedSize(28, 28)
+        fs_btn.setToolTip("Pop chart out to fullscreen  (double-click tab title)")
+        fs_btn.setStyleSheet(
+            f"background:{BG4}; border:1px solid {BORDER}; border-radius:4px;"
+            f" color:{FG1}; font-size:14px;"
+        )
+        fs_btn.clicked.connect(self._open_fullscreen)
+        ctl.addWidget(fs_btn)
+
         ctl.addStretch()
 
         # Current symbol label
@@ -504,6 +540,10 @@ class MultiChartPanel(QWidget):
         self.chart_tabs.setMovable(True)
         self.chart_tabs.tabCloseRequested.connect(self._close_tab)
         self.chart_tabs.currentChanged.connect(self._on_tab_changed)
+        # Double-click on any chart tab title → fullscreen pop-out
+        self.chart_tabs.tabBar().tabBarDoubleClicked.connect(
+            lambda _idx: self._open_fullscreen()
+        )
         layout.addWidget(self.chart_tabs, 1)
 
         # Load first 4 default symbols
@@ -621,6 +661,22 @@ class MultiChartPanel(QWidget):
     def set_symbol(self, symbol: str) -> None:
         self._add_chart_tab(symbol)
 
+    def _open_fullscreen(self) -> None:
+        """Pop the current chart out into a maximised floating window."""
+        from PyQt6.QtWidgets import QDialog
+        sym = self.current_symbol()
+        dlg = QDialog(self.window(), Qt.WindowType.Window)
+        dlg.setWindowTitle(f"Chart – {sym}  (close to return)")
+        dlg.setStyleSheet(f"background:{BG0};")
+        dlg_layout = QVBoxLayout(dlg)
+        dlg_layout.setContentsMargins(0, 0, 0, 0)
+        inner = MultiChartPanel(self._default_symbols, self._forecast_tracker)
+        # Switch to the same symbol that is currently visible
+        inner.set_symbol(sym)
+        dlg_layout.addWidget(inner)
+        dlg.showMaximized()
+        dlg.exec()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TRADING PAGE
@@ -631,24 +687,51 @@ class TradingPage(QWidget):
     cancel_requested = pyqtSignal(str, str)
     symbol_changed   = pyqtSignal(str)
 
-    def __init__(self, default_symbols: list[str], parent=None) -> None:
+    def __init__(self, default_symbols: list[str], forecast_tracker=None, parent=None) -> None:
         super().__init__(parent)
         self._default_symbols = default_symbols
+        self._forecast_tracker = forecast_tracker
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        outer = QSplitter(Qt.Orientation.Horizontal)
+        # ── Two-tab layout: Chart (full-width) | Trading controls ─────
+        self._main_tabs = QTabWidget()
+        self._main_tabs.setStyleSheet(f"""
+            QTabWidget::pane {{ border:none; }}
+            QTabBar::tab {{
+                background:{BG1}; color:{FG2}; padding:6px 18px;
+                border:1px solid {BORDER}; border-bottom:none;
+                font-size:11px; font-weight:600; letter-spacing:1px;
+            }}
+            QTabBar::tab:selected {{ background:{BG3}; color:{ACCENT}; border-color:{ACCENT2}; }}
+            QTabBar::tab:hover    {{ color:{FG0}; }}
+        """)
+        layout.addWidget(self._main_tabs)
 
-        # Left: multi-chart
-        self.chart_panel = MultiChartPanel(self._default_symbols)
+        # ── Tab 1: Chart (full width) ──────────────────────────────────
+        chart_tab = QWidget()
+        chart_tab.setStyleSheet(f"background:{BG0};")
+        chart_layout = QVBoxLayout(chart_tab)
+        chart_layout.setContentsMargins(0, 0, 0, 0)
+        chart_layout.setSpacing(0)
+
+        self.chart_panel = MultiChartPanel(
+            self._default_symbols, forecast_tracker=self._forecast_tracker
+        )
         self.chart_panel.symbol_changed.connect(self.symbol_changed)
-        outer.addWidget(self.chart_panel)
+        chart_layout.addWidget(self.chart_panel)
+        self._main_tabs.addTab(chart_tab, "📊  Chart")
 
-        # Right: order book + trading panel
+        # ── Tab 2: Trading controls ────────────────────────────────────
+        controls_tab = QWidget()
+        controls_layout = QHBoxLayout(controls_tab)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(0)
+
         right_split = QSplitter(Qt.Orientation.Vertical)
 
         from ui.orderbook_widget import OrderBookWidget
@@ -662,11 +745,19 @@ class TradingPage(QWidget):
         right_split.addWidget(self.trading_panel)
         right_split.setSizes([300, 420])
 
-        outer.addWidget(right_split)
-        outer.setSizes([1000, 420])
-        layout.addWidget(outer)
+        controls_layout.addWidget(right_split)
+        self._main_tabs.addTab(controls_tab, "⚡  Trading")
 
         self.symbol_changed.connect(self.orderbook.set_symbol)
+
+        # Double-click the "Chart" tab title → pop chart out fullscreen
+        self._main_tabs.tabBar().tabBarDoubleClicked.connect(
+            self._on_tab_double_clicked
+        )
+
+    def _on_tab_double_clicked(self, index: int) -> None:
+        if index == 0:
+            self.chart_panel._open_fullscreen()
 
     def update_pnl(self, metrics: dict) -> None:
         self.trading_panel.update_pnl(metrics)
@@ -1167,7 +1258,9 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.intel_dock)
 
     def _build_trading_page(self) -> None:
-        self.trading_page = TradingPage(self._active_symbols)
+        self.trading_page = TradingPage(
+            self._active_symbols, forecast_tracker=self._forecast_tracker
+        )
         self.trading_page.order_submitted.connect(self._on_order_submitted)
         self.trading_page.cancel_requested.connect(self._on_cancel_requested)
         self.trading_page.symbol_changed.connect(self._on_symbol_changed)
