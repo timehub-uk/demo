@@ -357,16 +357,32 @@ def _upsert_to_db(symbol: str, interval: str, df: pd.DataFrame) -> int:
         from db.models import TokenMetrics
         from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+        # PostgreSQL accepts timestamps in the range 4713 BC – 5874897 AD.
+        # Clamp to Binance's practical epoch (2017-07-14 → 2100-01-01) so
+        # any timestamp that slipped past _parse_csv_to_df's filter is
+        # silently dropped here rather than aborting the entire upsert.
+        _DB_MIN = datetime(2017, 7, 14, tzinfo=timezone.utc)
+        _DB_MAX = datetime(2100, 1, 1, tzinfo=timezone.utc)
+
         records = []
         for _, row in df.iterrows():
             def _f(col):
                 v = row.get(col)
                 return float(v) if v is not None and not (isinstance(v, float) and np.isnan(v)) else None
 
+            ot = row["open_time"]
+            # Normalise to a timezone-aware Python datetime
+            if hasattr(ot, "to_pydatetime"):
+                ot = ot.to_pydatetime()
+            if ot.tzinfo is None:
+                ot = ot.replace(tzinfo=timezone.utc)
+            if not (_DB_MIN <= ot <= _DB_MAX):
+                continue   # drop row with out-of-range timestamp
+
             records.append({
                 "symbol":                   symbol,
                 "interval":                 interval,
-                "open_time":                row["open_time"].to_pydatetime(),
+                "open_time":                ot,
                 "open":                     float(row["open"]),
                 "high":                     float(row["high"]),
                 "low":                      float(row["low"]),
@@ -427,7 +443,9 @@ def _export_csv(symbol: str, interval: str, df: pd.DataFrame) -> Path:
 
     if dest_file.exists():
         try:
-            existing = pd.read_csv(dest_file, parse_dates=["open_time"])
+            existing = pd.read_csv(dest_file)
+            # Explicit format avoids "Could not infer format" UserWarning from parse_dates=
+            existing["open_time"] = pd.to_datetime(existing["open_time"], format="mixed", utc=True)
             combined = pd.concat([existing, df], ignore_index=True)
             combined = (
                 combined.sort_values("open_time")

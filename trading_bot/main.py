@@ -37,7 +37,25 @@ def _configure_qt_platform() -> None:
     if not has_display:
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+    # Suppress Qt D-Bus theme warnings that flood stderr on systems where the
+    # session D-Bus is not running (e.g. SSH / headless / Wayland-only setups).
+    # These are cosmetic-only; they do not affect functionality.
+    rules = os.environ.get("QT_LOGGING_RULES", "")
+    dbus_rules = "qt.qpa.theme.dbus=false;qt.qpa.theme=false"
+    os.environ["QT_LOGGING_RULES"] = f"{rules};{dbus_rules}" if rules else dbus_rules
+
 _configure_qt_platform()
+
+# ── Suppress known benign DeprecationWarnings from third-party libraries ──────
+import warnings
+# redis-py ≥ 6.0 deprecates the retry_on_timeout kwarg (TimeoutError is now
+# included by default).  Any saved settings file from an older installation
+# may still pass it through; silence the warning rather than crashing.
+warnings.filterwarnings(
+    "ignore",
+    message=".*retry_on_timeout.*",
+    category=DeprecationWarning,
+)
 
 # ── Logging (before imports that use logger) ────────────────────────────────
 from utils.logger import setup_logger, get_intel_logger

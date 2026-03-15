@@ -81,7 +81,10 @@ class BinanceClient:
         self._api_secret = api_secret or settings.binance.api_secret
         self._testnet = testnet if api_key else settings.binance.testnet
         self._base = TESTNET_URL if self._testnet else BASE_URL
-        self._ws_base = WS_TESTNET if self._testnet else WS_BASE
+        # Market-data WebSocket streams are public and always use the
+        # production endpoint – the testnet WS does not support all symbols
+        # or stream types, causing Handshake 404 errors (e.g. depth20@100ms).
+        self._ws_base = WS_BASE
         self._session = requests.Session()
         self._session.headers.update({
             "X-MBX-APIKEY": self._api_key,

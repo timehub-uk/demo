@@ -107,6 +107,12 @@ class IntelLogWidget(QWidget):
     Subscribes to IntelLogger and updates the display on every new event.
     """
 
+    # Signal used to safely marshal log entries from any thread → UI thread.
+    # QTimer.singleShot() called from non-QThread threads triggers the
+    # "QBasicTimer can only be used with threads started with QThread" flood.
+    # A queued signal/slot connection is the correct cross-thread mechanism.
+    _new_entry_signal = pyqtSignal(object)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._intel = get_intel_logger()
@@ -115,6 +121,7 @@ class IntelLogWidget(QWidget):
         self._filter_level = "ALL"
         self._search_text = ""
         self._entry_count = 0
+        self._new_entry_signal.connect(self._append_entry)
         self._setup_ui()
         self._subscribe()
         self._populate_existing()
@@ -330,8 +337,8 @@ class IntelLogWidget(QWidget):
         self._intel.subscribe(self._on_new_entry)
 
     def _on_new_entry(self, entry: IntelLogEntry) -> None:
-        """Called from any thread – must queue to UI thread."""
-        QTimer.singleShot(0, lambda: self._append_entry(entry))
+        """Called from any thread – emit signal to queue onto UI thread."""
+        self._new_entry_signal.emit(entry)
 
     # ── Entry rendering ─────────────────────────────────────────────────
     def _append_entry(self, entry: IntelLogEntry) -> None:
