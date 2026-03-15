@@ -24,7 +24,7 @@ from db.redis_client import RedisClient
 BASE_URL    = "https://api.binance.com"
 TESTNET_URL = "https://testnet.binance.vision"
 WS_BASE     = "wss://stream.binance.com:9443/ws"
-WS_TESTNET  = "wss://testnet.binance.vision/ws"
+WS_TESTNET  = "wss://stream.testnet.binance.vision/ws"
 
 _MAX_RETRIES   = 3     # Max retries on transient network / timeout errors
 _RETRY_BACKOFF = 1.0   # Initial backoff seconds (doubles each retry)

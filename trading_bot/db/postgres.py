@@ -1,25 +1,35 @@
 """
 PostgreSQL connection manager using SQLAlchemy 2.x async + sync sessions.
 Includes connection pooling tuned for Apple Silicon.
+Falls back to SQLite automatically when PostgreSQL is unavailable or
+credentials are not configured.
 """
 
 from __future__ import annotations
 
+import os
 import threading
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Generator
 
 from loguru import logger
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.pool import QueuePool, StaticPool
 
 from .models import Base
 
 _lock = threading.Lock()
 _engine = None
 _SessionLocal = None
+_using_sqlite = False
+
+
+def is_sqlite() -> bool:
+    """Return True if the active engine is SQLite (fallback mode)."""
+    return _using_sqlite
 
 
 def _is_auth_error(exc: Exception) -> bool:
@@ -115,6 +125,48 @@ def init_db(db_url: str, pool_size: int = 10, max_overflow: int = 20) -> None:
             expire_on_commit=False,
         )
         logger.info("PostgreSQL connected and tables created.")
+
+
+def init_sqlite(db_path: str | None = None) -> None:
+    """
+    Initialise a SQLite engine as a fallback when PostgreSQL is unavailable.
+    All ORM tables are created in the local file; no credentials required.
+    """
+    global _engine, _SessionLocal, _using_sqlite
+
+    with _lock:
+        if _engine is not None:
+            return
+
+        if db_path is None:
+            # Default: store alongside the trading_bot package
+            data_dir = Path(__file__).parent.parent / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            db_path = str(data_dir / "binanceml_local.db")
+
+        sqlite_url = f"sqlite:///{db_path}"
+        _engine = create_engine(
+            sqlite_url,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+            echo=False,
+        )
+
+        # Enable WAL mode for better concurrency with SQLite
+        @event.listens_for(_engine, "connect")
+        def set_wal_mode(dbapi_conn, conn_record):
+            dbapi_conn.execute("PRAGMA journal_mode=WAL")
+            dbapi_conn.execute("PRAGMA foreign_keys=ON")
+
+        Base.metadata.create_all(_engine)
+        _SessionLocal = sessionmaker(
+            bind=_engine,
+            autocommit=False,
+            autoflush=False,
+            expire_on_commit=False,
+        )
+        _using_sqlite = True
+        logger.info(f"SQLite fallback active – local DB at {db_path}")
 
 
 @contextmanager

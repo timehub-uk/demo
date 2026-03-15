@@ -85,8 +85,14 @@ def init_databases() -> tuple[bool, str]:
         )
         intel.system("Startup", "PostgreSQL connected.")
     except Exception as exc:
-        logger.warning(f"PostgreSQL unavailable ({exc}) – running in offline mode")
-        intel.warning("Startup", f"PostgreSQL unavailable: {exc} – offline mode")
+        logger.warning(f"PostgreSQL unavailable ({exc}) – switching to SQLite")
+        intel.warning("Startup", "PostgreSQL unavailable – using local SQLite database")
+        try:
+            from db.postgres import init_sqlite
+            init_sqlite()
+        except Exception as sqlite_exc:
+            logger.error(f"SQLite fallback also failed: {sqlite_exc}")
+            intel.warning("Startup", f"Database unavailable: {sqlite_exc}")
 
     try:
         from db.redis_client import init_redis
@@ -125,9 +131,14 @@ def _init_postgres_with_retry(app, settings) -> bool:
 
         except Exception as exc:
             if not _is_auth_error(exc):
-                # Network error, server down etc. — fall through to offline mode
-                logger.warning(f"PostgreSQL unavailable ({exc}) – offline mode")
-                intel.warning("Startup", f"PostgreSQL unavailable: {exc}")
+                # Network error, server down etc. — fall back to SQLite
+                logger.warning(f"PostgreSQL unavailable ({exc}) – switching to SQLite")
+                intel.warning("Startup", "PostgreSQL unavailable – using local SQLite database")
+                try:
+                    from db.postgres import init_sqlite
+                    init_sqlite()
+                except Exception as sqlite_exc:
+                    logger.error(f"SQLite fallback also failed: {sqlite_exc}")
                 return False
 
             # Auth/privilege failure → ask the user for credentials
@@ -152,7 +163,13 @@ def _init_postgres_with_retry(app, settings) -> bool:
             settings.database.password = new_pass
             settings.save()
 
-    logger.warning("PostgreSQL: max credential attempts reached – offline mode.")
+    logger.warning("PostgreSQL: max credential attempts reached – switching to SQLite")
+    intel.warning("Startup", "PostgreSQL credentials failed – using local SQLite database")
+    try:
+        from db.postgres import init_sqlite
+        init_sqlite()
+    except Exception as sqlite_exc:
+        logger.error(f"SQLite fallback also failed: {sqlite_exc}")
     return False
 
 

@@ -15,7 +15,7 @@ from sqlalchemy import (
     Numeric, String, Text, ForeignKey, Enum, JSON, LargeBinary,
     UniqueConstraint, func
 )
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.types import Uuid
 from sqlalchemy.orm import DeclarativeBase, relationship, Mapped, mapped_column
 
 
@@ -26,7 +26,8 @@ class Base(DeclarativeBase):
 # ── Helper ────────────────────────────────────────────────────────────────────
 
 def uuid_pk():
-    return Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # sqlalchemy.types.Uuid works with both PostgreSQL and SQLite
+    return Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
 def now_utc():
     return Column(DateTime(timezone=True), default=func.now(), nullable=False)
@@ -53,7 +54,7 @@ class ApiCredential(Base):
     __tablename__ = "api_credentials"
 
     id = uuid_pk()
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
     service = Column(String(50), nullable=False)   # binance | claude | openai | …
     encrypted_key = Column(Text, nullable=False)
     encrypted_secret = Column(Text)
@@ -66,7 +67,7 @@ class Portfolio(Base):
     __tablename__ = "portfolios"
 
     id = uuid_pk()
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
     asset = Column(String(20), nullable=False)
     free = Column(Numeric(30, 12), default=0)
     locked = Column(Numeric(30, 12), default=0)
@@ -81,10 +82,10 @@ class Trade(Base):
     __tablename__ = "trades"
 
     id = uuid_pk()
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
     binance_order_id = Column(String(40), unique=True)
     symbol = Column(String(20), nullable=False, index=True)
-    side = Column(Enum("BUY", "SELL", name="trade_side"), nullable=False)
+    side = Column(Enum("BUY", "SELL", name="trade_side", create_constraint=False), nullable=False)
     order_type = Column(String(20), default="LIMIT")
     status = Column(String(20), default="OPEN")          # OPEN|FILLED|CANCELLED|PARTIAL
 
@@ -127,11 +128,11 @@ class Order(Base):
     __tablename__ = "orders"
 
     id = uuid_pk()
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
-    trade_id = Column(UUID(as_uuid=True), ForeignKey("trades.id", ondelete="SET NULL"), nullable=True)
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    trade_id = Column(Uuid(as_uuid=True), ForeignKey("trades.id", ondelete="SET NULL"), nullable=True)
     binance_order_id = Column(String(40), unique=True)
     symbol = Column(String(20), nullable=False, index=True)
-    side = Column(Enum("BUY", "SELL", name="order_side"), nullable=False)
+    side = Column(Enum("BUY", "SELL", name="order_side", create_constraint=False), nullable=False)
     order_type = Column(String(20), default="LIMIT")
     status = Column(String(20), default="NEW")
     quantity = Column(Numeric(30, 12))
@@ -197,8 +198,8 @@ class MLModel(Base):
     total_trades_tested = Column(Integer)
     training_hours = Column(Float)
     model_path = Column(Text)
-    hyperparams = Column(JSONB)
-    metrics = Column(JSONB)
+    hyperparams = Column(JSON)
+    metrics = Column(JSON)
     is_active = Column(Boolean, default=False)
     created_at = now_utc()
 
@@ -207,7 +208,7 @@ class TrainingSession(Base):
     __tablename__ = "training_sessions"
 
     id = uuid_pk()
-    ml_model_id = Column(UUID(as_uuid=True), ForeignKey("ml_models.id", ondelete="CASCADE"), nullable=True)
+    ml_model_id = Column(Uuid(as_uuid=True), ForeignKey("ml_models.id", ondelete="CASCADE"), nullable=True)
     status = Column(String(20), default="PENDING")       # PENDING|RUNNING|COMPLETE|FAILED
     stage = Column(String(60))
     progress_pct = Column(Float, default=0.0)
@@ -227,7 +228,7 @@ class TaxRecord(Base):
     __tablename__ = "tax_records"
 
     id = uuid_pk()
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
     tax_year = Column(String(10), nullable=False, index=True)    # 2024/25
     month = Column(Integer)                                       # 1-12
     year = Column(Integer)
@@ -242,7 +243,7 @@ class TaxRecord(Base):
     estimated_tax_basic = Column(Numeric(20, 8), default=0)
     estimated_tax_higher = Column(Numeric(20, 8), default=0)
 
-    section_104_data = Column(JSONB)                              # Pool cost basis
+    section_104_data = Column(JSON)                              # Pool cost basis
     report_path = Column(Text)
     email_sent_at = Column(DateTime(timezone=True))
     created_at = now_utc()
@@ -356,7 +357,7 @@ class Alert(Base):
     __tablename__ = "alerts"
 
     id = uuid_pk()
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
     alert_type = Column(String(30))         # PRICE|ML_SIGNAL|PORTFOLIO|TAX|SYSTEM
     symbol = Column(String(20))
     message = Column(Text, nullable=False)

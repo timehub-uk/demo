@@ -1441,6 +1441,109 @@ class MainWindow(QMainWindow):
         self.nav.set_active(0)
         self._intel.system("MainWindow", "BinanceML Pro trading desk ready.")
 
+        # Check Binance API key and show setup prompt if missing
+        self._binance_api_ignored = False
+        self._apply_api_nav_state()
+        QTimer.singleShot(800, self._check_binance_api)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Binance API key guard
+    # ──────────────────────────────────────────────────────────────────
+
+    def _apply_api_nav_state(self) -> None:
+        """Grey out pages that require a Binance API key when none is configured."""
+        has_key = bool(self._settings.binance.api_key)
+        # Pages requiring live authenticated Binance access
+        for page_idx in (0, 1):   # Trading Panel, AutoTrader
+            self.nav.set_nav_disabled(page_idx, not has_key)
+
+    def _check_binance_api(self) -> None:
+        """Show a one-time prompt if Binance API keys are not configured."""
+        if self._binance_api_ignored:
+            return
+        if self._settings.binance.api_key:
+            return
+
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QVBoxLayout, QLabel
+        from PyQt6.QtCore import Qt
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Binance API Key Not Set")
+        dlg.setMinimumWidth(420)
+        dlg.setStyleSheet(
+            f"QDialog {{ background:{BG2}; color:{FG0}; border:1px solid {BORDER}; border-radius:8px; }}"
+            f"QLabel {{ color:{FG1}; font-size:12px; }}"
+        )
+
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 20, 24, 20)
+
+        icon_row = QHBoxLayout()
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(svg_pixmap("bolt", YELLOW, 28))
+        icon_lbl.setFixedSize(32, 32)
+        icon_row.addWidget(icon_lbl)
+        title_lbl = QLabel("No Binance API Key Configured")
+        title_lbl.setStyleSheet(f"color:{FG0}; font-size:14px; font-weight:700;")
+        icon_row.addWidget(title_lbl)
+        icon_row.addStretch()
+        layout.addLayout(icon_row)
+
+        msg = QLabel(
+            "Live trading, portfolio data and order management are <b>disabled</b> "
+            "until a Binance API key is provided.<br><br>"
+            "You can continue in read-only / ML-only mode, or open Settings to "
+            "add your Binance API key now."
+        )
+        msg.setWordWrap(True)
+        msg.setStyleSheet(f"color:{FG2}; font-size:11px;")
+        layout.addWidget(msg)
+
+        btns = QDialogButtonBox()
+        ignore_btn = btns.addButton("Ignore", QDialogButtonBox.ButtonRole.RejectRole)
+        setup_btn  = btns.addButton("Open Settings", QDialogButtonBox.ButtonRole.AcceptRole)
+        ignore_btn.setStyleSheet(
+            f"QPushButton {{ background:{BG4}; color:{FG2}; border:1px solid {BORDER}; "
+            f"border-radius:4px; padding:6px 16px; font-size:11px; }}"
+            f"QPushButton:hover {{ color:{FG0}; border-color:{BORDER2}; }}"
+        )
+        setup_btn.setStyleSheet(
+            f"QPushButton {{ background:{ACCENT}; color:#000; border:none; "
+            f"border-radius:4px; padding:6px 16px; font-size:11px; font-weight:700; }}"
+            f"QPushButton:hover {{ background:{ACCENT2}; }}"
+        )
+        layout.addWidget(btns)
+
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+
+        result = dlg.exec()
+        if result == QDialog.DialogCode.Accepted:
+            # Navigate to Settings page (index 8) and select the Binance tab
+            self._navigate_to(8)
+            try:
+                settings_widget = self.stack.widget(8)
+                if hasattr(settings_widget, "tabs"):
+                    settings_widget.tabs.setCurrentIndex(0)  # Binance tab is first
+            except Exception:
+                pass
+        else:
+            # User chose to ignore — suppress future API error toasts for portfolio
+            self._binance_api_ignored = True
+            self._intel.warning(
+                "MainWindow",
+                "Binance API key not set – live trading disabled. "
+                "Go to Settings → Binance to configure."
+            )
+
+    def _on_settings_saved(self) -> None:
+        """Called when settings are saved – re-evaluate API nav state."""
+        self._settings = get_settings()
+        self._apply_api_nav_state()
+        if self._settings.binance.api_key:
+            self._binance_api_ignored = False
+
     # ──────────────────────────────────────────────────────────────────
     # UI
     # ──────────────────────────────────────────────────────────────────
@@ -2031,6 +2134,7 @@ class MainWindow(QMainWindow):
                 pass
 
         sys_settings.settings_saved.connect(_on_settings_saved)
+        sys_settings.settings_saved.connect(self._on_settings_saved)
         tabs.addTab(sys_settings, "⚙  System")
 
         # Layers configuration panel
@@ -2278,6 +2382,11 @@ class MainWindow(QMainWindow):
         """Called by IntelLogger from any thread; surfaces ERROR/WARNING as toasts
         and flashes the nav icon for the source panel."""
         if entry.level in ("ERROR", "WARNING"):
+            # Suppress portfolio/auth errors when the user has ignored the missing key
+            if getattr(self, "_binance_api_ignored", False):
+                msg_lower = entry.message.lower()
+                if "portfolio refresh" in msg_lower or "401" in msg_lower or "unauthorized" in msg_lower:
+                    return
             self._toast_signal.emit(entry.message[:160], entry.level)
             # Flash the nav icon for the relevant panel (best-effort source match)
             src = getattr(entry, "source", "").lower().replace(" ", "_")

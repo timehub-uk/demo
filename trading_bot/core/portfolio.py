@@ -63,12 +63,13 @@ class PortfolioManager:
     # ── Public API ─────────────────────────────────────────────────────
     def refresh(self) -> PortfolioSnapshot:
         """Fetch live balances from Binance and update snapshot."""
+        if not self._client or not self._settings.binance.api_key:
+            return self._snapshot
         try:
-            if self._client:
-                balances = self._client.get_balances()
-                self._update_from_balances(balances)
-                self._gbp_rate = self._get_gbp_rate()
-                self._compute_snapshot()
+            balances = self._client.get_balances()
+            self._update_from_balances(balances)
+            self._gbp_rate = self._get_gbp_rate()
+            self._compute_snapshot()
         except Exception as exc:
             logger.error(f"Portfolio refresh error: {exc}")
         return self._snapshot
