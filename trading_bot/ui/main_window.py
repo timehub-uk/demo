@@ -32,6 +32,8 @@ from PyQt6.QtWidgets import (
     QTabWidget, QInputDialog,
 )
 
+from loguru import logger
+
 from config import get_settings
 from utils.logger import get_intel_logger
 from ui.styles import (
@@ -68,14 +70,19 @@ _PANEL_HELP: dict[int, tuple[str, str]] = {
         "• FULL_AUTO: executes automatically when confidence ≥ threshold\n"
         "• Top-5 Profit and Top-5 R:R tables from market scan\n"
         "• Active Trade panel with live P&L vs SL/TP levels\n"
-        "• Cooldown 15 min after stop-loss, circuit breaker guard"),
+        "• Cooldown 15 min after stop-loss, circuit breaker guard\n"
+        "• Ping-Pong range trader, Strategy Manager, Arbitrage detector\n"
+        "• Alert log for all system-generated events\n"
+        "• ML signal scanners → see 'ML Tools' panel (Ctrl+Shift+M)"),
     2: ("ML Training",
-        "LSTM + Transformer model training and live signal feed.\n\n"
-        "• Start/Stop 48-hour full training session\n"
-        "• Continuous Learner retrains every 24 hours automatically\n"
-        "• Per-token models trained for each USDT pair\n"
-        "• Live signal stream with confidence scores\n"
-        "• Whale detection and sentiment analysis feeds"),
+        "LSTM + Transformer model training, progress monitoring and live signals.\n\n"
+        "• Start/Stop 48-hour full training session  (Ctrl+T / Ctrl+Shift+T)\n"
+        "• 3-phase progress: archive download → gap-fill → per-token fine-tuning\n"
+        "• Continuous Learner auto-retrains every 24 hours\n"
+        "• Loss and accuracy charts updated in real time\n"
+        "• Live inference signal stream with confidence scores\n"
+        "• Whale activity and sentiment feeds\n"
+        "• See 'ML Tools' panel (Ctrl+Shift+M) for scanners and detectors"),
     3: ("Risk Dashboard",
         "Dynamic risk and portfolio analytics.\n\n"
         "• Circuit breaker: fires at −5% daily drawdown\n"
@@ -140,6 +147,17 @@ _PANEL_HELP: dict[int, tuple[str, str]] = {
         "• Quarterly: Q1–Q4 bar chart, Sharpe estimate, month-by-month table\n"
         "• Ad-Hoc:    custom date range, full/P&L/attribution/forecast/risk/tax\n"
         "• Shortcut: F2"),
+    13: ("ML Tools",
+        "ML-powered market analysis tools and signal scanners.  Shortcut: Ctrl+Shift+M\n\n"
+        "• ML Central Command — unified ranked signal pipeline from all ML sources\n"
+        "• Trends — multi-timeframe trend strength and direction\n"
+        "• Pairs — 1000+ pair ranking by ML tradability score\n"
+        "• Accumulation — stealth accumulation stage detector (NONE/WATCH/ALERT/STRONG)\n"
+        "• Liquidity — order-book depth grades per symbol\n"
+        "• Breakouts — 4-stage volume breakout tracker (LAUNCH→PUMP→CONSOLIDATION→BREAKOUT)\n"
+        "• Gaps — price gap detection with mean-reversion signals\n"
+        "• Candles — large rapid candle expansion alerts\n"
+        "• Icebergs — hidden order detection (ICEBERG_PARTS=100)"),
     12: ("Market Watch",
         "Unified real-time market surveillance dashboard.  Shortcut: Ctrl+Shift+W\n\n"
         "Toggle bar — each service can be enabled / disabled independently:\n"
@@ -389,7 +407,8 @@ _NAV_ITEMS = [
     (9,  "help",         "Help"),
     (10, "simulation",   "Simulation"),
     (11, "reports",      "Reports"),
-    (12, "ml",           "Market Watch"),
+    (12, "scan",         "Market Watch"),
+    (13, "ml",           "ML Tools"),
 ]
 
 
@@ -1268,6 +1287,7 @@ class MainWindow(QMainWindow):
         self._build_simulation_page()    # 10
         self._build_reports_page()       # 11
         self._build_market_watch_page()  # 12
+        self._build_ml_tools_page()      # 13
 
         # Toast notification overlay (floats over the window)
         self._toast = ToastOverlay(central)
@@ -1355,17 +1375,6 @@ class MainWindow(QMainWindow):
             tabs.addTab(self.at_widget,    "🤖  AutoTrader")
             tabs.addTab(self.alert_widget, "🔔  Alerts")
 
-            # ML Central Command tab (unified signal pipeline — first intelligence tab)
-            try:
-                from ui.ml_central_command_widget import MLCentralCommandWidget
-                self.ml_central_widget = MLCentralCommandWidget(
-                    central_command=self._ml_central,
-                )
-                self.ml_central_widget.symbol_selected.connect(self._on_symbol_changed)
-                tabs.addTab(self.ml_central_widget, "⚡  ML Command")
-            except Exception:
-                pass
-
             # Ping-Pong range trader tab
             try:
                 from ui.ping_pong_widget import PingPongWidget
@@ -1392,95 +1401,6 @@ class MainWindow(QMainWindow):
                     arbitrage_trader=self._arb_trader,
                 )
                 tabs.addTab(self.arb_widget, "⚡  Arbitrage")
-            except Exception:
-                pass
-
-            # Multi-timeframe trend scanner tab
-            try:
-                from ui.trend_widget import TrendWidget
-                self.trend_widget = TrendWidget(
-                    trend_scanner=self._trend_scanner,
-                )
-                # Forward double-click → chart follows symbol
-                self.trend_widget.symbol_selected.connect(self._on_symbol_changed)
-                tabs.addTab(self.trend_widget, "📈  Trends")
-            except Exception:
-                pass
-
-            # Pair discovery scanner tab
-            try:
-                from ui.pair_scanner_widget import PairScannerWidget
-                self.pair_scanner_widget = PairScannerWidget(
-                    pair_scanner=self._pair_scanner,
-                    arb_detector=self._arb_detector,
-                    trend_scanner=self._trend_scanner,
-                    pair_ml_analyzer=self._pair_ml_analyzer,
-                )
-                self.pair_scanner_widget.symbol_selected.connect(self._on_symbol_changed)
-                tabs.addTab(self.pair_scanner_widget, "🔍  Pairs")
-            except Exception:
-                pass
-
-            # Stealth accumulation detector tab
-            try:
-                from ui.accumulation_widget import AccumulationWidget
-                self.accumulation_widget = AccumulationWidget(
-                    accumulation_detector=self._accumulation_detector,
-                )
-                tabs.addTab(self.accumulation_widget, "🕵  Accumulation")
-            except Exception:
-                pass
-
-            # Liquidity depth analyzer tab
-            try:
-                from ui.liquidity_widget import LiquidityWidget
-                self.liquidity_widget = LiquidityWidget(
-                    liquidity_analyzer=self._liquidity_analyzer,
-                )
-                tabs.addTab(self.liquidity_widget, "💧  Liquidity")
-            except Exception:
-                pass
-
-            # Volume breakout detector tab
-            try:
-                from ui.breakout_widget import BreakoutWidget
-                self.breakout_widget = BreakoutWidget(
-                    breakout_detector=self._breakout_detector,
-                )
-                tabs.addTab(self.breakout_widget, "💥  Breakouts")
-            except Exception:
-                pass
-
-            # Gap detector tab (gap down = BUY mean-reversion fill, gap up = WATCH)
-            try:
-                from ui.gap_detector_widget import GapDetectorWidget
-                self.gap_detector_widget = GapDetectorWidget(
-                    gap_detector=self._gap_detector,
-                )
-                self.gap_detector_widget.symbol_selected.connect(self._on_symbol_changed)
-                tabs.addTab(self.gap_detector_widget, "↕  Gaps")
-            except Exception:
-                pass
-
-            # Large candle watch tab (rapid candle expansion alerts)
-            try:
-                from ui.large_candle_widget import LargeCandleWidget
-                self.large_candle_widget = LargeCandleWidget(
-                    large_candle_watcher=self._large_candle_watcher,
-                )
-                self.large_candle_widget.symbol_selected.connect(self._on_symbol_changed)
-                tabs.addTab(self.large_candle_widget, "🕯  Candles")
-            except Exception:
-                pass
-
-            # Iceberg detector tab (hidden order discovery — ICEBERG_PARTS=100)
-            try:
-                from ui.iceberg_widget import IcebergWidget
-                self.iceberg_widget = IcebergWidget(
-                    iceberg_detector=self._iceberg_detector,
-                )
-                self.iceberg_widget.symbol_selected.connect(self._on_symbol_changed)
-                tabs.addTab(self.iceberg_widget, "🧊  Icebergs")
             except Exception:
                 pass
 
@@ -1628,6 +1548,123 @@ class MainWindow(QMainWindow):
             logger.warning(f"Market Watch page unavailable: {exc}")
             self.market_watch_page = _placeholder("Market Watch", f"Not available: {exc}")
         self.stack.addWidget(self.market_watch_page)
+
+    def _build_ml_tools_page(self) -> None:
+        """ML Tools – index 13. All ML-powered scanner and detector tabs."""
+        _tab_style = (
+            f"QTabWidget::pane {{ border:1px solid {BORDER}; background:{BG1}; }}"
+            f"QTabBar::tab {{ background:{BG2}; color:{FG2}; padding:6px 16px; "
+            f"border:1px solid {BORDER}; border-bottom:none; font-size:11px; }}"
+            f"QTabBar::tab:selected {{ background:{BG3}; color:{ACCENT}; "
+            f"border-color:{ACCENT}; font-weight:700; }}"
+            f"QTabBar::tab:hover {{ color:{FG0}; }}"
+        )
+        try:
+            tabs = QTabWidget()
+            tabs.setStyleSheet(_tab_style)
+
+            # ML Central Command — unified ranked signal pipeline
+            try:
+                from ui.ml_central_command_widget import MLCentralCommandWidget
+                self.ml_central_widget = MLCentralCommandWidget(
+                    central_command=self._ml_central,
+                )
+                self.ml_central_widget.symbol_selected.connect(self._on_symbol_changed)
+                tabs.addTab(self.ml_central_widget, "⚡  ML Command")
+            except Exception:
+                pass
+
+            # Multi-timeframe trend scanner
+            try:
+                from ui.trend_widget import TrendWidget
+                self.trend_widget = TrendWidget(trend_scanner=self._trend_scanner)
+                self.trend_widget.symbol_selected.connect(self._on_symbol_changed)
+                tabs.addTab(self.trend_widget, "📈  Trends")
+            except Exception:
+                pass
+
+            # Pair discovery scanner
+            try:
+                from ui.pair_scanner_widget import PairScannerWidget
+                self.pair_scanner_widget = PairScannerWidget(
+                    pair_scanner=self._pair_scanner,
+                    arb_detector=self._arb_detector,
+                    trend_scanner=self._trend_scanner,
+                    pair_ml_analyzer=self._pair_ml_analyzer,
+                )
+                self.pair_scanner_widget.symbol_selected.connect(self._on_symbol_changed)
+                tabs.addTab(self.pair_scanner_widget, "🔍  Pairs")
+            except Exception:
+                pass
+
+            # Stealth accumulation detector
+            try:
+                from ui.accumulation_widget import AccumulationWidget
+                self.accumulation_widget = AccumulationWidget(
+                    accumulation_detector=self._accumulation_detector,
+                )
+                tabs.addTab(self.accumulation_widget, "🕵  Accumulation")
+            except Exception:
+                pass
+
+            # Liquidity depth analyzer
+            try:
+                from ui.liquidity_widget import LiquidityWidget
+                self.liquidity_widget = LiquidityWidget(
+                    liquidity_analyzer=self._liquidity_analyzer,
+                )
+                tabs.addTab(self.liquidity_widget, "💧  Liquidity")
+            except Exception:
+                pass
+
+            # Volume breakout detector
+            try:
+                from ui.breakout_widget import BreakoutWidget
+                self.breakout_widget = BreakoutWidget(
+                    breakout_detector=self._breakout_detector,
+                )
+                tabs.addTab(self.breakout_widget, "💥  Breakouts")
+            except Exception:
+                pass
+
+            # Gap detector
+            try:
+                from ui.gap_detector_widget import GapDetectorWidget
+                self.gap_detector_widget = GapDetectorWidget(
+                    gap_detector=self._gap_detector,
+                )
+                self.gap_detector_widget.symbol_selected.connect(self._on_symbol_changed)
+                tabs.addTab(self.gap_detector_widget, "↕  Gaps")
+            except Exception:
+                pass
+
+            # Large candle watch
+            try:
+                from ui.large_candle_widget import LargeCandleWidget
+                self.large_candle_widget = LargeCandleWidget(
+                    large_candle_watcher=self._large_candle_watcher,
+                )
+                self.large_candle_widget.symbol_selected.connect(self._on_symbol_changed)
+                tabs.addTab(self.large_candle_widget, "🕯  Candles")
+            except Exception:
+                pass
+
+            # Iceberg detector
+            try:
+                from ui.iceberg_widget import IcebergWidget
+                self.iceberg_widget = IcebergWidget(
+                    iceberg_detector=self._iceberg_detector,
+                )
+                self.iceberg_widget.symbol_selected.connect(self._on_symbol_changed)
+                tabs.addTab(self.iceberg_widget, "🧊  Icebergs")
+            except Exception:
+                pass
+
+            self.ml_tools_page = tabs
+        except Exception as exc:
+            logger.warning(f"ML Tools page unavailable: {exc}")
+            self.ml_tools_page = _placeholder("ML Tools", f"Not available: {exc}")
+        self.stack.addWidget(self.ml_tools_page)
 
     # ── Chart event wiring ────────────────────────────────────────────────────
 
@@ -1848,7 +1885,9 @@ class MainWindow(QMainWindow):
         for i, lbl in enumerate(labels):
             sc = f"Ctrl+{i+1}" if i < 9 else ""
             vm.addAction(self._act(lbl, lambda _, idx=i: self._navigate_to(idx), sc))
-        vm.addAction(self._act("Reports", lambda: self._navigate_to(11), "F2"))
+        vm.addAction(self._act("Reports",    lambda: self._navigate_to(11), "F2"))
+        vm.addAction(self._act("Market Watch", lambda: self._navigate_to(12), "Ctrl+Shift+W"))
+        vm.addAction(self._act("ML Tools",   lambda: self._navigate_to(13), "Ctrl+Shift+M"))
         vm.addSeparator()
         vm.addAction(self._act("Toggle Intel Log",   self._toggle_intel_log,   "Ctrl+L"))
         vm.addAction(self._act("Toggle Order Book",  self._toggle_order_book,  "Ctrl+B"))
@@ -1874,6 +1913,9 @@ class MainWindow(QMainWindow):
 
         # ML
         mlm = mb.addMenu("&ML")
+        mlm.addAction(self._act("ML Training Panel",    lambda: self._navigate_to(2)))
+        mlm.addAction(self._act("ML Tools Panel",       lambda: self._navigate_to(13), "Ctrl+Shift+M"))
+        mlm.addSeparator()
         mlm.addAction(self._act("Start Training",       self._start_training,       "Ctrl+T"))
         mlm.addAction(self._act("Stop Training",        self._stop_training,        "Ctrl+Shift+T"))
         mlm.addSeparator()
@@ -1889,11 +1931,11 @@ class MainWindow(QMainWindow):
         simm.addSeparator()
         simm.addAction(self._act(
             "🔮 Live Simulation Twin",
-            lambda: self._open_sim_tab(0), "Ctrl+Shift+T"
+            lambda: self._open_sim_tab(0), "Ctrl+Shift+V"
         ))
         simm.addAction(self._act(
             "🧬 Strategy Mutation Lab",
-            lambda: self._open_sim_tab(1), "Ctrl+Shift+M"
+            lambda: self._open_sim_tab(1), "Ctrl+Alt+M"
         ))
         simm.addAction(self._act(
             "🛡  Safety Scanner",
@@ -1965,6 +2007,7 @@ class MainWindow(QMainWindow):
             ("Ctrl+8",       lambda: self._navigate_to(7)),
             ("Ctrl+9",       lambda: self._navigate_to(8)),
             ("Ctrl+Shift+W", lambda: self._navigate_to(12)),
+            ("Ctrl+Shift+M", lambda: self._navigate_to(13)),
             ("F11",          self._toggle_fullscreen),
             ("F1",           lambda: self._navigate_to(9)),
         ]
