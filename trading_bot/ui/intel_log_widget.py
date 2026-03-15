@@ -18,12 +18,12 @@ from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSortFilterProxyModel, QThread
-from PyQt6.QtGui import QColor, QBrush, QFont, QTextCursor
+from PyQt6.QtGui import QColor, QBrush, QFont, QTextCursor, QCursor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit,
     QPushButton, QComboBox, QLineEdit, QCheckBox, QFrame,
     QSplitter, QTableWidget, QTableWidgetItem, QHeaderView,
-    QFileDialog,
+    QFileDialog, QSizePolicy,
 )
 
 from ui.styles import (
@@ -61,6 +61,45 @@ LEVEL_COLOURS = {
 
 MAX_VISIBLE = 2000   # Entries visible in log panel
 
+# ── Resize-mode helpers ────────────────────────────────────────────────────────
+
+_RESIZE_TOGGLE_SS = f"""
+QPushButton {{
+    background: {BG4}; border: 1px solid {BORDER}; color: {FG1};
+    border-radius: 5px; font-size: 15px; font-weight: 700; padding: 0;
+}}
+QPushButton:hover  {{ background: {BG3}; }}
+QPushButton:checked {{
+    background: {ACCENT}; border-color: {ACCENT}; color: #000;
+    border-radius: 5px;
+}}
+"""
+
+
+def _toolbar_sep() -> QFrame:
+    sep = QFrame()
+    sep.setFrameShape(QFrame.Shape.VLine)
+    sep.setFixedWidth(1)
+    sep.setStyleSheet(f"color: {BORDER};")
+    return sep
+
+
+def _arrow_btn(symbol: str, tip: str) -> QPushButton:
+    btn = QPushButton(symbol)
+    btn.setFixedSize(30, 30)
+    btn.setToolTip(tip)
+    btn.setAutoRepeat(False)          # manual repeat via QTimer for smooth feel
+    btn.setStyleSheet(f"""
+        QPushButton {{
+            background: {ACCENT}22; border: 1px solid {ACCENT}66;
+            color: {ACCENT}; border-radius: 5px;
+            font-size: 15px; font-weight: 900; padding: 0;
+        }}
+        QPushButton:hover   {{ background: {ACCENT}44; border-color: {ACCENT}; }}
+        QPushButton:pressed {{ background: {ACCENT}66; }}
+    """)
+    return btn
+
 
 class IntelLogWidget(QWidget):
     """
@@ -86,11 +125,11 @@ class IntelLogWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Toolbar
-        toolbar = QFrame()
-        toolbar.setFixedHeight(44)
-        toolbar.setStyleSheet(f"background:{BG3}; border-bottom:1px solid {BORDER};")
-        tbl = QHBoxLayout(toolbar)
+        # ── Toolbar ────────────────────────────────────────────────────
+        self._toolbar = QFrame()
+        self._toolbar.setFixedHeight(44)
+        self._toolbar.setStyleSheet(f"background:{BG3}; border-bottom:1px solid {BORDER};")
+        tbl = QHBoxLayout(self._toolbar)
         tbl.setContentsMargins(10, 4, 10, 4)
         tbl.setSpacing(8)
 
@@ -153,7 +192,41 @@ class IntelLogWidget(QWidget):
         export_btn.clicked.connect(self._export)
         tbl.addWidget(export_btn)
 
-        layout.addWidget(toolbar)
+        tbl.addSpacing(6)
+        tbl.addWidget(_toolbar_sep())
+
+        # ── Resize-mode toggle ⇕ ──────────────────────────────────────
+        self._resize_toggle = QPushButton("⇕")
+        self._resize_toggle.setFixedSize(30, 30)
+        self._resize_toggle.setCheckable(True)
+        self._resize_toggle.setToolTip(
+            "Toggle height-adjust mode\n"
+            "▲ / ▼ arrows appear — hold to resize"
+        )
+        self._resize_toggle.setStyleSheet(_RESIZE_TOGGLE_SS)
+        self._resize_toggle.toggled.connect(self._on_resize_mode_toggled)
+        tbl.addWidget(self._resize_toggle)
+
+        # ▲ / ▼ arrow buttons — hidden until resize mode is active
+        self._up_btn = _arrow_btn("▲", "Make log panel taller  (hold for continuous)")
+        self._dn_btn = _arrow_btn("▼", "Make log panel shorter  (hold for continuous)")
+        self._up_btn.hide()
+        self._dn_btn.hide()
+        tbl.addWidget(self._up_btn)
+        tbl.addWidget(self._dn_btn)
+
+        # Repeat-resize timer — fires while an arrow button is held
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setInterval(35)          # ~28 fps feel
+        self._resize_delta = 0
+        self._resize_timer.timeout.connect(self._do_resize_step)
+
+        self._up_btn.pressed.connect(lambda: self._start_resize(+12))   # taller
+        self._up_btn.released.connect(self._stop_resize)
+        self._dn_btn.pressed.connect(lambda: self._start_resize(-12))   # shorter
+        self._dn_btn.released.connect(self._stop_resize)
+
+        layout.addWidget(self._toolbar)
 
         # Main log display (QTextEdit for rich text)
         self.log_display = QTextEdit()
@@ -192,6 +265,55 @@ class IntelLogWidget(QWidget):
         self._rate_timer = QTimer()
         self._rate_timer.timeout.connect(self._update_rate)
         self._rate_timer.start(1000)
+
+    # ── Resize-mode ─────────────────────────────────────────────────────
+
+    def _on_resize_mode_toggled(self, active: bool) -> None:
+        """Show / hide ▲ ▼ arrows and highlight toolbar while in resize mode."""
+        self._up_btn.setVisible(active)
+        self._dn_btn.setVisible(active)
+
+        if active:
+            # Highlight the toolbar border to signal active state
+            self._toolbar.setStyleSheet(
+                f"background:{BG3}; border-bottom:2px solid {ACCENT};"
+            )
+            # Switch cursor for the whole widget so the user knows they're in resize mode
+            self.setCursor(QCursor(Qt.CursorShape.SizeVerCursor))
+            self._resize_toggle.setToolTip("Click to exit height-adjust mode")
+        else:
+            self._stop_resize()
+            self._toolbar.setStyleSheet(
+                f"background:{BG3}; border-bottom:1px solid {BORDER};"
+            )
+            self.unsetCursor()
+            self._resize_toggle.setToolTip(
+                "Toggle height-adjust mode\n▲ / ▼ arrows appear — hold to resize"
+            )
+
+    def _start_resize(self, delta: int) -> None:
+        """Begin continuous resize; delta > 0 = taller, delta < 0 = shorter."""
+        self._resize_delta = delta
+        self._do_resize_step()      # immediate first step
+        self._resize_timer.start()
+
+    def _stop_resize(self) -> None:
+        self._resize_timer.stop()
+        self._resize_delta = 0
+
+    def _do_resize_step(self) -> None:
+        """Adjust the parent QDockWidget height by one step."""
+        dock = self.parent()         # IntelLogWidget → QDockWidget
+        main = self.window()         # QDockWidget → QMainWindow
+        if dock is None or main is None:
+            return
+        try:
+            current = dock.height()
+            new_h = max(80, current + self._resize_delta)
+            # resizeDocks is the correct API for programmatic dock resizing
+            main.resizeDocks([dock], [new_h], Qt.Orientation.Vertical)
+        except Exception:
+            pass
 
     # ── Subscription ────────────────────────────────────────────────────
     def _subscribe(self) -> None:
