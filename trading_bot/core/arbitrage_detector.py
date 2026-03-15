@@ -493,8 +493,8 @@ class ArbitrageDetector:
             return None
 
         # Log-price spread for stationarity
-        log_a = np.log(buf_a)
-        log_b = np.log(buf_b)
+        log_a = np.log(np.where(buf_a > 0, buf_a, 1e-10))
+        log_b = np.log(np.where(buf_b > 0, buf_b, 1e-10))
 
         beta   = _rolling_ols_beta(log_a, log_b)
         z      = _spread_zscore(log_a, log_b, beta)

@@ -503,7 +503,7 @@ def build_services(settings):
     stream_deck = get_stream_deck()
     stream_deck.set_services(
         engine=engine,
-        auto_trader=auto_trader if "auto_trader" in dir() else None,
+        auto_trader=auto_trader,
         order_manager=orders,
     )
 

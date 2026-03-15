@@ -109,6 +109,8 @@ class _SymbolState:
         if len(recent_p) < 5:
             return None
 
+        if recent_p[0][0] == 0:
+            return None
         pchange = (recent_p[-1][0] - recent_p[0][0]) / recent_p[0][0]
         if abs(pchange) < PRICE_MOVE_PCT:
             return None
