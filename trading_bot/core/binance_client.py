@@ -1,15 +1,33 @@
 """
 Binance REST + WebSocket client with automatic reconnection,
 rate-limit tracking, and signature verification.
+
+WebSocket implementation follows the Binance Spot API specification:
+  https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams
+
+Key compliance points:
+  - Single multiplexed connection per client via JSON SUBSCRIBE / UNSUBSCRIBE
+    commands (not one WS connection per stream).
+  - Binance closes connections after exactly 24 hours; we proactively reconnect
+    at 23 hours to avoid stream interruption.
+  - Management messages (SUBSCRIBE / UNSUBSCRIBE) are rate-limited to 5/second
+    as required by the Binance docs.
+  - Combined-stream payloads {"stream":"…","data":{…}} are unwrapped before
+    dispatching to per-stream callbacks.
+  - Market-data streams always use the public data-stream endpoint
+    (data-stream.binance.vision) — the testnet WS does not support all
+    stream types / symbols (causes Handshake 404 errors).
+  - Partial-depth level is validated to only use the supported values 5, 10, 20.
+  - Port 443 is used as a fallback when port 9443 is unavailable.
 """
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
-import time
+import json
 import threading
+import time
 from decimal import Decimal
 from typing import Any, Callable, Optional
 from urllib.parse import urlencode
@@ -21,13 +39,21 @@ from config import get_settings
 from db.redis_client import RedisClient
 
 
+# ── REST endpoints ───────────────────────────────────────────────────────────
 BASE_URL    = "https://api.binance.com"
 TESTNET_URL = "https://testnet.binance.vision"
-WS_BASE     = "wss://stream.binance.com:9443/ws"
-WS_TESTNET  = "wss://stream.testnet.binance.vision/ws"
+
+# ── WebSocket market-data endpoints (public, no auth required) ───────────────
+# Primary:   data-stream.binance.vision  (market-data only, as per Binance docs)
+# Fallback:  stream.binance.com:443      (alternative port if 9443 is blocked)
+_WS_PRIMARY  = "wss://data-stream.binance.vision/ws"
+_WS_FALLBACK = "wss://stream.binance.com:443/ws"
 
 _MAX_RETRIES   = 3     # Max retries on transient network / timeout errors
 _RETRY_BACKOFF = 1.0   # Initial backoff seconds (doubles each retry)
+
+# Valid partial-depth levels per Binance spec (only 5, 10, 20 are supported)
+_VALID_DEPTH_LEVELS = frozenset({5, 10, 20})
 
 
 class _RateLimiter:
@@ -65,6 +91,281 @@ class _RateLimiter:
             time.sleep(wait)
 
 
+class _WsMultiplexer:
+    """
+    Single persistent WebSocket connection that multiplexes all Binance
+    market-data streams for one BinanceClient instance.
+
+    Binance rules enforced
+    ──────────────────────
+    • Streams managed via SUBSCRIBE / UNSUBSCRIBE JSON messages on a single
+      connection (up to 1 024 streams per connection).
+    • Management messages rate-limited to 5 per second.
+    • Proactive reconnect every 23 h (server force-disconnects at 24 h).
+    • On reconnect, all registered streams are re-subscribed automatically in
+      a single batched SUBSCRIBE message.
+    • Combined-stream payloads {"stream":"…","data":{…}} unwrapped before
+      delivering to per-stream callbacks.
+    • Exponential back-off on errors: 2 s → 4 → 8 → … capped at 60 s.
+    • Falls back from primary URL to port-443 alternative after 3 consecutive
+      connection failures.
+    """
+
+    _RECONNECT_S  = 23 * 3600  # proactive cycle before the 24-hour server limit
+    _MSG_PER_SEC  = 5           # Binance management rate limit
+    _MAX_STREAMS  = 1024
+    _FAIL_SWITCH  = 3           # consecutive failures before trying fallback URL
+
+    def __init__(self) -> None:
+        self._lock          = threading.Lock()
+        self._cbs: dict[str, list[Callable]] = {}   # stream → [callback, …]
+        self._ws_lock       = threading.Lock()
+        self._ws            = None                  # current WebSocketApp
+        self._ready         = threading.Event()     # set when connection is open
+        self._active        = False
+        self._req_id        = 0
+        self._fail_count    = 0                     # consecutive connection failures
+        self._use_fallback  = False
+        self._timer: threading.Timer | None = None
+        # Throttle state – separate lock so it never blocks main logic
+        self._throttle_lock = threading.Lock()
+        self._msg_times: list[float] = []
+
+    # ── Lifecycle ────────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        self._active = True
+        self._launch_thread()
+
+    def close(self) -> None:
+        self._active = False
+        if self._timer:
+            self._timer.cancel()
+            self._timer = None
+        with self._ws_lock:
+            ws = self._ws
+        if ws:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+    # ── Public subscribe / unsubscribe ───────────────────────────────────────
+
+    def subscribe(self, stream: str, callback: Callable) -> None:
+        """Register *callback* for *stream*; sends SUBSCRIBE if first listener."""
+        with self._lock:
+            if stream not in self._cbs:
+                self._cbs[stream] = []
+            first = not self._cbs[stream]   # True when no listeners yet
+            if callback not in self._cbs[stream]:
+                self._cbs[stream].append(callback)
+        # Only push a SUBSCRIBE command when this is a brand-new stream AND
+        # the connection is already live.  If not live, _on_open will batch-
+        # subscribe everything when the connection is established.
+        if first and self._ready.is_set():
+            threading.Thread(
+                target=self._send_manage,
+                args=("SUBSCRIBE", [stream]),
+                daemon=True,
+                name=f"ws-sub-{stream}",
+            ).start()
+
+    def unsubscribe(self, stream: str, callback: Callable | None = None) -> None:
+        """Remove *callback* (or all callbacks) from *stream*; sends UNSUBSCRIBE
+        when the last listener is removed."""
+        drop_stream = False
+        with self._lock:
+            if stream not in self._cbs:
+                return
+            if callback is None:
+                self._cbs.pop(stream, None)
+                drop_stream = True
+            else:
+                try:
+                    self._cbs[stream].remove(callback)
+                except ValueError:
+                    pass
+                if not self._cbs[stream]:
+                    self._cbs.pop(stream, None)
+                    drop_stream = True
+        if drop_stream:
+            threading.Thread(
+                target=self._send_manage,
+                args=("UNSUBSCRIBE", [stream]),
+                daemon=True,
+                name=f"ws-unsub-{stream}",
+            ).start()
+
+    @property
+    def stream_count(self) -> int:
+        with self._lock:
+            return len(self._cbs)
+
+    # ── Internal connection management ───────────────────────────────────────
+
+    def _launch_thread(self) -> None:
+        t = threading.Thread(target=self._run_loop, daemon=True, name="ws-mux")
+        t.start()
+
+    def _schedule_reconnect(self) -> None:
+        if self._timer:
+            self._timer.cancel()
+        self._timer = threading.Timer(self._RECONNECT_S, self._proactive_reconnect)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _proactive_reconnect(self) -> None:
+        if not self._active:
+            return
+        logger.info("WS: proactive 23-hour reconnect")
+        self._ready.clear()
+        with self._ws_lock:
+            ws = self._ws
+        if ws:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+    def _run_loop(self) -> None:
+        import websocket as _wslib
+
+        backoff = 2.0
+
+        while self._active:
+            url = _WS_FALLBACK if self._use_fallback else _WS_PRIMARY
+
+            # -- Callbacks are defined fresh each iteration so closures are clean --
+
+            def _on_open(ws, _url=url):
+                nonlocal backoff
+                backoff      = 2.0
+                self._fail_count = 0
+                with self._ws_lock:
+                    self._ws = ws
+                self._ready.set()
+                logger.info(f"WS multiplexer: connected ({_url})")
+                # Re-subscribe all streams in one batched message so the
+                # websocket thread is not blocked by per-message throttling.
+                with self._lock:
+                    streams = list(self._cbs.keys())
+                if streams:
+                    threading.Thread(
+                        target=self._send_manage,
+                        args=("SUBSCRIBE", streams),
+                        kwargs={"ws": ws},
+                        daemon=True,
+                        name="ws-resubscribe",
+                    ).start()
+                self._schedule_reconnect()
+
+            def _on_message(ws, raw):
+                try:
+                    msg = json.loads(raw)
+                except Exception:
+                    return
+                # Ack for SUBSCRIBE / UNSUBSCRIBE: {"result": null, "id": N}
+                if "id" in msg and "result" in msg:
+                    return
+                # Unwrap combined-stream envelope {"stream":"…","data":{…}}
+                stream  = msg.get("stream")
+                payload = msg.get("data", msg)
+                if stream:
+                    with self._lock:
+                        cbs = list(self._cbs.get(stream, []))
+                    for cb in cbs:
+                        try:
+                            cb(payload)
+                        except Exception as exc:
+                            logger.error(f"WS callback error [{stream}]: {exc}")
+
+            def _on_error(ws, error):
+                self._ready.clear()
+                logger.warning(f"WS error: {error}")
+
+            def _on_close(ws, code, msg):
+                self._ready.clear()
+                logger.info(f"WS closed (code={code})")
+
+            with self._ws_lock:
+                self._ws = None
+
+            app = _wslib.WebSocketApp(
+                url,
+                on_open=_on_open,
+                on_message=_on_message,
+                on_error=_on_error,
+                on_close=_on_close,
+            )
+            app.run_forever(ping_interval=20, ping_timeout=10)
+
+            if not self._active:
+                break
+
+            # Track failures and optionally switch to the fallback URL
+            self._fail_count += 1
+            if self._fail_count >= self._FAIL_SWITCH:
+                self._use_fallback = not self._use_fallback
+                self._fail_count   = 0
+                logger.info(
+                    f"WS: switching to {'fallback' if self._use_fallback else 'primary'} URL"
+                )
+
+            logger.info(f"WS: reconnecting in {backoff:.1f}s")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60.0)
+
+    # ── Subscription message helpers ─────────────────────────────────────────
+
+    def _send_manage(
+        self,
+        method: str,
+        streams: list[str],
+        ws=None,
+    ) -> None:
+        """Send a SUBSCRIBE or UNSUBSCRIBE command.
+
+        Waits up to 5 s for the connection to be ready, then rate-limits to
+        5 management messages per second as required by the Binance spec.
+        Multiple streams are batched into a single message where possible.
+        """
+        if not streams:
+            return
+        if not self._ready.wait(timeout=5.0):
+            logger.warning(f"WS {method}: connection not ready; streams={streams}")
+            return
+        with self._ws_lock:
+            target = ws or self._ws
+        if target is None:
+            return
+        with self._lock:
+            self._req_id += 1
+            req_id = self._req_id
+        self._throttle()
+        try:
+            target.send(json.dumps({
+                "method": method,
+                "params": streams,
+                "id":     req_id,
+            }))
+        except Exception as exc:
+            logger.warning(f"WS {method} send failed: {exc}")
+
+    def _throttle(self) -> None:
+        """Block if needed to stay within the 5-messages/second limit."""
+        with self._throttle_lock:
+            now = time.monotonic()
+            self._msg_times = [t for t in self._msg_times if now - t < 1.0]
+            if len(self._msg_times) >= self._MSG_PER_SEC:
+                wait = 1.0 - (now - self._msg_times[0])
+            else:
+                wait = 0.0
+            self._msg_times.append(time.monotonic())
+        if wait > 0:
+            time.sleep(wait)
+
+
 class BinanceClient:
     """
     Full Binance API client supporting:
@@ -72,36 +373,40 @@ class BinanceClient:
     - Order book (L1 / L2)
     - Account & portfolio
     - Historical klines
-    - WebSocket streams for real-time data
+    - WebSocket streams for real-time data (multiplexed, spec-compliant)
     """
 
     def __init__(self, api_key: str = "", api_secret: str = "", testnet: bool = True) -> None:
         settings = get_settings()
-        self._api_key = api_key or settings.binance.api_key
+        self._api_key    = api_key or settings.binance.api_key
         self._api_secret = api_secret or settings.binance.api_secret
-        self._testnet = testnet if api_key else settings.binance.testnet
-        self._base = TESTNET_URL if self._testnet else BASE_URL
-        # Market-data WebSocket streams are public and always use the
-        # production endpoint – the testnet WS does not support all symbols
-        # or stream types, causing Handshake 404 errors (e.g. depth20@100ms).
-        self._ws_base = WS_BASE
-        self._session = requests.Session()
+        self._testnet    = testnet if api_key else settings.binance.testnet
+        self._base       = TESTNET_URL if self._testnet else BASE_URL
+        self._session    = requests.Session()
         self._session.headers.update({
             "X-MBX-APIKEY": self._api_key,
             "Content-Type": "application/json",
         })
         self._redis = RedisClient()
-        self._ws_threads: dict[str, threading.Thread] = {}
-        self._ws_active: dict[str, bool] = {}
-        self._ws_objects: dict[str, Any] = {}
-        self._callbacks: dict[str, list[Callable]] = {}
-        self._lock = threading.Lock()
+        self._lock  = threading.Lock()
 
         # Rate limiters — Binance spot: 1200 req/min general, 10 orders/sec
         self._rl_general = _RateLimiter(calls=1200, period_sec=60)
         self._rl_orders  = _RateLimiter(calls=10,   period_sec=1)
 
-    # ── Authentication ──────────────────────────────────────────────────
+        # Single multiplexed WebSocket connection (started lazily on first subscribe)
+        self._ws_mux: _WsMultiplexer | None = None
+        self._ws_mux_lock = threading.Lock()
+
+    def _get_mux(self) -> _WsMultiplexer:
+        """Return the shared WS multiplexer, creating and starting it if needed."""
+        with self._ws_mux_lock:
+            if self._ws_mux is None:
+                self._ws_mux = _WsMultiplexer()
+                self._ws_mux.start()
+            return self._ws_mux
+
+    # ── Authentication ───────────────────────────────────────────────────────
     def _sign(self, params: dict) -> dict:
         params["timestamp"] = int(time.time() * 1000)
         query = urlencode(params)
@@ -110,7 +415,7 @@ class BinanceClient:
         ).hexdigest()
         return params
 
-    # ── REST requests ───────────────────────────────────────────────────
+    # ── REST requests ────────────────────────────────────────────────────────
     def _request(self, method: str, path: str, params: dict | None) -> Any:
         """
         Shared HTTP executor with:
@@ -208,7 +513,7 @@ class BinanceClient:
             params = self._sign(params or {})
         return self._request("DELETE", path, params)
 
-    # ── Market data ─────────────────────────────────────────────────────
+    # ── Market data ──────────────────────────────────────────────────────────
     def ping(self) -> bool:
         try:
             self._get("/api/v3/ping")
@@ -273,7 +578,7 @@ class BinanceClient:
         usdt.sort(key=lambda x: float(x["quoteVolume"]), reverse=True)
         return [t["symbol"] for t in usdt[:top_n]]
 
-    # ── Account ─────────────────────────────────────────────────────────
+    # ── Account ──────────────────────────────────────────────────────────────
     def get_account(self) -> dict:
         return self._get("/api/v3/account", signed=True)
 
@@ -291,7 +596,7 @@ class BinanceClient:
     def get_my_trades(self, symbol: str, limit: int = 500) -> list[dict]:
         return self._get("/api/v3/myTrades", {"symbol": symbol, "limit": limit}, signed=True)
 
-    # ── Trading ─────────────────────────────────────────────────────────
+    # ── Trading ──────────────────────────────────────────────────────────────
     def place_order(
         self,
         symbol: str,
@@ -303,13 +608,13 @@ class BinanceClient:
         time_in_force: str = "GTC",
     ) -> dict:
         params: dict = {
-            "symbol": symbol,
-            "side": side.upper(),
-            "type": order_type.upper(),
+            "symbol":   symbol,
+            "side":     side.upper(),
+            "type":     order_type.upper(),
             "quantity": f"{quantity:.8f}",
         }
         if order_type.upper() == "LIMIT":
-            params["price"] = f"{price:.8f}"
+            params["price"]       = f"{price:.8f}"
             params["timeInForce"] = time_in_force
         if stop_price:
             params["stopPrice"] = f"{stop_price:.8f}"
@@ -323,81 +628,99 @@ class BinanceClient:
     def cancel_all_orders(self, symbol: str) -> list:
         return self._delete("/api/v3/openOrders", {"symbol": symbol})
 
-    # ── WebSocket streams ────────────────────────────────────────────────
+    # ── WebSocket streams ────────────────────────────────────────────────────
+    #
+    # All subscribe_* methods register a callback on the shared _WsMultiplexer.
+    # The multiplexer maintains a single persistent connection and manages
+    # SUBSCRIBE / UNSUBSCRIBE lifecycle transparently.
+    #
+    # Stream name formats (Binance spec):
+    #   ticker      <symbol>@ticker
+    #   miniTicker  <symbol>@miniTicker
+    #   bookTicker  <symbol>@bookTicker        (best bid/ask, real-time)
+    #   avgPrice    <symbol>@avgPrice
+    #   kline       <symbol>@kline_<interval>
+    #   aggTrade    <symbol>@aggTrade          (aggregated trades)
+    #   trade       <symbol>@trade             (individual trades)
+    #   depth       <symbol>@depth<N>@100ms   (N ∈ {5, 10, 20} only)
+
     def subscribe_ticker(self, symbol: str, callback: Callable) -> None:
-        self._ws_subscribe(f"{symbol.lower()}@ticker", callback)
+        """24-hour rolling ticker statistics (1 000 ms update)."""
+        self._get_mux().subscribe(f"{symbol.lower()}@ticker", callback)
+
+    def subscribe_mini_ticker(self, symbol: str, callback: Callable) -> None:
+        """Condensed 24-hour ticker (1 000 ms update)."""
+        self._get_mux().subscribe(f"{symbol.lower()}@miniTicker", callback)
+
+    def subscribe_book_ticker(self, symbol: str, callback: Callable) -> None:
+        """Best bid/ask price & quantity (real-time)."""
+        self._get_mux().subscribe(f"{symbol.lower()}@bookTicker", callback)
+
+    def subscribe_avg_price(self, symbol: str, callback: Callable) -> None:
+        """Current average price (1 000 ms update)."""
+        self._get_mux().subscribe(f"{symbol.lower()}@avgPrice", callback)
 
     def subscribe_kline(self, symbol: str, interval: str, callback: Callable) -> None:
-        self._ws_subscribe(f"{symbol.lower()}@kline_{interval}", callback)
+        """Kline/candlestick stream (1 000 ms for 1 s bars; 2 000 ms for others).
 
-    def subscribe_depth(self, symbol: str, callback: Callable, levels: int = 20) -> None:
-        self._ws_subscribe(f"{symbol.lower()}@depth{levels}@100ms", callback)
+        Valid intervals: 1s 1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 3d 1w 1M
+        """
+        self._get_mux().subscribe(f"{symbol.lower()}@kline_{interval}", callback)
 
     def subscribe_trade(self, symbol: str, callback: Callable) -> None:
-        self._ws_subscribe(f"{symbol.lower()}@aggTrade", callback)
+        """Aggregated trade stream (real-time).
 
-    def _ws_subscribe(self, stream: str, callback: Callable) -> None:
-        import websocket
+        Each message represents one or more trades executed at the same price.
+        """
+        self._get_mux().subscribe(f"{symbol.lower()}@aggTrade", callback)
 
-        url = f"{self._ws_base}/{stream}"
-        with self._lock:
-            if stream not in self._callbacks:
-                self._callbacks[stream] = []
-            if callback not in self._callbacks[stream]:
-                self._callbacks[stream].append(callback)
-            if stream in self._ws_active and self._ws_active[stream]:
-                return  # Already subscribed
+    def subscribe_raw_trade(self, symbol: str, callback: Callable) -> None:
+        """Individual (non-aggregated) trade stream (real-time)."""
+        self._get_mux().subscribe(f"{symbol.lower()}@trade", callback)
 
-        def _on_message(ws, message):
-            import json
-            try:
-                data = json.loads(message)
-                with self._lock:
-                    callbacks = list(self._callbacks.get(stream, []))
-                for cb in callbacks:
-                    try:
-                        cb(data)
-                    except Exception as e:
-                        logger.error(f"WS callback error: {e}")
-            except Exception as exc:
-                logger.warning(f"WS message parse error [{stream}]: {exc}")
+    def subscribe_depth(
+        self,
+        symbol: str,
+        callback: Callable,
+        levels: int = 20,
+    ) -> None:
+        """Partial order-book depth snapshot (100 ms update).
 
-        def _on_error(ws, error):
-            logger.warning(f"WS error [{stream}]: {error}")
-
-        def _on_close(ws, *args):
-            self._ws_active[stream] = False
-            logger.info(f"WS closed [{stream}], reconnecting…")
-            time.sleep(3)
-            self._ws_subscribe(stream, callback)
-
-        def _run():
-            ws = websocket.WebSocketApp(
-                url,
-                on_message=_on_message,
-                on_error=_on_error,
-                on_close=_on_close,
+        *levels* must be 5, 10, or 20 — the only values supported by Binance.
+        Any other value is silently clamped to 20.
+        """
+        if levels not in _VALID_DEPTH_LEVELS:
+            logger.warning(
+                f"subscribe_depth: levels={levels} is not supported by Binance "
+                f"(valid: {sorted(_VALID_DEPTH_LEVELS)}); using 20."
             )
-            with self._lock:
-                self._ws_active[stream] = True
-                self._ws_objects[stream] = ws
-            ws.run_forever(ping_interval=20, ping_timeout=10)
+            levels = 20
+        self._get_mux().subscribe(f"{symbol.lower()}@depth{levels}@100ms", callback)
 
-        t = threading.Thread(target=_run, daemon=True, name=f"ws-{stream}")
-        t.start()
-        self._ws_threads[stream] = t
+    def unsubscribe_stream(
+        self,
+        stream: str,
+        callback: Callable | None = None,
+    ) -> None:
+        """Remove *callback* from *stream* (or all callbacks if None).
+
+        Sends an UNSUBSCRIBE command when the last listener is removed.
+        """
+        mux = self._get_mux()
+        mux.unsubscribe(stream, callback)
+
+    @property
+    def active_stream_count(self) -> int:
+        """Number of currently active WebSocket streams."""
+        if self._ws_mux is None:
+            return 0
+        return self._ws_mux.stream_count
 
     def close_all(self) -> None:
-        with self._lock:
-            streams = list(self._ws_active.keys())
-            for stream in streams:
-                self._ws_active[stream] = False
-            ws_objects = dict(self._ws_objects)
-        for ws in ws_objects.values():
-            try:
-                ws.close()
-            except Exception:
-                pass
-        for stream, t in list(self._ws_threads.items()):
-            t.join(timeout=3)
+        """Close the WebSocket multiplexer and the REST session."""
+        with self._ws_mux_lock:
+            mux = self._ws_mux
+            self._ws_mux = None
+        if mux:
+            mux.close()
         self._session.close()
