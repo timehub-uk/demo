@@ -167,7 +167,7 @@ _PANEL_HELP: dict[int, tuple[str, str]] = {
 
 class NavButton(QPushButton):
     """
-    Sidebar navigation button.
+    Sidebar navigation button — icon on the left, label text on the right.
     • Mouse enter + 5 s  → QToolTip with panel title
     • Mouse enter + 10 s → contextual help QMessageBox
     • Mouse leave        → cancel both timers
@@ -180,11 +180,14 @@ class NavButton(QPushButton):
         self._index     = index
         self._icon_name = icon_name
         self._label     = label
+        self._active    = False
 
         self.setObjectName("nav_btn")
-        self.setFixedSize(64, 64)
+        self.setFixedHeight(42)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setText(label)
         self._set_icon(FG2)
+        self._apply_style(False)
 
         # 5-second tooltip timer
         self._tip_timer = QTimer(self)
@@ -201,23 +204,43 @@ class NavButton(QPushButton):
         self.clicked.connect(lambda: self.clicked_index.emit(self._index))
 
     def _set_icon(self, color: str) -> None:
-        self.setIcon(svg_icon(self._icon_name, color, 22))
-        self.setIconSize(QSize(22, 22))
+        self.setIcon(svg_icon(self._icon_name, color, 18))
+        self.setIconSize(QSize(18, 18))
+
+    def _apply_style(self, active: bool) -> None:
+        col        = ACCENT if active else FG2
+        bg         = BG2    if active else "transparent"
+        left_bar   = f"border-left:3px solid {ACCENT};" if active else f"border-left:3px solid transparent;"
+        weight     = "700" if active else "500"
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background:{bg}; color:{col};
+                border:none; {left_bar}
+                border-radius:0;
+                text-align:left; padding-left:10px;
+                font-size:11px; font-weight:{weight}; letter-spacing:0.5px;
+            }}
+            QPushButton:hover {{
+                background:{BG3}; color:{FG1};
+                border-left:3px solid {BORDER2};
+            }}
+        """)
 
     def set_active(self, active: bool) -> None:
+        self._active = active
         self._set_icon(ACCENT if active else FG2)
-        self.setProperty("active", "true" if active else "false")
-        self.style().unpolish(self)
-        self.style().polish(self)
+        self._apply_style(active)
 
     def enterEvent(self, event) -> None:
-        self._set_icon(FG1)
+        if not self._active:
+            self._set_icon(FG1)
         self._tip_timer.start()
         self._pop_timer.start()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
-        self._set_icon(FG2)
+        if not self._active:
+            self._set_icon(FG2)
         self._tip_timer.stop()
         self._pop_timer.stop()
         super().leaveEvent(event)
@@ -352,28 +375,30 @@ class HeaderBar(QFrame):
 # ══════════════════════════════════════════════════════════════════════════════
 
 _NAV_ITEMS = [
-    (0,  "trading",      "TRADE"),
-    (1,  "autotrader",   "AUTO"),
-    (2,  "ml",           "ML"),
-    (3,  "risk",         "RISK"),
-    (4,  "backtest",     "BT"),
-    (5,  "journal",      "JNL"),
-    (6,  "strategy",     "STRAT"),
-    (7,  "connections",  "NET"),
-    (8,  "settings",     "CFG"),
-    (9,  "help",         "HELP"),
-    (10, "simulation",   "SIM"),
-    (11, "reports",      "RPT"),
-    (12, "ml",           "WATCH"),
+    (0,  "trading",      "Trading"),
+    (1,  "autotrader",   "AutoTrader"),
+    (2,  "ml",           "ML Train"),
+    (3,  "risk",         "Risk"),
+    (4,  "backtest",     "Backtest"),
+    (5,  "journal",      "Journal"),
+    (6,  "strategy",     "Strategy"),
+    (7,  "connections",  "Connections"),
+    (8,  "settings",     "Settings"),
+    (9,  "help",         "Help"),
+    (10, "simulation",   "Simulation"),
+    (11, "reports",      "Reports"),
+    (12, "ml",           "Market Watch"),
 ]
 
 
 class NavSidebar(QFrame):
     page_requested = pyqtSignal(int)
 
+    _WIDTH = 168  # px — wide enough for "Market Watch" + icon
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setFixedWidth(64)
+        self.setFixedWidth(self._WIDTH)
         self.setStyleSheet(
             f"NavSidebar {{ background:{BG0}; border-right:1px solid {BORDER}; }}"
         )
@@ -383,14 +408,14 @@ class NavSidebar(QFrame):
         container.setStyleSheet(f"background:{BG0};")
         btn_layout = QVBoxLayout(container)
         btn_layout.setContentsMargins(0, 8, 0, 8)
-        btn_layout.setSpacing(2)
+        btn_layout.setSpacing(1)
         btn_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self._buttons: list[NavButton] = []
         for idx, icon, label in _NAV_ITEMS:
             btn = NavButton(idx, icon, label)
             btn.clicked_index.connect(self._on_nav)
-            btn_layout.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
+            btn_layout.addWidget(btn)   # full width — no AlignHCenter
             self._buttons.append(btn)
 
         btn_layout.addStretch()
