@@ -10,6 +10,7 @@ Sections:
   • ML           – Training params, confidence threshold
   • Trading      – Mode, risk per trade, limits
   • Tax          – UK CGT settings, email reports
+  • Notifications – SMTP email settings, alert toggles, test email
   • UI           – Accent color, font size, theme
 """
 
@@ -157,6 +158,7 @@ class SystemSettingsWidget(QWidget):
         self._build_ml_tab()
         self._build_trading_tab()
         self._build_tax_tab()
+        self._build_notifications_tab()
         self._build_ui_tab()
 
     # ── Tab builders ───────────────────────────────────────────────────
@@ -538,6 +540,65 @@ class SystemSettingsWidget(QWidget):
         self.tax_email_rep    = QCheckBox("Email monthly reports"); form.addRow("Email Reports:", self.tax_email_rep)
         self.tax_report_day   = QSpinBox(); self.tax_report_day.setRange(1,28); form.addRow("Report Day:", self.tax_report_day)
 
+    def _build_notifications_tab(self) -> None:
+        _, form = self._scrollable_tab("Notifications", "info")
+        form.addRow(_section_label("EMAIL (SMTP)"))
+        self.n_smtp_host = QLineEdit(); self.n_smtp_host.setPlaceholderText("e.g. smtp.gmail.com")
+        form.addRow("SMTP Host:", self.n_smtp_host)
+        self.n_smtp_port = QSpinBox(); self.n_smtp_port.setRange(1, 65535); self.n_smtp_port.setValue(587)
+        form.addRow("SMTP Port:", self.n_smtp_port)
+        self.n_smtp_user = QLineEdit(); self.n_smtp_user.setPlaceholderText("username or email")
+        form.addRow("Username:", self.n_smtp_user)
+        self.n_smtp_pass = SecretEdit("SMTP password or app password")
+        form.addRow("Password:", self.n_smtp_pass)
+        self.n_smtp_tls = QCheckBox("Use STARTTLS"); self.n_smtp_tls.setChecked(True)
+        form.addRow("TLS:", self.n_smtp_tls)
+        self.n_email_from = QLineEdit(); self.n_email_from.setPlaceholderText("sender@example.com")
+        form.addRow("From:", self.n_email_from)
+        self.n_email_to = QLineEdit(); self.n_email_to.setPlaceholderText("recipient@example.com, another@example.com")
+        form.addRow("To:", self.n_email_to)
+
+        form.addRow(_section_label("ALERT TOGGLES"))
+        self.n_trade_alerts  = QCheckBox("Email on each trade"); form.addRow("Trade Alerts:", self.n_trade_alerts)
+        self.n_daily_report  = QCheckBox("Email daily P&L report"); self.n_daily_report.setChecked(True); form.addRow("Daily Report:", self.n_daily_report)
+        self.n_tax_reports   = QCheckBox("Email monthly tax reports"); self.n_tax_reports.setChecked(True); form.addRow("Tax Reports:", self.n_tax_reports)
+
+        form.addRow(_section_label("TEST"))
+        test_btn = QPushButton("Send Test Email")
+        test_btn.setStyleSheet(
+            f"QPushButton {{ background:{BG4}; color:{ACCENT}; border:1px solid {ACCENT}; "
+            f"border-radius:4px; padding:4px 12px; }}"
+            f"QPushButton:hover {{ background:{ACCENT}; color:#000; }}"
+        )
+        self.n_test_lbl = QLabel("")
+        self.n_test_lbl.setStyleSheet(f"color:{FG2}; font-size:10px; font-family:monospace;")
+        test_btn.clicked.connect(self._test_email)
+        form.addRow("", test_btn)
+        form.addRow("", self.n_test_lbl)
+
+    def _test_email(self) -> None:
+        self.n_test_lbl.setText("Sending…")
+        self.n_test_lbl.setStyleSheet(f"color:{YELLOW}; font-size:10px; font-family:monospace;")
+
+        smtp_host = self.n_smtp_host.text().strip()
+        smtp_port = self.n_smtp_port.value()
+        smtp_user = self.n_smtp_user.text().strip()
+        smtp_pass = self.n_smtp_pass.text()
+        smtp_tls  = self.n_smtp_tls.isChecked()
+        email_from = self.n_email_from.text().strip() or smtp_user
+        email_to   = self.n_email_to.text().strip()
+
+        def _run() -> None:
+            ok, msg = _send_test_email(smtp_host, smtp_port, smtp_user, smtp_pass,
+                                       smtp_tls, email_from, email_to)
+            col = GREEN if ok else RED
+            QTimer.singleShot(0, lambda: (
+                self.n_test_lbl.setText(("✓ " if ok else "✗ ") + msg),
+                self.n_test_lbl.setStyleSheet(f"color:{col}; font-size:10px; font-family:monospace;"),
+            ))
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def _build_ui_tab(self) -> None:
         _, form = self._scrollable_tab("Interface", "settings")
         form.addRow(_section_label("THEME"))
@@ -711,6 +772,23 @@ class SystemSettingsWidget(QWidget):
             except Exception:
                 pass
 
+            # Notifications / Email SMTP
+            try:
+                n = getattr(s, "notifications", None)
+                if n:
+                    self.n_smtp_host.setText(getattr(n, "smtp_host", ""))
+                    self.n_smtp_port.setValue(int(getattr(n, "smtp_port", 587)))
+                    self.n_smtp_user.setText(getattr(n, "smtp_username", ""))
+                    self.n_smtp_pass.setText(getattr(n, "smtp_password", ""))
+                    self.n_smtp_tls.setChecked(bool(getattr(n, "smtp_use_tls", True)))
+                    self.n_email_from.setText(getattr(n, "email_from", ""))
+                    self.n_email_to.setText(getattr(n, "email_to", ""))
+                    self.n_trade_alerts.setChecked(bool(getattr(n, "email_trade_alerts", False)))
+                    self.n_daily_report.setChecked(bool(getattr(n, "email_daily_report", True)))
+                    self.n_tax_reports.setChecked(bool(getattr(n, "email_tax_reports", True)))
+            except Exception:
+                pass
+
             self._flash_status("Settings loaded", GREEN)
         except Exception as e:
             self._flash_status(f"Load error: {e}", RED)
@@ -801,6 +879,23 @@ class SystemSettingsWidget(QWidget):
             except Exception:
                 pass
 
+            # Notifications / Email SMTP
+            try:
+                n = getattr(s, "notifications", None)
+                if n is not None:
+                    n.smtp_host      = self.n_smtp_host.text()
+                    n.smtp_port      = self.n_smtp_port.value()
+                    n.smtp_username  = self.n_smtp_user.text()
+                    n.smtp_password  = self.n_smtp_pass.text()
+                    n.smtp_use_tls   = self.n_smtp_tls.isChecked()
+                    n.email_from     = self.n_email_from.text()
+                    n.email_to       = self.n_email_to.text()
+                    n.email_trade_alerts = self.n_trade_alerts.isChecked()
+                    n.email_daily_report = self.n_daily_report.isChecked()
+                    n.email_tax_reports  = self.n_tax_reports.isChecked()
+            except Exception:
+                pass
+
             # CoinGecko / Codex  (optional – only write if the config model supports it)
             try:
                 cg = getattr(s, "coingecko", None)
@@ -835,3 +930,47 @@ def _set_combo(combo: QComboBox, value: str) -> None:
     idx = combo.findText(value, Qt.MatchFlag.MatchFixedString)
     if idx >= 0:
         combo.setCurrentIndex(idx)
+
+
+def _send_test_email(smtp_host: str, smtp_port: int, smtp_user: str, smtp_pass: str,
+                     use_tls: bool, email_from: str, email_to: str) -> tuple[bool, str]:
+    """Send a test email directly using the provided SMTP credentials."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    if not smtp_host:
+        return False, "SMTP host is not configured"
+    if not email_to:
+        return False, "No recipient address specified"
+
+    recipients = [r.strip() for r in email_to.split(",") if r.strip()]
+    mime = MIMEMultipart("alternative")
+    mime["Subject"] = "BinanceML Pro – Test Email"
+    mime["From"] = email_from or smtp_user
+    mime["To"] = ", ".join(recipients)
+    mime.attach(MIMEText("SMTP configuration test successful.", "plain"))
+    mime.attach(MIMEText(
+        "<html><body style='font-family:Arial,sans-serif;padding:20px'>"
+        "<h3>BinanceML Pro – SMTP Test</h3>"
+        "<p>Your email notifications are configured correctly.</p>"
+        "</body></html>",
+        "html",
+    ))
+
+    try:
+        if smtp_port == 465:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15) as server:
+                if smtp_user and smtp_pass:
+                    server.login(smtp_user, smtp_pass)
+                server.sendmail(mime["From"], recipients, mime.as_string())
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+                if use_tls:
+                    server.starttls()
+                if smtp_user and smtp_pass:
+                    server.login(smtp_user, smtp_pass)
+                server.sendmail(mime["From"], recipients, mime.as_string())
+        return True, f"Test email sent to {', '.join(recipients)}"
+    except Exception as exc:
+        return False, str(exc)
