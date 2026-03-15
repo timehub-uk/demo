@@ -231,7 +231,7 @@ class IntelLogWidget(QWidget):
         # Main log display (QTextEdit for rich text)
         self.log_display = QTextEdit()
         self.log_display.setReadOnly(True)
-        self.log_display.setFont(QFont("SF Mono", 11) if hasattr(QFont, "SF Mono") else QFont("Menlo", 11))
+        self.log_display.setFont(QFont("Menlo", 11))  # CSS font-family fallback handles SF Mono / Consolas
         self.log_display.setStyleSheet(f"""
             QTextEdit {{
                 background: {BG2};
@@ -303,9 +303,19 @@ class IntelLogWidget(QWidget):
 
     def _do_resize_step(self) -> None:
         """Adjust the parent QDockWidget height by one step."""
+        from PyQt6.QtWidgets import QMainWindow
         dock = self.parent()         # IntelLogWidget → QDockWidget
-        main = self.window()         # QDockWidget → QMainWindow
-        if dock is None or main is None:
+        if dock is None:
+            return
+        # Walk the parent chain to find the QMainWindow reliably
+        main = None
+        p = dock.parent()
+        while p is not None:
+            if isinstance(p, QMainWindow):
+                main = p
+                break
+            p = p.parent()
+        if main is None:
             return
         try:
             current = dock.height()

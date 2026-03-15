@@ -693,7 +693,7 @@ def attach_start_pulse(btn) -> None:
         attach_start_pulse(btn)
     """
     try:
-        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QVariantAnimation
+        from PyQt6.QtCore import QEasingCurve, QVariantAnimation
         from PyQt6.QtGui import QColor
 
         anim = QVariantAnimation(btn)
@@ -736,9 +736,11 @@ def attach_start_pulse(btn) -> None:
             anim.start()
 
         # Re-evaluate when enabled state changes
-        btn.setEnabled = lambda state, _orig=btn.setEnabled: (  # type: ignore[method-assign]
-            _orig(state) or _toggle(state)
-        )
+        _orig_setEnabled = btn.setEnabled
+        def _new_setEnabled(state: bool) -> None:  # type: ignore[method-assign]
+            _orig_setEnabled(state)
+            _toggle(state)
+        btn.setEnabled = _new_setEnabled  # type: ignore[method-assign]
     except Exception:
         pass   # silently skip if PyQt6 animation not available
 
