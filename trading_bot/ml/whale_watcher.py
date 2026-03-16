@@ -663,10 +663,10 @@ class WhaleWatcher:
                     mid = (float(bids[0][0]) + float(asks[0][0])) / 2 if bids and asks else 0
                     self._detectors[sym].process_orderbook(bids, asks, mid)
                 idx += 1
-                time.sleep(0.5)
+                time.sleep(5)
             except Exception as exc:
                 logger.debug(f"WhaleWatcher OB poll error: {exc}")
-                time.sleep(2)
+                time.sleep(10)
 
     def _resolve_loop(self) -> None:
         """Resolve pending whale events after 5 minutes to calculate price outcomes."""
