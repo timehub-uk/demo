@@ -91,43 +91,50 @@ def init_db(db_url: str, pool_size: int = 10, max_overflow: int = 20) -> None:
     global _engine, _SessionLocal
 
     with _lock:
-        if _engine is not None:
+        if _engine is not None and _SessionLocal is not None:
             return
 
         # Ensure the database itself exists before connecting
         _ensure_database_exists(db_url)
 
-        _engine = create_engine(
-            db_url,
-            poolclass=QueuePool,
-            pool_size=pool_size,
-            max_overflow=max_overflow,
-            pool_pre_ping=True,
-            pool_recycle=3600,
-            echo=False,
-            # READ_COMMITTED prevents dirty reads while still allowing
-            # reasonable concurrency for concurrent order placement.
-            isolation_level="READ_COMMITTED",
-            connect_args={
-                "connect_timeout": 10,
-                "options": "-c statement_timeout=30000",
-            },
-        )
+        try:
+            engine = create_engine(
+                db_url,
+                poolclass=QueuePool,
+                pool_size=pool_size,
+                max_overflow=max_overflow,
+                pool_pre_ping=True,
+                pool_recycle=3600,
+                echo=False,
+                # READ_COMMITTED prevents dirty reads while still allowing
+                # reasonable concurrency for concurrent order placement.
+                isolation_level="READ_COMMITTED",
+                connect_args={
+                    "connect_timeout": 10,
+                    "options": "-c statement_timeout=30000",
+                },
+            )
 
-        @event.listens_for(_engine, "connect")
-        def set_search_path(dbapi_conn, conn_record):
-            cursor = dbapi_conn.cursor()
-            cursor.execute("SET search_path TO public")
-            cursor.close()
+            @event.listens_for(engine, "connect")
+            def set_search_path(dbapi_conn, conn_record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("SET search_path TO public")
+                cursor.close()
 
-        Base.metadata.create_all(_engine)
-        _SessionLocal = sessionmaker(
-            bind=_engine,
-            autocommit=False,
-            autoflush=False,
-            expire_on_commit=False,
-        )
-        logger.info("PostgreSQL connected and tables created.")
+            Base.metadata.create_all(engine)
+            _SessionLocal = sessionmaker(
+                bind=engine,
+                autocommit=False,
+                autoflush=False,
+                expire_on_commit=False,
+            )
+            _engine = engine
+            logger.info("PostgreSQL connected and tables created.")
+        except Exception:
+            # Reset _engine so init_sqlite() can succeed as a fallback
+            _engine = None
+            _SessionLocal = None
+            raise
 
     # sync_schema runs outside the lock so it can acquire its own connections
     sync_schema()
@@ -141,7 +148,7 @@ def init_sqlite(db_path: str | None = None) -> None:
     global _engine, _SessionLocal, _using_sqlite
 
     with _lock:
-        if _engine is not None:
+        if _engine is not None and _SessionLocal is not None:
             return
 
         if db_path is None:
@@ -151,28 +158,36 @@ def init_sqlite(db_path: str | None = None) -> None:
             db_path = str(data_dir / "binanceml_local.db")
 
         sqlite_url = f"sqlite:///{db_path}"
-        _engine = create_engine(
-            sqlite_url,
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-            echo=False,
-        )
 
-        # Enable WAL mode for better concurrency with SQLite
-        @event.listens_for(_engine, "connect")
-        def set_wal_mode(dbapi_conn, conn_record):
-            dbapi_conn.execute("PRAGMA journal_mode=WAL")
-            dbapi_conn.execute("PRAGMA foreign_keys=ON")
+        try:
+            engine = create_engine(
+                sqlite_url,
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+                echo=False,
+            )
 
-        Base.metadata.create_all(_engine)
-        _SessionLocal = sessionmaker(
-            bind=_engine,
-            autocommit=False,
-            autoflush=False,
-            expire_on_commit=False,
-        )
-        _using_sqlite = True
-        logger.info(f"SQLite fallback active – local DB at {db_path}")
+            # Enable WAL mode for better concurrency with SQLite
+            @event.listens_for(engine, "connect")
+            def set_wal_mode(dbapi_conn, conn_record):
+                dbapi_conn.execute("PRAGMA journal_mode=WAL")
+                dbapi_conn.execute("PRAGMA foreign_keys=ON")
+
+            Base.metadata.create_all(engine)
+            _SessionLocal = sessionmaker(
+                bind=engine,
+                autocommit=False,
+                autoflush=False,
+                expire_on_commit=False,
+            )
+            _engine = engine
+            _using_sqlite = True
+            logger.info(f"SQLite fallback active – local DB at {db_path}")
+        except Exception:
+            # Reset so a subsequent retry can attempt initialization again
+            _engine = None
+            _SessionLocal = None
+            raise
 
     # sync_schema runs outside the lock so it can acquire its own connections
     sync_schema()
