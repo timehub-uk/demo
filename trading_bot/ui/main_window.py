@@ -2072,6 +2072,7 @@ class MainWindow(QMainWindow):
                 self.breakout_widget = BreakoutWidget(
                     breakout_detector=self._breakout_detector,
                 )
+                self.breakout_widget.toast_requested.connect(self._toast.show_toast)
                 tabs.addTab(self.breakout_widget, "💥  Breakouts")
             except Exception:
                 pass

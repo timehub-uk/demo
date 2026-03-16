@@ -70,6 +70,7 @@ class BreakoutWidget(QWidget):
     """
 
     _refresh_signal = pyqtSignal()
+    toast_requested = pyqtSignal(str, str)   # message, level – cross-thread safe
 
     def __init__(
         self,
@@ -80,6 +81,7 @@ class BreakoutWidget(QWidget):
         self._detector = breakout_detector
         self._results: list[BreakoutResult] = []
         self._filter_stage = -1   # -1 = ALL
+        self._toasted_stages: dict[str, int] = {}   # symbol → last stage toasted
 
         self._refresh_signal.connect(self._refresh_table)
         self._build_ui()
@@ -217,6 +219,28 @@ class BreakoutWidget(QWidget):
     def _on_breakout_update(self, results: list) -> None:
         self._results = list(results)
         self._refresh_signal.emit()
+        self._maybe_toast(results)
+
+    def _maybe_toast(self, results: list) -> None:
+        """Emit a toast for each new PUMP (stage 2) or BREAKOUT (stage 4) detection."""
+        for r in results:
+            if r.stage not in (2, 4):
+                continue
+            # Only toast if this symbol+stage is new (not already announced)
+            if self._toasted_stages.get(r.symbol, 0) >= r.stage:
+                continue
+            self._toasted_stages[r.symbol] = r.stage
+            score_pct = int(r.breakout_score * 100)
+            vol_str   = f"{r.volume_spike:.1f}×"
+            chg_sign  = "+" if r.price_change_4h >= 0 else ""
+            chg_str   = f"{chg_sign}{r.price_change_4h:.2f}%"
+            if r.stage == 4:
+                msg   = f"💥 BREAKOUT  {r.symbol}  score={score_pct}%  vol={vol_str}  4h={chg_str}"
+                level = "WARNING"
+            else:
+                msg   = f"📈 PUMP DETECTED  {r.symbol}  score={score_pct}%  vol={vol_str}  4h={chg_str}"
+                level = "INFO"
+            self.toast_requested.emit(msg, level)
 
     # ── Table refresh ───────────────────────────────────────────────────────────
 
