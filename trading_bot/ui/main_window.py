@@ -3005,9 +3005,63 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_mode_change(self, data: dict) -> None:
+        old_mode = str(data.get("old", "")).lower()
         mode = str(data.get("new", "")).upper()
         self.status_bar.set_mode(mode)
         self._intel.system("TradingEngine", f"Engine mode → {mode}")
+
+        # When switching away from manual, automatically enable ML, Trading,
+        # Learning and Downloads
+        if old_mode == "manual" and mode.lower() not in ("manual",):
+            self._auto_enable_services()
+
+    def _auto_enable_services(self) -> None:
+        """Called when the engine switches away from manual mode.
+
+        Automatically starts the four background services that are typically
+        idle in manual mode:
+          • ML Training   – starts the 48-hour model training pipeline
+          • Trading       – starts the AutoTrader scan-trade loop
+          • Learning      – starts the ContinuousLearner retrain cycle
+          • Downloads     – archive bootstrap is handled inside ContinuousLearner
+        Each service is guarded so it is only started if not already running.
+        """
+        self._intel.system("MainWindow",
+            "🔄 Switched from Manual → activating ML / Trading / Learning / Downloads")
+
+        # ── Trading: start AutoTrader ──────────────────────────────────────
+        if self._auto_trader and not self._auto_trader._running:
+            try:
+                self._auto_trader.start()
+                self._intel.ml("MainWindow", "✅ AutoTrader started automatically")
+            except Exception as exc:
+                self._intel.error("MainWindow", f"AutoTrader auto-start failed: {exc}")
+
+        # ── Learning + Downloads: start ContinuousLearner ─────────────────
+        # ContinuousLearner.start() also triggers an archive bootstrap
+        # download when local data is sparse, covering the Downloads service.
+        if self._cl and not self._cl._running:
+            try:
+                self._cl.start(self._active_symbols)
+                self._intel.ml("MainWindow",
+                    "✅ ContinuousLearner started automatically (Learning + Downloads)")
+            except Exception as exc:
+                self._intel.error("MainWindow",
+                    f"ContinuousLearner auto-start failed: {exc}")
+
+        # ── ML Training: start 48-hour training pipeline ──────────────────
+        if hasattr(self, "ml_page") and hasattr(self.ml_page, "_start_training"):
+            try:
+                # Only start if not already training
+                already_training = (
+                    getattr(self.ml_page, "_thread", None) is not None
+                    and self.ml_page._thread.isRunning()
+                )
+                if not already_training:
+                    self.ml_page._start_training()
+                    self._intel.ml("MainWindow", "✅ ML Training started automatically")
+            except Exception as exc:
+                self._intel.error("MainWindow", f"ML Training auto-start failed: {exc}")
 
     def _on_ml_signal(self, signal: dict) -> None:
         if hasattr(self.ml_page, "add_signal"):
