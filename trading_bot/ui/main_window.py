@@ -7,8 +7,10 @@ Layout:
   ├──────┬──────────────────────────────────────────────────────────────┤
   │      │                                                               │
   │ NAV  │              STACKED CONTENT PANELS                          │
-  │ SIDE │  0: Trading  1: AutoTrader  2: ML  3: Risk                   │
-  │ BAR  │  4: Connections  5: Settings  6: Help                        │
+  │ SIDE │  0: Trading      1: AutoTrader   2: ML         3: Risk       │
+  │ BAR  │  4: Backtest     5: Journal      6: Strategy   7: Connections│
+  │      │  8: Settings     9: Help        10: Simulation 11: Reports   │
+  │      │ 12: MarketWatch 13: ML Tools                                 │
   │      │                                                               │
   │      ├──────────────────────────────────────────────────────────────┤
   │      │  INTEL LOG dock (collapsible)                                 │
@@ -2323,10 +2325,10 @@ class MainWindow(QMainWindow):
         at_menu = tm.addMenu("🤖  AutoTrader")
         at_menu.addAction(self._act("Open AutoTrader",           lambda: self._navigate_to(1),         "Ctrl+2"))
         at_menu.addSeparator()
-        at_menu.addAction(self._act("🔔  Alerts Tab",             lambda: self._open_at_tab(1)))
-        at_menu.addAction(self._act("⚡  Ping-Pong Tab",          lambda: self._open_at_tab(2)))
-        at_menu.addAction(self._act("🧠  Strategies Tab",         lambda: self._open_at_tab(3)))
-        at_menu.addAction(self._act("⚡  Arbitrage Tab",          lambda: self._open_at_tab(4)))
+        at_menu.addAction(self._act("🔔  Alerts Tab",             lambda: self._open_at_tab("Alerts")))
+        at_menu.addAction(self._act("⚡  Ping-Pong Tab",          lambda: self._open_at_tab("Ping-Pong")))
+        at_menu.addAction(self._act("🧠  Strategies Tab",         lambda: self._open_at_tab("Strategies")))
+        at_menu.addAction(self._act("⚡  Arbitrage Tab",          lambda: self._open_at_tab("Arbitrage")))
         at_menu.addSeparator()
         at_menu.addAction(self._act("Semi-Auto Mode",            lambda: self._set_at_mode("semi_auto")))
         at_menu.addAction(self._act("Full-Auto Mode",            lambda: self._set_at_mode("full_auto")))
@@ -2378,15 +2380,15 @@ class MainWindow(QMainWindow):
         mltools_m = mlm.addMenu("⚡  ML Tools")
         mltools_m.addAction(self._act("Open ML Tools Panel",         lambda: self._navigate_to(13),     "Ctrl+Shift+M"))
         mltools_m.addSeparator()
-        mltools_m.addAction(self._act("⚡  ML Central Command",      lambda: self._open_ml_tools_tab(0)))
-        mltools_m.addAction(self._act("📈  Trends",                  lambda: self._open_ml_tools_tab(1)))
-        mltools_m.addAction(self._act("🔍  Pairs Scanner",           lambda: self._open_ml_tools_tab(2)))
-        mltools_m.addAction(self._act("🕵  Accumulation Detector",   lambda: self._open_ml_tools_tab(3)))
-        mltools_m.addAction(self._act("💧  Liquidity Analyzer",      lambda: self._open_ml_tools_tab(4)))
-        mltools_m.addAction(self._act("💥  Breakout Detector",       lambda: self._open_ml_tools_tab(5)))
-        mltools_m.addAction(self._act("↕  Gap Detector",             lambda: self._open_ml_tools_tab(6)))
-        mltools_m.addAction(self._act("🕯  Large Candle Watcher",    lambda: self._open_ml_tools_tab(7)))
-        mltools_m.addAction(self._act("🧊  Iceberg Detector",        lambda: self._open_ml_tools_tab(8)))
+        mltools_m.addAction(self._act("⚡  ML Central Command",      lambda: self._open_ml_tools_tab("ML Command")))
+        mltools_m.addAction(self._act("📈  Trends",                  lambda: self._open_ml_tools_tab("Trends")))
+        mltools_m.addAction(self._act("🔍  Pairs Scanner",           lambda: self._open_ml_tools_tab("Pairs")))
+        mltools_m.addAction(self._act("🕵  Accumulation Detector",   lambda: self._open_ml_tools_tab("Accumulation")))
+        mltools_m.addAction(self._act("💧  Liquidity Analyzer",      lambda: self._open_ml_tools_tab("Liquidity")))
+        mltools_m.addAction(self._act("💥  Breakout Detector",       lambda: self._open_ml_tools_tab("Breakouts")))
+        mltools_m.addAction(self._act("↕  Gap Detector",             lambda: self._open_ml_tools_tab("Gaps")))
+        mltools_m.addAction(self._act("🕯  Large Candle Watcher",    lambda: self._open_ml_tools_tab("Candles")))
+        mltools_m.addAction(self._act("🧊  Iceberg Detector",        lambda: self._open_ml_tools_tab("Icebergs")))
 
         # ── Market ────────────────────────────────────────────────────────────
         mktm = mb.addMenu("&Market")
@@ -2670,6 +2672,14 @@ class MainWindow(QMainWindow):
         self._nav_collapsed = not self._nav_collapsed
         self._nav_anim.start()
 
+    @staticmethod
+    def _tab_index_by_title(tab_widget, title: str) -> int:
+        """Return the index of the first tab whose text contains *title*, or -1."""
+        for i in range(tab_widget.count()):
+            if title in tab_widget.tabText(i):
+                return i
+        return -1
+
     def _open_sim_tab(self, tab_index: int) -> None:
         """Navigate to simulation page and select a specific tab."""
         self._navigate_to(10)
@@ -2679,21 +2689,25 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def _open_at_tab(self, tab_index: int) -> None:
-        """Navigate to AutoTrader page and select a specific tab."""
+    def _open_at_tab(self, tab_title: str) -> None:
+        """Navigate to AutoTrader page and select the tab matching *tab_title*."""
         self._navigate_to(1)
         try:
             if hasattr(self, "at_page") and hasattr(self.at_page, "setCurrentIndex"):
-                self.at_page.setCurrentIndex(tab_index)
+                idx = self._tab_index_by_title(self.at_page, tab_title)
+                if idx >= 0:
+                    self.at_page.setCurrentIndex(idx)
         except Exception:
             pass
 
-    def _open_ml_tools_tab(self, tab_index: int) -> None:
-        """Navigate to ML Tools page and select a specific tab."""
+    def _open_ml_tools_tab(self, tab_title: str) -> None:
+        """Navigate to ML Tools page and select the tab matching *tab_title*."""
         self._navigate_to(13)
         try:
             if hasattr(self, "ml_tools_page") and hasattr(self.ml_tools_page, "setCurrentIndex"):
-                self.ml_tools_page.setCurrentIndex(tab_index)
+                idx = self._tab_index_by_title(self.ml_tools_page, tab_title)
+                if idx >= 0:
+                    self.ml_tools_page.setCurrentIndex(idx)
         except Exception:
             pass
 
@@ -2701,8 +2715,8 @@ class MainWindow(QMainWindow):
         """Navigate to Market Watch page and select a specific tab."""
         self._navigate_to(12)
         try:
-            if hasattr(self, "market_watch_page") and hasattr(self.market_watch_page, "setCurrentIndex"):
-                self.market_watch_page.setCurrentIndex(tab_index)
+            if hasattr(self, "market_watch_page") and hasattr(self.market_watch_page, "tabs"):
+                self.market_watch_page.tabs.setCurrentIndex(tab_index)
         except Exception:
             pass
 
@@ -2960,7 +2974,10 @@ class MainWindow(QMainWindow):
 
     def _check_connections(self) -> None:
         self._navigate_to(7)
-        QTimer.singleShot(200, self.connections_page._check_all)
+        try:
+            QTimer.singleShot(200, self.connections_page._check_all)
+        except Exception:
+            pass
 
     def _start_api_server(self) -> None:
         try:
@@ -3028,7 +3045,10 @@ class MainWindow(QMainWindow):
             pass
 
     def _add_chart_tab(self) -> None:
-        self.trading_page.chart_panel._prompt_add_tab()
+        try:
+            self.trading_page.chart_panel._prompt_add_tab()
+        except Exception:
+            pass
 
     # ──────────────────────────────────────────────────────────────────
     # View toggles

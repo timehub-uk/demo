@@ -1066,7 +1066,8 @@ class MarketWatchPanel(QWidget):
         root.addWidget(toggle_bar)
 
         # ── Tabs ──────────────────────────────────────────────────────────────
-        tabs = QTabWidget()
+        self.tabs = QTabWidget()
+        tabs = self.tabs
         tabs.setStyleSheet(_TAB_STYLE)
 
         self.volume_tab = VolumeAlertTab(am, ww, fm, cd)
