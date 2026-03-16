@@ -491,7 +491,9 @@ def _process_task(task: ArchiveTask, store_in_db: bool = True) -> DownloadResult
         try:
             df   = _parse_csv_to_df(task.csv_path)
             df   = _add_indicators(df)
-            rows = _upsert_to_db(task.symbol, task.interval, df) if store_in_db else len(df)
+            if store_in_db:
+                _upsert_to_db(task.symbol, task.interval, df)
+            rows = len(df)  # always report actual row count from CSV
             _export_csv(task.symbol, task.interval, df)   # keep flat CSV in sync
             return DownloadResult(task=task, success=True, rows=rows, skipped=True)
         except Exception as exc:
@@ -532,7 +534,9 @@ def _process_task(task: ArchiveTask, store_in_db: bool = True) -> DownloadResult
     try:
         df   = _parse_csv_to_df(task.csv_path)
         df   = _add_indicators(df)
-        rows = _upsert_to_db(task.symbol, task.interval, df) if store_in_db else len(df)
+        if store_in_db:
+            _upsert_to_db(task.symbol, task.interval, df)
+        rows = len(df)  # always report actual row count from CSV
         _export_csv(task.symbol, task.interval, df)   # dual-write to data/csv/
     except Exception as exc:
         return DownloadResult(task=task, success=False, error=f"parse-error: {exc}")

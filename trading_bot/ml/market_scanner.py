@@ -448,7 +448,7 @@ class MarketScanner:
         tickers = []
         try:
             if self._client:
-                raw = self._client.get_ticker_24h()
+                raw = self._client.get_ticker_24hr()
                 if raw:
                     tickers = raw if isinstance(raw, list) else [raw]
         except Exception as exc:

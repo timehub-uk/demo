@@ -145,6 +145,7 @@ class MLTrainingWidget(QWidget):
         self._worker: TrainingWorker | None = None
         self._thread: QThread | None = None
         self._loss_history: list[float] = []
+        self._val_loss_history: list[float] = []
         self._acc_history:  list[float] = []
         self._epoch_history: list[int] = []
         self._signal_history: list[dict] = []
@@ -287,6 +288,7 @@ class MLTrainingWidget(QWidget):
         self.loss_plot.setLabel("left", "Loss")
         self.loss_plot.setLabel("bottom", "Epoch")
         self.loss_plot.showGrid(x=True, y=True, alpha=0.15)
+        self.loss_plot.addLegend(offset=(10, 10))
         ctl.addWidget(self.loss_plot)
 
         self.acc_plot = pg.PlotWidget(title="Validation Accuracy")
@@ -415,7 +417,9 @@ class MLTrainingWidget(QWidget):
         self.phase3_card.reset()
         self.phase4_card.reset()
         self._loss_history.clear()
+        self._val_loss_history.clear()
         self._acc_history.clear()
+        self.right_tabs.setCurrentIndex(0)  # Switch to Charts tab
 
         self._thread = QThread()
         self._worker = TrainingWorker(self._trainer, None)
@@ -461,16 +465,19 @@ class MLTrainingWidget(QWidget):
 
         if event == "epoch":
             parts = message.split("|")
-            if len(parts) >= 3:
+            if len(parts) >= 4:
                 try:
                     loss_val = float(parts[1].strip().split(":")[1].strip())
-                    acc_val  = float(parts[2].strip().split(":")[1].strip().replace("%","")) / 100
+                    val_val  = float(parts[2].strip().split(":")[1].strip())
+                    acc_val  = float(parts[3].strip().split(":")[1].strip().replace("%","")) / 100
                     self._loss_history.append(loss_val)
+                    self._val_loss_history.append(val_val)
                     self._acc_history.append(acc_val * 100)
                     self._update_charts()
                     self.loss_lbl.setText(f"Loss: {loss_val:.4f}")
                     self.acc_lbl.setText(f"Accuracy: {acc_val:.2%}")
                     self.epoch_lbl.setText(f"Epoch: {len(self._loss_history)}")
+                    self.right_tabs.setCurrentIndex(0)  # Keep Charts tab visible
                 except Exception:
                     pass
 
@@ -497,7 +504,10 @@ class MLTrainingWidget(QWidget):
     def _update_charts(self) -> None:
         epochs = list(range(1, len(self._loss_history) + 1))
         self.loss_plot.clear()
-        self.loss_plot.plot(epochs, self._loss_history, pen=pg.mkPen(RED, width=2))
+        self.loss_plot.plot(epochs, self._loss_history, pen=pg.mkPen(RED, width=2), name="Train Loss")
+        if self._val_loss_history:
+            val_epochs = list(range(1, len(self._val_loss_history) + 1))
+            self.loss_plot.plot(val_epochs, self._val_loss_history, pen=pg.mkPen(YELLOW, width=2), name="Val Loss")
         self.acc_plot.clear()
         self.acc_plot.plot(epochs, self._acc_history, pen=pg.mkPen(GREEN, width=2))
 
