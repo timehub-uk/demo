@@ -44,6 +44,7 @@ from utils.logger import get_intel_logger
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 POLL_INTERVAL_SEC   = 5        # Price polling interval
+FETCH_TIMEOUT_SEC   = 3        # Max seconds to wait for a price/execute call
 RANGE_LOOKBACK      = 20       # Bars used for Bollinger / Donchian
 ZONE_PCT            = 0.25     # Bottom/top 25% of range is a trigger zone
 BB_STD              = 2.0      # Bollinger band std multiplier
@@ -448,22 +449,29 @@ class PingPongTrader:
         return "UNKNOWN"
 
     def _fetch_price(self, symbol: str) -> float:
-        try:
-            if self._client:
-                ticker = self._client.get_ticker(symbol)
-                if ticker:
-                    return float(ticker.get("lastPrice", 0))
-        except Exception:
-            pass
-        # Fallback: read from Redis
-        try:
-            from db.redis_client import RedisClient
-            d = RedisClient().get_ticker(symbol)
-            if d:
-                return float(d.get("price", 0))
-        except Exception:
-            pass
-        return 0.0
+        result: list[float] = [0.0]
+
+        def _do() -> None:
+            try:
+                if self._client:
+                    ticker = self._client.get_ticker(symbol)
+                    if ticker:
+                        result[0] = float(ticker.get("lastPrice", 0))
+                        return
+            except Exception:
+                pass
+            try:
+                from db.redis_client import RedisClient
+                d = RedisClient().get_ticker(symbol)
+                if d:
+                    result[0] = float(d.get("price", 0))
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_do, daemon=True)
+        t.start()
+        t.join(timeout=FETCH_TIMEOUT_SEC)
+        return result[0]
 
     def _calc_quantity(self, price: float, stop_loss: float) -> float:
         """Kelly-inspired fixed-fractional position sizing based on risk %."""
@@ -487,16 +495,25 @@ class PingPongTrader:
     def _execute(self, side: str, symbol: str, qty: float, price: float) -> bool:
         if not self._engine:
             return True   # Demo mode – pretend it worked
-        try:
-            from decimal import Decimal
-            if side == "BUY":
-                result = self._engine.manual_buy(symbol, Decimal(str(qty)), Decimal(str(price)))
-            else:
-                result = self._engine.manual_sell(symbol, Decimal(str(qty)), Decimal(str(price)))
-            return result is not None
-        except Exception as exc:
-            logger.warning(f"PingPong execute error: {exc}")
-            return False
+        result: list[bool] = [False]
+
+        def _do() -> None:
+            try:
+                from decimal import Decimal
+                if side == "BUY":
+                    r = self._engine.manual_buy(symbol, Decimal(str(qty)), Decimal(str(price)))
+                else:
+                    r = self._engine.manual_sell(symbol, Decimal(str(qty)), Decimal(str(price)))
+                result[0] = r is not None
+            except Exception as exc:
+                logger.warning(f"PingPong execute error: {exc}")
+
+        t = threading.Thread(target=_do, daemon=True)
+        t.start()
+        t.join(timeout=FETCH_TIMEOUT_SEC)
+        if t.is_alive():
+            logger.warning("PingPong execute timed out – skipping order")
+        return result[0]
 
     def _set_state(self, state: PPState) -> None:
         if self._state == state:
