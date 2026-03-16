@@ -12,6 +12,7 @@ Columns: Stage | Symbol | Score | Vol×Base | 4h% | RSI | ConsolBars | Price | N
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -58,7 +59,7 @@ _STAGE_LABELS = {
     4: "💥 BREAKOUT",
 }
 
-_COLS = ["Stage", "Symbol", "Score", "Vol×", "4h%", "RSI", "Consol", "Price", "Note"]
+_COLS = ["Stage", "Symbol", "Score", "Vol×", "4h%", "RSI", "Consol", "Price", "Time", "Age", "Note"]
 
 
 class BreakoutWidget(QWidget):
@@ -85,7 +86,7 @@ class BreakoutWidget(QWidget):
         self._connect_detector()
 
         self._timer = QTimer(self)
-        self._timer.setInterval(60_000)
+        self._timer.setInterval(30_000)   # 30s so "Age" stays current
         self._timer.timeout.connect(self._refresh_table)
         self._timer.start()
 
@@ -168,8 +169,8 @@ class BreakoutWidget(QWidget):
         self._table.setHorizontalHeaderLabels(_COLS)
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
-        for i in range(2, 8):
+        self._table.horizontalHeader().setSectionResizeMode(10, QHeaderView.ResizeMode.Stretch)
+        for i in range(2, 10):
             self._table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
 
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -284,14 +285,49 @@ class BreakoutWidget(QWidget):
             # Col 7 — price
             self._table.setItem(row_idx, 7, _item(self._fmt_price(r.last_price), fg=FG1))
 
-            # Col 8 — note
-            self._table.setItem(row_idx, 8, _item(r.note, Qt.AlignmentFlag.AlignLeft, FG2))
+            # Col 8 — time detected
+            detected_at = getattr(r, "first_detected_at", "") or getattr(r, "updated_at", "")
+            time_str = ""
+            age_str  = ""
+            age_color = FG2
+            if detected_at:
+                try:
+                    dt = datetime.fromisoformat(detected_at.replace("Z", "+00:00"))
+                    time_str = dt.strftime("%H:%M:%S")
+                    age_str, age_color = self._fmt_age(dt)
+                except Exception:
+                    time_str = detected_at[:8]
+            self._table.setItem(row_idx, 8, _item(time_str, fg=FG1))
+
+            # Col 9 — age (time since)
+            self._table.setItem(row_idx, 9, _item(age_str, fg=age_color))
+
+            # Col 10 — note
+            self._table.setItem(row_idx, 10, _item(r.note, Qt.AlignmentFlag.AlignLeft, FG2))
 
             self._table.setRowHeight(row_idx, 36)
 
-        from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
         self._status_lbl.setText(f"Updated {ts}  ·  {len(results)} signals")
+
+    @staticmethod
+    def _fmt_age(dt: datetime) -> tuple[str, str]:
+        """Return (human-readable age string, colour) for a UTC datetime."""
+        secs = int((datetime.now(timezone.utc) - dt).total_seconds())
+        if secs < 0:
+            secs = 0
+        if secs < 60:
+            return f"{secs}s ago", GREEN
+        if secs < 3600:
+            m = secs // 60
+            s = secs % 60
+            return f"{m}m {s:02d}s ago", GREEN if m < 15 else YELLOW
+        if secs < 86400:
+            h = secs // 3600
+            m = (secs % 3600) // 60
+            return f"{h}h {m:02d}m ago", YELLOW if h < 4 else FG2
+        d = secs // 86400
+        return f"{d}d ago", FG2
 
     @staticmethod
     def _fmt_price(price: float) -> str:

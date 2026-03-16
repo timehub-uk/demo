@@ -95,6 +95,9 @@ class BreakoutResult:
     volume_baseline: float = 0.0
     bars_analysed:   int   = 0
     note:            str   = ""
+    first_detected_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     updated_at:      str   = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -238,8 +241,12 @@ class VolumeBreakoutDetector:
             try:
                 result = self._analyze(sym)
                 if result:
-                    new_results[sym] = result
                     prev = self._prev_stages.get(sym, 0)
+                    # Preserve first_detected_at when stage hasn't changed
+                    existing = self._results.get(sym)
+                    if existing and existing.stage == result.stage and existing.stage > 0:
+                        result.first_detected_at = existing.first_detected_at
+                    new_results[sym] = result
                     # Notify on stage 2+ and on stage advancement
                     if result.stage >= 2 or result.stage > prev:
                         notable.append(result)
