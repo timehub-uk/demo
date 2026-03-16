@@ -863,25 +863,25 @@ def build_services(settings):
             paper=True,    # paper mode by default; user can toggle in UI
         )
 
-        intel.system("Startup", "Initialising multi-timeframe trend scanner…")
-        from ml.trend_scanner import TrendScanner
-        trend_scanner = TrendScanner(binance_client=binance)
+    intel.system("Startup", "Initialising multi-timeframe trend scanner…")
+    from ml.trend_scanner import TrendScanner
+    trend_scanner = TrendScanner(binance_client=binance)
 
-        intel.system("Startup", "Initialising pair discovery scanner…")
-        from ml.pair_scanner import PairScanner
-        pair_scanner = PairScanner(binance_client=binance)
+    intel.system("Startup", "Initialising pair discovery scanner…")
+    from ml.pair_scanner import PairScanner
+    pair_scanner = PairScanner(binance_client=binance)
 
-        intel.system("Startup", "Initialising pair ML cross-reference analyzer…")
-        from ml.pair_ml_analyzer import PairMLAnalyzer
-        pair_ml_analyzer = PairMLAnalyzer(
-            pair_scanner=pair_scanner,
-            trend_scanner=trend_scanner,
-            predictor=predictor,
-            whale_watcher=whale_watcher,
-            sentiment=sentiment,
-            regime_detector=regime_detector,
-            arb_detector=arb_detector,
-        )
+    intel.system("Startup", "Initialising pair ML cross-reference analyzer…")
+    from ml.pair_ml_analyzer import PairMLAnalyzer
+    pair_ml_analyzer = PairMLAnalyzer(
+        pair_scanner=pair_scanner,
+        trend_scanner=trend_scanner,
+        predictor=predictor,
+        whale_watcher=whale_watcher,
+        sentiment=sentiment,
+        regime_detector=regime_detector,
+        arb_detector=arb_detector,
+    )
 
     intel.system("Startup", "Initialising MetaMask wallet bridge (optional)…")
     from core.metamask_wallet import MetaMaskWallet
@@ -893,62 +893,55 @@ def build_services(settings):
         threshold_usdt=getattr(settings, "metamask_threshold_usdt", 100.0),
     )
 
-    accumulation_detector = None
-    liquidity_analyzer    = None
-    breakout_detector     = None
-    gap_detector          = None
-    large_candle_watcher  = None
-    iceberg_detector      = None
-    ml_central            = None
     sim_twin              = None
     mutation_lab          = None
+    intel.system("Startup", "Initialising accumulation detector…")
+    from ml.accumulation_detector import AccumulationDetector
+    accumulation_detector = AccumulationDetector(
+        binance_client=binance,
+        pair_scanner=pair_scanner,
+    )
+
+    intel.system("Startup", "Initialising liquidity depth analyzer…")
+    from ml.liquidity_depth_analyzer import LiquidityDepthAnalyzer
+    liquidity_analyzer = LiquidityDepthAnalyzer(
+        binance_client=binance,
+        pair_scanner=pair_scanner,
+    )
+
+    intel.system("Startup", "Initialising volume breakout detector…")
+    from ml.volume_breakout_detector import VolumeBreakoutDetector
+    breakout_detector = VolumeBreakoutDetector(
+        binance_client=binance,
+        pair_scanner=pair_scanner,
+    )
+
+    intel.system("Startup", "Initialising gap detector (gap up/down ML scanner)…")
+    from ml.gap_detector import GapDetector
+    gap_detector = GapDetector(
+        binance_client=binance,
+        pair_scanner=pair_scanner,
+    )
+
+    intel.system("Startup", "Initialising large candle watcher (rapid expansion alerts)…")
+    from ml.large_candle_watcher import LargeCandleWatcher
+    large_candle_watcher = LargeCandleWatcher(
+        binance_client=binance,
+        pair_scanner=pair_scanner,
+    )
+
+    intel.system("Startup", "Initialising iceberg detector (hidden order discovery, ICEBERG_PARTS=100)…")
+    from ml.iceberg_detector import IcebergDetector
+    iceberg_detector = IcebergDetector(
+        binance_client=binance,
+        pair_scanner=pair_scanner,
+    )
+
+    intel.system("Startup", "Initialising ML central command (unified signal pipeline)…")
+    from ml.ml_central_command import MLCentralCommand
+    ml_central = MLCentralCommand()
+
     if not is_manual:
-        intel.system("Startup", "Initialising accumulation detector…")
-        from ml.accumulation_detector import AccumulationDetector
-        accumulation_detector = AccumulationDetector(
-            binance_client=binance,
-            pair_scanner=pair_scanner,
-        )
-
-        intel.system("Startup", "Initialising liquidity depth analyzer…")
-        from ml.liquidity_depth_analyzer import LiquidityDepthAnalyzer
-        liquidity_analyzer = LiquidityDepthAnalyzer(
-            binance_client=binance,
-            pair_scanner=pair_scanner,
-        )
-
-        intel.system("Startup", "Initialising volume breakout detector…")
-        from ml.volume_breakout_detector import VolumeBreakoutDetector
-        breakout_detector = VolumeBreakoutDetector(
-            binance_client=binance,
-            pair_scanner=pair_scanner,
-        )
-
-        intel.system("Startup", "Initialising gap detector (gap up/down ML scanner)…")
-        from ml.gap_detector import GapDetector
-        gap_detector = GapDetector(
-            binance_client=binance,
-            pair_scanner=pair_scanner,
-        )
-
-        intel.system("Startup", "Initialising large candle watcher (rapid expansion alerts)…")
-        from ml.large_candle_watcher import LargeCandleWatcher
-        large_candle_watcher = LargeCandleWatcher(
-            binance_client=binance,
-            pair_scanner=pair_scanner,
-        )
-
-        intel.system("Startup", "Initialising iceberg detector (hidden order discovery, ICEBERG_PARTS=100)…")
-        from ml.iceberg_detector import IcebergDetector
-        iceberg_detector = IcebergDetector(
-            binance_client=binance,
-            pair_scanner=pair_scanner,
-        )
-
-        intel.system("Startup", "Initialising ML central command (unified signal pipeline)…")
-        from ml.ml_central_command import MLCentralCommand
-        ml_central = MLCentralCommand()
-
         intel.system("Startup", "Initialising auto-trader…")
         from core.auto_trader import AutoTrader
         auto_trader = AutoTrader(
