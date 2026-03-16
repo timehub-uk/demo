@@ -1191,12 +1191,12 @@ class TradingStatusBar(QStatusBar):
                    time.strftime("%H:%M:%S  %d %b %Y")
                )).start()
 
-        # Health-check every 30 s — runs on the UI thread via QTimer
+        # Health-check every 30 s — dispatched to a background thread
         self._health_timer = QTimer(self)
         self._health_timer.setInterval(30_000)
         self._health_timer.timeout.connect(self._run_health_check)
 
-        # Network check every 15 s
+        # Network check every 15 s — dispatched to a background thread
         self._net_timer = QTimer(self)
         self._net_timer.setInterval(15_000)
         self._net_timer.timeout.connect(self._check_network)
@@ -1209,35 +1209,48 @@ class TradingStatusBar(QStatusBar):
         self._net_timer.start()
 
     def _run_health_check(self) -> None:
-        # PostgreSQL
-        try:
-            from db.postgres import get_db
-            from sqlalchemy import text
-            with get_db() as db:
-                db.execute(text("SELECT 1"))
-            self.set_service("db", True)
-        except Exception:
-            self.set_service("db", False)
+        """Dispatch DB + Redis probes to a background thread to avoid blocking the UI."""
+        def _probe():
+            # PostgreSQL
+            try:
+                from db.postgres import get_db
+                from sqlalchemy import text
+                with get_db() as db:
+                    db.execute(text("SELECT 1"))
+                db_ok = True
+            except Exception:
+                db_ok = False
 
-        # Redis
-        try:
-            from db.redis_client import get_redis
-            get_redis().ping()
-            self.set_service("redis", True)
-        except Exception:
-            self.set_service("redis", False)
+            # Redis
+            try:
+                from db.redis_client import get_redis
+                get_redis().ping()
+                redis_ok = True
+            except Exception:
+                redis_ok = False
+
+            # Marshal results back onto the UI thread
+            QTimer.singleShot(0, lambda: self.set_service("db", db_ok))
+            QTimer.singleShot(0, lambda: self.set_service("redis", redis_ok))
+
+        threading.Thread(target=_probe, daemon=True, name="statusbar-health").start()
 
     def _check_network(self) -> None:
-        import socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.settimeout(2)
-            sock.connect(("8.8.8.8", 53))
-            self.set_service("network", True)
-        except Exception:
-            self.set_service("network", False)
-        finally:
-            sock.close()
+        """Dispatch network probe to a background thread to avoid blocking the UI."""
+        def _probe():
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.settimeout(2)
+                sock.connect(("8.8.8.8", 53))
+                ok = True
+            except Exception:
+                ok = False
+            finally:
+                sock.close()
+            QTimer.singleShot(0, lambda: self.set_service("network", ok))
+
+        threading.Thread(target=_probe, daemon=True, name="statusbar-net").start()
 
     def _open_status_popup(self) -> None:
         """Open (or raise) the live System Status dialog."""

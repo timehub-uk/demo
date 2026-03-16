@@ -39,8 +39,9 @@ from ui.styles import (
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-_HISTORY = 60          # data points to keep (1 point per second = 60 s window)
-_TICK_MS = 1_000       # update every second
+_HISTORY  = 60          # data points to keep (1 point per second = 60 s window)
+_TICK_MS  = 1_000       # fast tick – CPU / mem / net-io (non-blocking)
+_PROBE_MS = 10_000      # slow tick – DB / Redis / network probes (background thread)
 
 
 # ── Tiny sparkline / area-chart widget ────────────────────────────────────────
@@ -270,14 +271,28 @@ class SystemStatusWidget(QWidget):
     Embed in a tab or open via SystemStatusDialog.
     """
 
+    # Signal to deliver blocking-probe results back onto the UI thread
+    _probe_done = pyqtSignal(bool, bool, float, bool, float)  # net, db_ok, db_ms, rds_ok, rds_ms
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._setup_ui()
         self._prev_net = self._read_net_counters()
+        self._probe_done.connect(self._apply_probe_results)
+
+        # Fast timer – non-blocking updates only (CPU, mem, net I/O counters)
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_MS)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
+
+        # Slow timer – dispatches blocking I/O probes to a background thread
+        self._probe_timer = QTimer(self)
+        self._probe_timer.setInterval(_PROBE_MS)
+        self._probe_timer.timeout.connect(self._dispatch_probes)
+        self._probe_timer.start()
+        # Run once immediately so the status row has values on first open
+        QTimer.singleShot(0, self._dispatch_probes)
 
     # ── UI setup ──────────────────────────────────────────────────────────────
 
@@ -391,7 +406,7 @@ class SystemStatusWidget(QWidget):
     # ── Data collection ───────────────────────────────────────────────────────
 
     def _tick(self) -> None:
-        """Collect system metrics and update all graphs."""
+        """Fast non-blocking tick: uptime, CPU, memory, net I/O counters only."""
         # Uptime
         up = int(time.time() - self._start_ts)
         h, rem = divmod(up, 3600)
@@ -403,18 +418,31 @@ class SystemStatusWidget(QWidget):
         self._cpu_graph.push(cpu_pct)
         self._mem_graph.push(mem_pct)
 
-        # Network I/O
+        # Network I/O counters (reads /proc — non-blocking)
         tx_kb, rx_kb = self._read_net_delta()
         self._net_tx_graph.push(tx_kb)
         self._net_rx_graph.push(rx_kb)
 
-        # Network online check
-        net_ok = self._check_network()
+        # DEX quota panel (in-memory state — free)
+        self._update_dex_quota_panel()
+
+    def _dispatch_probes(self) -> None:
+        """Dispatch blocking network / DB / Redis probes to a background thread."""
+        def _run():
+            net_ok        = self._check_network()
+            db_ok, db_ms  = self._check_postgres()
+            rds_ok, rds_ms = self._check_redis()
+            self._probe_done.emit(net_ok, db_ok, db_ms, rds_ok, rds_ms)
+
+        threading.Thread(target=_run, daemon=True, name="sysstat-probe").start()
+
+    def _apply_probe_results(
+        self, net_ok: bool, db_ok: bool, db_ms: float, rds_ok: bool, rds_ms: float
+    ) -> None:
+        """Receive probe results on the UI thread and update widgets."""
         self._status_row.set_status("network", net_ok,
                                     "Internet reachable" if net_ok else "No route to host")
 
-        # PostgreSQL
-        db_ok, db_ms = self._check_postgres()
         self._db_graph.push(
             db_ms if db_ok else self._db_graph._max_val,
             status="ONLINE" if db_ok else "OFFLINE",
@@ -423,8 +451,6 @@ class SystemStatusWidget(QWidget):
         self._status_row.set_status("db", db_ok,
                                     f"{db_ms:.0f} ms" if db_ok else "")
 
-        # Redis
-        rds_ok, rds_ms = self._check_redis()
         self._rds_graph.push(
             rds_ms if rds_ok else self._rds_graph._max_val,
             status="ONLINE" if rds_ok else "OFFLINE",
@@ -433,12 +459,8 @@ class SystemStatusWidget(QWidget):
         self._status_row.set_status("redis", rds_ok,
                                     f"{rds_ms:.0f} ms" if rds_ok else "")
 
-        # Binance API (just check if credentials exist)
         api_ok = self._check_api()
         self._status_row.set_status("api", api_ok)
-
-        # DEX quota panel (update every tick from in-memory state — free)
-        self._update_dex_quota_panel()
 
     def _update_dex_quota_panel(self) -> None:
         """Refresh DEX API quota / scheduler labels from in-memory state."""
