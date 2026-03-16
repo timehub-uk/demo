@@ -208,10 +208,11 @@ class NavButton(QToolButton):
         self._flash_on  = False
 
         self.setObjectName("nav_btn")
-        self.setFixedHeight(70)
+        self.setFixedHeight(74)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.setText(label)
+        self.setToolTip(label)
         self._set_icon(FG2)
         self._apply_style(False)
 
@@ -260,8 +261,8 @@ class NavButton(QToolButton):
                 background:{bg}; color:{col};
                 border:none; {top_bar}
                 border-radius:0;
-                font-size:11px; font-weight:{weight};
-                padding:8px 2px 5px 2px;
+                font-size:10px; font-weight:{weight};
+                padding:6px 4px 5px 4px;
             }}
             QToolButton:hover {{
                 background:{BG3}; color:{FG0};
@@ -481,7 +482,7 @@ _NAV_ITEMS = [
 class NavSidebar(QFrame):
     page_requested = pyqtSignal(int)
 
-    _WIDTH = 92   # px — icon centred above text; enough for longest label
+    _WIDTH = 120  # px — icon centred above text; enough for longest label
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
