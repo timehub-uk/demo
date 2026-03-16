@@ -1313,14 +1313,62 @@ class ChartWidget(QWidget):
             self.sym_combo.setCurrentIndex(idx)
 
     def _refresh_data(self) -> None:
+        # 1. Try Redis (live streaming data)
         try:
             from db.redis_client import RedisClient
             candles = RedisClient().get_candles(self._symbol, self._interval)
             if candles:
                 self._data = candles
                 self._render()
+                return
         except Exception:
             pass
+
+        # 2. Fallback: load from CSV / DB (works without Binance API)
+        if not self._data:
+            try:
+                from ml.data_collector import DataCollector
+                df = DataCollector.load_dataframe(self._symbol, self._interval, limit=500)
+                if not df.empty:
+                    import pandas as pd
+                    candles = []
+                    for _, row in df.iterrows():
+                        ot = row["open_time"]
+                        ts = ot.timestamp() if hasattr(ot, "timestamp") else float(ot)
+                        candles.append({
+                            "t": ts, "o": float(row["open"]),  "h": float(row["high"]),
+                            "l": float(row["low"]),  "c": float(row["close"]),
+                            "v": float(row["volume"]),
+                        })
+                    if candles:
+                        self._data = candles
+                        self._render()
+                        return
+            except Exception:
+                pass
+
+        # 3. Last resort: synthetic demo data so the chart is never blank
+        if not self._data:
+            try:
+                import time as _time
+                from ml.data_collector import DataCollector, INTERVALS
+                interval_sec = INTERVALS.get(self._interval, 3600)
+                end_ms   = int(_time.time() * 1000)
+                start_ms = end_ms - 500 * interval_sec * 1000
+                raw = DataCollector._generate_synthetic(
+                    self._symbol, self._interval, start_ms, end_ms
+                )
+                if raw:
+                    # Binance kline format: [open_time, open, high, low, close, volume, ...]
+                    candles = [
+                        {"t": float(r[0]) / 1000, "o": float(r[1]), "h": float(r[2]),
+                         "l": float(r[3]),  "c": float(r[4]),  "v": float(r[5])}
+                        for r in raw
+                    ]
+                    self._data = candles
+                    self._render()
+            except Exception:
+                pass
 
     # ── Rendering ──────────────────────────────────────────────────────
 

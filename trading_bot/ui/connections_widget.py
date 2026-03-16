@@ -200,6 +200,8 @@ class ConnectionsWidget(QWidget):
     Auto-checks all services every 30 seconds, or on demand.
     """
 
+    _results_ready = pyqtSignal(dict)
+
     def __init__(
         self,
         binance_client=None,
@@ -211,6 +213,7 @@ class ConnectionsWidget(QWidget):
         self._engine = engine
         self._setup_ui()
 
+        self._results_ready.connect(self._apply_results)
         self._check_timer = QTimer(self)
         self._check_timer.timeout.connect(self._check_all)
         self._check_timer.start(30_000)
@@ -365,7 +368,7 @@ class ConnectionsWidget(QWidget):
         results["openai"]      = self._check_ai_key("openai_api_key",      "Sentiment scoring (fallback)")
         results["gemini"]      = self._check_ai_key("gemini_api_key",      "Sentiment scoring (fallback)")
         results["elevenlabs"]  = self._check_ai_key("elevenlabs_api_key",  "Voice alerts TTS")
-        QTimer.singleShot(0, lambda: self._apply_results(results))
+        self._results_ready.emit(results)
 
     def _apply_results(self, results: dict) -> None:
         row_map = {

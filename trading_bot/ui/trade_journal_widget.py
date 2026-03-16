@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
@@ -63,10 +63,13 @@ def _stat(label: str, value: str, col: str = FG1) -> QWidget:
 class TradeJournalWidget(QWidget):
     """Full trade journal panel."""
 
+    _data_ready = pyqtSignal(object, object, object, object)
+
     def __init__(self, trade_journal=None, parent=None) -> None:
         super().__init__(parent)
         self._journal = trade_journal
         self._show_all = False
+        self._data_ready.connect(self._update_ui)
         self._setup_ui()
         QTimer(self, interval=10_000, timeout=self._refresh).start()
         QTimer.singleShot(500, self._refresh)
@@ -209,9 +212,7 @@ class TradeJournalWidget(QWidget):
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             closed = [t for t in closed if t.get("exit_time", "").startswith(today)]
 
-        from PyQt6.QtCore import QTimer as _QT
-        _QT.singleShot(0, lambda: self._update_ui(
-            open_trades, closed, summary, attribution))
+        self._data_ready.emit(open_trades, closed, summary, attribution)
 
     def _update_ui(self, open_trades, closed, summary, attribution) -> None:
         # Stats

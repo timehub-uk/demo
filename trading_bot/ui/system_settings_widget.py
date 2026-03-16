@@ -102,10 +102,12 @@ class SystemSettingsWidget(QWidget):
     """
 
     settings_saved = pyqtSignal()
+    _lbl_update = pyqtSignal(object, str, str)  # widget-ref, text, stylesheet
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._settings = None
+        self._lbl_update.connect(lambda w, t, s: (w.setText(t), w.setStyleSheet(s)))
         self._setup_ui()
         self._load()
 
@@ -308,11 +310,7 @@ class SystemSettingsWidget(QWidget):
             except Exception as e:
                 msg = f"✗ {str(e)[:80]}"
                 col = RED
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: (
-                self.cg_test_lbl.setText(msg),
-                self.cg_test_lbl.setStyleSheet(f"color:{col}; font-size:10px; font-family:monospace;")
-            ))
+            self._lbl_update.emit(self.cg_test_lbl, msg, f"color:{col}; font-size:10px; font-family:monospace;")
         threading.Thread(target=_run, daemon=True).start()
         self.cg_test_lbl.setText("Testing…")
         self.cg_test_lbl.setStyleSheet(f"color:{YELLOW}; font-size:10px; font-family:monospace;")
@@ -336,11 +334,7 @@ class SystemSettingsWidget(QWidget):
             except Exception as e:
                 msg = f"✗ {str(e)[:80]}"
                 col = RED
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: (
-                self.codex_test_lbl.setText(msg),
-                self.codex_test_lbl.setStyleSheet(f"color:{col}; font-size:10px; font-family:monospace;")
-            ))
+            self._lbl_update.emit(self.codex_test_lbl, msg, f"color:{col}; font-size:10px; font-family:monospace;")
         threading.Thread(target=_run, daemon=True).start()
         self.codex_test_lbl.setText("Testing…")
         self.codex_test_lbl.setStyleSheet(f"color:{YELLOW}; font-size:10px; font-family:monospace;")
@@ -448,13 +442,7 @@ class SystemSettingsWidget(QWidget):
                 col = GREEN if ok else RED
             except Exception as e:
                 ok, msg, col = False, str(e)[:80], RED
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: (
-                self.zx_test_lbl.setText(("✓ " if ok else "✗ ") + msg),
-                self.zx_test_lbl.setStyleSheet(
-                    f"color:{col}; font-size:10px; font-family:monospace;"
-                ),
-            ))
+            self._lbl_update.emit(self.zx_test_lbl, ("✓ " if ok else "✗ ") + msg, f"color:{col}; font-size:10px; font-family:monospace;")
         threading.Thread(target=_run, daemon=True).start()
         self.zx_test_lbl.setText("Testing…")
         self.zx_test_lbl.setStyleSheet(f"color:{YELLOW}; font-size:10px; font-family:monospace;")
@@ -826,12 +814,7 @@ class SystemSettingsWidget(QWidget):
                     msg, col = "✓ Preview queued for delivery", GREEN
             except Exception as exc:
                 msg, col = f"✗ {exc}", RED
-            QTimer.singleShot(0, lambda: (
-                self.es_send_preview_lbl.setText(msg),
-                self.es_send_preview_lbl.setStyleSheet(
-                    f"color:{col}; font-size:10px; font-family:monospace;"
-                ),
-            ))
+            self._lbl_update.emit(self.es_send_preview_lbl, msg, f"color:{col}; font-size:10px; font-family:monospace;")
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -851,10 +834,7 @@ class SystemSettingsWidget(QWidget):
             ok, msg = _send_test_email(smtp_host, smtp_port, smtp_user, smtp_pass,
                                        smtp_tls, email_from, email_to)
             col = GREEN if ok else RED
-            QTimer.singleShot(0, lambda: (
-                self.n_test_lbl.setText(("✓ " if ok else "✗ ") + msg),
-                self.n_test_lbl.setStyleSheet(f"color:{col}; font-size:10px; font-family:monospace;"),
-            ))
+            self._lbl_update.emit(self.n_test_lbl, ("✓ " if ok else "✗ ") + msg, f"color:{col}; font-size:10px; font-family:monospace;")
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -873,12 +853,7 @@ class SystemSettingsWidget(QWidget):
                 msg, col = "✓ Reports queued for delivery", GREEN
             except Exception as exc:
                 msg, col = f"✗ {exc}", RED
-            QTimer.singleShot(0, lambda: (
-                self.n_send_now_lbl.setText(msg),
-                self.n_send_now_lbl.setStyleSheet(
-                    f"color:{col}; font-size:10px; font-family:monospace;"
-                ),
-            ))
+            self._lbl_update.emit(self.n_send_now_lbl, msg, f"color:{col}; font-size:10px; font-family:monospace;")
 
         threading.Thread(target=_run, daemon=True).start()
 

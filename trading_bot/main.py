@@ -46,6 +46,30 @@ def _configure_qt_platform() -> None:
 
 _configure_qt_platform()
 
+
+def _install_qt_message_handler() -> None:
+    """
+    Intercept Qt C++ warnings and log them via loguru with a Python
+    stack trace.  Especially useful for diagnosing QBasicTimer / QTimer
+    thread violations before they escalate to segfaults.
+    """
+    import traceback
+
+    def _handler(msg_type: QtMsgType, context, message: str) -> None:  # type: ignore[override]
+        if "QBasicTimer" in message or "QTimer" in message:
+            stack = "".join(traceback.format_stack()[:-1])
+            logger.warning(
+                f"Qt thread violation [{context.file}:{context.line}] – {message}\n"
+                f"Python stack:\n{stack}"
+            )
+        elif msg_type in (QtMsgType.QtWarningMsg, QtMsgType.QtCriticalMsg,
+                          QtMsgType.QtFatalMsg):
+            logger.warning(f"Qt – {message}")
+        # QtDebugMsg and QtInfoMsg are intentionally silenced
+
+    qInstallMessageHandler(_handler)
+
+
 # ── Suppress known benign DeprecationWarnings from third-party libraries ──────
 import warnings
 # redis-py ≥ 6.0 deprecates the retry_on_timeout kwarg (TimeoutError is now
@@ -67,7 +91,7 @@ from loguru import logger
 # ── Qt (check before anything else) ─────────────────────────────────────────
 try:
     from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen
-    from PyQt6.QtCore import Qt, QTimer
+    from PyQt6.QtCore import Qt, QTimer, qInstallMessageHandler, QtMsgType
     from PyQt6.QtGui import (
         QPixmap, QFont, QColor, QPainter, QPen, QBrush, QFontMetrics,
         QLinearGradient, QFontDatabase,
@@ -1866,6 +1890,7 @@ def main() -> int:
     app.setApplicationName("BinanceML Pro")
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("BinanceMLPro")
+    _install_qt_message_handler()
 
     # High-DPI support
     from ui.styles import apply_theme, DEFAULT_THEME

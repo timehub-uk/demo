@@ -7,7 +7,7 @@ regime-based ML selection, and lets the user override manually.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -41,11 +41,14 @@ STRATEGY_BEST_REGIME = {
 class StrategyManagerWidget(QWidget):
     """Live strategy manager panel."""
 
+    _strategy_changed = pyqtSignal()
+
     def __init__(self, strategy_manager=None, parent=None) -> None:
         super().__init__(parent)
         self._mgr = strategy_manager
         self._setup_ui()
         self._connect_backend()
+        self._strategy_changed.connect(self._refresh)
         QTimer(self, interval=5000, timeout=self._refresh).start()
         QTimer.singleShot(1000, self._refresh)
 
@@ -166,7 +169,7 @@ class StrategyManagerWidget(QWidget):
         if not self._mgr:
             return
         try:
-            self._mgr.on_strategy_changed(lambda sel: QTimer.singleShot(0, self._refresh))
+            self._mgr.on_strategy_changed(lambda sel: self._strategy_changed.emit())
         except Exception:
             pass
 

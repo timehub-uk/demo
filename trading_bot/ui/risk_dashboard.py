@@ -21,7 +21,7 @@ import time
 from typing import Optional
 
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
@@ -69,6 +69,8 @@ class RiskDashboard(QWidget):
     Pass in the service objects; it polls them every 5 seconds.
     """
 
+    _opt_done = pyqtSignal()
+
     def __init__(
         self,
         dynamic_risk=None,
@@ -90,6 +92,7 @@ class RiskDashboard(QWidget):
         self._wf      = walk_forward
         self._engine  = engine
         self._port_opt = port_opt
+        self._opt_done.connect(self._on_opt_done)
         self._setup_ui()
         self._timer  = QTimer(self)
         self._timer.timeout.connect(self._refresh)
@@ -495,8 +498,7 @@ class RiskDashboard(QWidget):
             except Exception:
                 pass
             finally:
-                from PyQt6.QtCore import QTimer
-                QTimer.singleShot(0, self._on_opt_done)
+                self._opt_done.emit()
 
         threading.Thread(target=_run, daemon=True, name="port-opt-ui").start()
 

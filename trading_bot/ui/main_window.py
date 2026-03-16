@@ -1299,11 +1299,17 @@ class TradingStatusBar(QStatusBar):
 class MainWindow(QMainWindow):
     """BinanceML Pro – Futuristic AI Trading Desk."""
 
-    _toast_signal      = pyqtSignal(str, str)    # message, level – cross-thread safe
-    _nav_alert_signal  = pyqtSignal(int)          # page index – cross-thread safe
-    _at_state_signal   = pyqtSignal(str)          # auto-trader state value
-    _regime_signal     = pyqtSignal(object)       # regime snap
-    _bid_ask_signal    = pyqtSignal(float, float) # bid, ask
+    _toast_signal        = pyqtSignal(str, str)    # message, level – cross-thread safe
+    _nav_alert_signal    = pyqtSignal(int)          # page index – cross-thread safe
+    _at_state_signal     = pyqtSignal(str)          # auto-trader state value
+    _regime_signal       = pyqtSignal(object)       # regime snap
+    _bid_ask_signal      = pyqtSignal(float, float) # bid, ask
+    # Engine/predictor callbacks arrive on background threads — use signals
+    _heartbeat_signal    = pyqtSignal(dict)
+    _trade_evt_signal    = pyqtSignal(dict)
+    _signal_evt_signal   = pyqtSignal(dict)
+    _mode_change_signal  = pyqtSignal(dict)
+    _ml_pred_signal      = pyqtSignal(dict)
 
     def __init__(
         self,
@@ -1459,6 +1465,12 @@ class MainWindow(QMainWindow):
             lambda b, a: self.trading_page.set_bid_ask(b, a)
             if hasattr(self, "trading_page") else None
         )
+        # Engine/predictor bg-thread callbacks → main thread via signals
+        self._heartbeat_signal.connect(self._on_heartbeat)
+        self._trade_evt_signal.connect(self._on_trade_event)
+        self._signal_evt_signal.connect(self._on_signal_event)
+        self._mode_change_signal.connect(self._on_mode_change)
+        self._ml_pred_signal.connect(self._on_ml_signal)
 
         self.nav.set_active(0)
         self._intel.system("MainWindow", "BinanceML Pro trading desk ready.")
@@ -2584,12 +2596,12 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         if self._engine:
-            self._engine.on("heartbeat",   self._on_heartbeat)
-            self._engine.on("trade",       self._on_trade_event)
-            self._engine.on("signal",      self._on_signal_event)
-            self._engine.on("mode_change", self._on_mode_change)
+            self._engine.on("heartbeat",   self._heartbeat_signal.emit)
+            self._engine.on("trade",       self._trade_evt_signal.emit)
+            self._engine.on("signal",      self._signal_evt_signal.emit)
+            self._engine.on("mode_change", self._mode_change_signal.emit)
         if self._predictor:
-            self._predictor.on_signal(self._on_ml_signal)
+            self._predictor.on_signal(self._ml_pred_signal.emit)
         if self._auto_trader:
             self._auto_trader.on_state_change(
                 lambda state: self._at_state_signal.emit(state.value)
