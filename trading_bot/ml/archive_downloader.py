@@ -684,6 +684,7 @@ class BinanceArchiveDownloader:
                 # Update summary
                 if result.skipped:
                     summary.skipped += 1
+                    summary.total_rows += result.rows   # cached files still have rows
                 elif result.success:
                     summary.completed  += 1
                     summary.total_rows += result.rows

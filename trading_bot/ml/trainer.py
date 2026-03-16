@@ -422,7 +422,7 @@ class MLTrainer:
             if s:
                 intel.ml(
                     "MLTrainer",
-                    f"  ✅ {sym}: {s.completed} files | {s.total_rows:,} rows | "
+                    f"  ✅ {sym}: {s.completed + s.skipped} files | {s.total_rows:,} rows | "
                     f"{s.total_bytes/1e6:.1f} MB | {s.failed} failed",
                 )
             pct = 3 + (done_symbols / total_symbols * 35)

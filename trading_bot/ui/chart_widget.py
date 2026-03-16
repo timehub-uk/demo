@@ -587,7 +587,7 @@ def _rsi(data: np.ndarray, period: int = 14) -> np.ndarray:
     for i in range(period, len(deltas)):
         ag[i] = (ag[i - 1] * (period - 1) + gains[i]) / period
         al[i] = (al[i - 1] * (period - 1) + losses[i]) / period
-    rs = np.where(al > 0, ag / al, 100.0)
+    rs = np.divide(ag, al, out=np.full_like(ag, 100.0), where=al > 0)
     return (100 - 100 / (1 + rs))[period - 1:]
 
 
