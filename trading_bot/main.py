@@ -549,6 +549,11 @@ def _init_postgres_with_retry(app, settings) -> bool:
 
             # Auth/privilege failure → ask the user for credentials
             logger.warning(f"PostgreSQL auth failed (attempt {attempt + 1}): {exc}")
+            # In headless/offscreen mode skip the interactive dialog and fall through
+            # to the SQLite fallback immediately.
+            if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+                intel.warning("Startup", "PostgreSQL auth failed in headless mode – using local SQLite database")
+                break
             from ui.setup_wizard import DbCredentialsDialog
             dlg = DbCredentialsDialog(
                 host=settings.database.host,
@@ -1789,6 +1794,27 @@ def start_background_services(services: dict, settings) -> None:
 
 def run_first_time_setup(app: QApplication, settings) -> bool:
     """Run setup wizard on first launch. Returns True if setup completed."""
+
+    # ── Headless / offscreen guard ────────────────────────────────────────
+    # When no physical display is available Qt falls back to the offscreen
+    # platform plugin.  In that mode the wizard window is invisible and
+    # wizard.isVisible() still returns True, causing an infinite loop.
+    # Skip the interactive wizard, mark first_run done, and let the user
+    # configure API keys later via ~/.binanceml/app_config.json or the UI
+    # once a display is available.
+    if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+        intel.warning(
+            "Startup",
+            "No display detected – skipping first-run wizard (headless mode). "
+            "Configure API keys in ~/.binanceml/app_config.json or re-run with a display.",
+        )
+        try:
+            settings.first_run = False
+            settings.save()
+        except Exception as _save_exc:
+            logger.debug(f"Could not save headless first-run flag: {_save_exc}")
+        return True
+
     from ui.setup_wizard import SetupWizard
     completed = threading.Event()
     result = {"ok": False}
@@ -1800,6 +1826,7 @@ def run_first_time_setup(app: QApplication, settings) -> bool:
     wizard = SetupWizard()
     wizard.setup_complete.connect(on_complete)
     wizard.show()
+    intel.system("Startup", "First-run setup wizard opened – waiting for user input…")
 
     # Block until wizard finishes
     while not completed.is_set() and wizard.isVisible():
@@ -1854,6 +1881,7 @@ def main() -> int:
 
     # ── First-run setup ────────────────────────────────────────────────
     if settings.first_run:
+        intel.system("Startup", "First-run detected – launching setup wizard…")
         splash.hide()
         ok = run_first_time_setup(app, settings)
         if not ok:
