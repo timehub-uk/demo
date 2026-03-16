@@ -576,11 +576,21 @@ def _init_postgres_with_retry(app, settings) -> bool:
                 failed_user=settings.database.user,
             )
             if dlg.exec() != DbCredentialsDialog.DialogCode.Accepted:
-                logger.info("User skipped DB credential entry – offline mode.")
+                logger.info("User skipped DB credential entry – switching to SQLite.")
+                try:
+                    from db.postgres import init_sqlite
+                    init_sqlite()
+                except Exception as sqlite_exc:
+                    logger.error(f"SQLite fallback also failed: {sqlite_exc}")
                 return False
 
             new_user, new_pass = dlg.accepted_credentials()
             if not new_user:
+                try:
+                    from db.postgres import init_sqlite
+                    init_sqlite()
+                except Exception as sqlite_exc:
+                    logger.error(f"SQLite fallback also failed: {sqlite_exc}")
                 return False
 
             # Persist the working credentials so the app remembers them
