@@ -44,6 +44,30 @@ class OrderEntryPanel(QGroupBox):
         row1.addStretch()
         layout.addLayout(row1)
 
+        # Bid / Ask live strip
+        ba_row = QHBoxLayout()
+        ba_row.setSpacing(6)
+        self._bid_lbl = QPushButton("BID  —")
+        self._ask_lbl = QPushButton("ASK  —")
+        for btn, colour in ((self._bid_lbl, GREEN), (self._ask_lbl, RED)):
+            btn.setStyleSheet(
+                f"QPushButton{{background:{BG3};color:{colour};"
+                f"border:1px solid {colour}44;border-radius:3px;"
+                f"font-size:11px;font-weight:700;padding:3px 8px;}}"
+                f"QPushButton:hover{{background:{colour}22;}}"
+            )
+            btn.setFixedHeight(26)
+        self._bid_lbl.setToolTip("Click to fill price with best bid")
+        self._ask_lbl.setToolTip("Click to fill price with best ask")
+        self._bid_lbl.clicked.connect(lambda: self._fill_bid())
+        self._ask_lbl.clicked.connect(lambda: self._fill_ask())
+        ba_row.addWidget(self._bid_lbl)
+        ba_row.addWidget(self._ask_lbl)
+        layout.addLayout(ba_row)
+
+        self._current_bid = 0.0
+        self._current_ask = 0.0
+
         # Price + quantity
         form = QFormLayout()
         form.setSpacing(8)
@@ -127,6 +151,20 @@ class OrderEntryPanel(QGroupBox):
             "take_profit": self.tp_spin.value(),
         }
         self.order_submitted.emit(order)
+
+    def set_bid_ask(self, bid: float, ask: float) -> None:
+        self._current_bid = bid
+        self._current_ask = ask
+        self._bid_lbl.setText(f"BID  {bid:,.4f}" if bid else "BID  —")
+        self._ask_lbl.setText(f"ASK  {ask:,.4f}" if ask else "ASK  —")
+
+    def _fill_bid(self) -> None:
+        if self._current_bid:
+            self.set_price(self._current_bid)
+
+    def _fill_ask(self) -> None:
+        if self._current_ask:
+            self.set_price(self._current_ask)
 
     def set_price(self, price: float) -> None:
         self.price_spin.setValue(price)
@@ -418,3 +456,6 @@ class TradingPanel(QWidget):
 
     def set_current_price(self, price: float) -> None:
         self.order_entry.set_price(price)
+
+    def set_bid_ask(self, bid: float, ask: float) -> None:
+        self.order_entry.set_bid_ask(bid, ask)

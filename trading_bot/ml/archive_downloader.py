@@ -300,9 +300,8 @@ def _parse_csv_to_df(csv_path: Path) -> pd.DataFrame:
     _MS_MAX = 4_102_444_800_000   # 2100-01-01
     mask = (ts >= _MS_MIN) & (ts <= _MS_MAX)
     if not mask.all():
-        import warnings
         n_dropped = (~mask).sum()
-        warnings.warn(f"Dropping {n_dropped} rows with out-of-range open_time values")
+        logger.debug(f"Dropping {n_dropped} rows with out-of-range open_time values")
     df = df[mask].copy()
     ts  = ts[mask]
     df["open_time"] = pd.to_datetime(ts, unit="ms", utc=True)

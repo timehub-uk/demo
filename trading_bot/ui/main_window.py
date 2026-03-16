@@ -1018,6 +1018,9 @@ class TradingPage(QWidget):
     def set_current_price(self, price: float) -> None:
         self.trading_panel.set_current_price(price)
 
+    def set_bid_ask(self, bid: float, ask: float) -> None:
+        self.trading_panel.set_bid_ask(bid, ask)
+
     def current_symbol(self) -> str:
         return self.chart_panel.current_symbol()
 
@@ -2820,6 +2823,28 @@ class MainWindow(QMainWindow):
             self._predictor.add_symbol(symbol)
         if self._engine:
             self._engine.add_symbol(symbol)
+        # Sync order entry symbol and fetch live bid/ask in background
+        try:
+            self.trading_page.trading_panel.order_entry.sym_edit.setText(symbol)
+        except Exception:
+            pass
+        self._fetch_bid_ask(symbol)
+
+    def _fetch_bid_ask(self, symbol: str) -> None:
+        """Fetch best bid/ask for *symbol* in a background thread and update the order entry."""
+        client = getattr(self._engine, "_client", None) if self._engine else None
+        if not client:
+            return
+        import threading
+        def _fetch():
+            try:
+                result = client.get_ticker_book(symbol=symbol)
+                bid = float(result.get("bidPrice", 0))
+                ask = float(result.get("askPrice", 0))
+                QTimer.singleShot(0, lambda: self.trading_page.set_bid_ask(bid, ask))
+            except Exception:
+                pass
+        threading.Thread(target=_fetch, daemon=True, name="bid-ask-fetch").start()
 
     def _on_order_submitted(self, order: dict) -> None:
         if not self._engine:
@@ -3097,18 +3122,37 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            for svc in (self._auto_trader, self._market_scanner,
-                        getattr(self, "_market_pulse", None),
-                        self._engine, self._predictor, self._cl):
-                try:
-                    if svc:
-                        svc.stop()
-                except Exception:
-                    pass
-            self._intel.system("MainWindow", "Shutdown complete.")
+            self._shutdown_all_services()
             event.accept()
         else:
             event.ignore()
+
+    def _shutdown_all_services(self) -> None:
+        """Stop every background service that has a .stop() method."""
+        stopped: list[str] = []
+        for attr, svc in vars(self).items():
+            if svc is None or not callable(getattr(svc, "stop", None)):
+                continue
+            try:
+                svc.stop()
+                stopped.append(attr)
+            except Exception as exc:
+                self._intel.warning("MainWindow", f"Error stopping {attr}: {exc}")
+        # Also stop the REST API server if running
+        try:
+            from api.server import get_api_server
+            get_api_server().stop()
+            stopped.append("api_server")
+        except Exception:
+            pass
+        # Flush the DB connection pool
+        try:
+            from db.postgres import _engine
+            if _engine:
+                _engine.dispose()
+        except Exception:
+            pass
+        self._intel.system("MainWindow", f"Shutdown complete — stopped {len(stopped)} service(s).")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
