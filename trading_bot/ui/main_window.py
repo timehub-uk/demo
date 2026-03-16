@@ -3021,7 +3021,10 @@ class MainWindow(QMainWindow):
             msg = f"ENGAGE complete — {len(started)} tools started"
             if failed:
                 msg += f", {len(failed)} failed: {', '.join(failed)}"
-            intel.system("Engage", msg)
+            try:
+                self._intel.system("Engage", msg)
+            except Exception:
+                logger.info(f"Engage: {msg}")
 
             # Update status label on the main thread
             try:
