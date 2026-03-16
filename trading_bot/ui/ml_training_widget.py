@@ -601,7 +601,7 @@ class MLTrainingWidget(QWidget):
                 continue
             row = self.whale_profiles_tbl.rowCount()
             self.whale_profiles_tbl.insertRow(row)
-            dominant = max(getattr(p, "favourite_events", {}).items(),
+            dominant = max((getattr(p, "favourite_events", None) or {}).items(),
                            key=lambda x: x[1], default=("—", 0))[0]
             avg_out = getattr(p, "avg_outcome", 0)
             pred    = getattr(p, "predictability", 0)

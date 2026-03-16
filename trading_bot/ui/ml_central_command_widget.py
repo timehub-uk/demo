@@ -100,7 +100,7 @@ class SummaryBar(QFrame):
         total = len(signals)
         buy   = sum(1 for s in signals if s.dominant_signal == "BUY")
         watch = sum(1 for s in signals if s.dominant_signal == "WATCH")
-        srcs  = len({src for s in signals for src in s.sources})
+        srcs  = len({src for s in signals for src in (s.sources or [])})
 
         self._total_lbl.setText(
             f"<b style='color:{FG0};'>{total}</b><br>"
@@ -292,7 +292,7 @@ class MLCentralCommandWidget(QWidget):
             except Exception:
                 pass
 
-        signals = self._signals
+        signals = self._signals or []
 
         # Signal filter
         if self._filter_signal != "ALL":
@@ -348,7 +348,8 @@ class MLCentralCommandWidget(QWidget):
             self._table.setItem(row_idx, 7, _item(f"{s.watch_weight:.3f}", fg=wtch_color))
 
             # Col 8 — source list (comma-separated short names)
-            src_short = ", ".join(s.sources[:5]) + ("…" if len(s.sources) > 5 else "")
+            srcs_list = s.sources or []
+            src_short = ", ".join(srcs_list[:5]) + ("…" if len(srcs_list) > 5 else "")
             self._table.setItem(row_idx, 8, _item(src_short, Qt.AlignmentFlag.AlignLeft, FG2))
 
             # Col 9 — note
