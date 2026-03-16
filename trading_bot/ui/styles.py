@@ -234,12 +234,15 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
 }}
 
 /* ══════════════════════════════════════════════════════════════════════
-   BUTTONS
+   BUTTONS  — 3-D raised style with gradient lift + pressed depth
    ══════════════════════════════════════════════════════════════════════ */
 QPushButton {{
-    background-color: {BG4};
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {BG5}, stop:0.5 {BG4}, stop:1 {BG2});
     color: {FG1};
     border: 1px solid {BORDER2};
+    border-top: 1px solid {BG5};
+    border-bottom: 2px solid {BORDER};
     border-radius: 5px;
     padding: 8px 18px;
     font-weight: 600;
@@ -247,101 +250,169 @@ QPushButton {{
     letter-spacing: 0.5px;
 }}
 QPushButton:hover {{
-    background-color: {GLOW};
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {GLOW}, stop:1 {BG3});
     border-color: {ACCENT};
+    border-top-color: {ACCENT}66;
+    border-bottom-color: {ACCENT}AA;
     color: {ACCENT};
 }}
 QPushButton:pressed {{
-    background-color: {ACCENT}22;
-    border-color: {ACCENT};
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {BG1}, stop:1 {BG3});
+    border-top: 2px solid {BORDER};
+    border-bottom: 1px solid {BG5};
+    color: {ACCENT};
+    padding-top: 9px;
+    padding-bottom: 7px;
 }}
 QPushButton:disabled {{
     color: {FG2};
-    border-color: {BORDER};
-    background-color: {BG2};
+    border: 1px solid {BORDER};
+    border-bottom: 2px solid {BORDER};
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {BG2}, stop:1 {BG1});
 }}
 
-/* Named button variants */
+/* Named button variants — all use 3-D gradient treatment */
 QPushButton#btn_buy {{
-    background-color: {GREEN}18;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {GREEN}28, stop:1 {GREEN}0C);
     border: 1px solid {GREEN}88;
+    border-top: 1px solid {GREEN}55;
+    border-bottom: 2px solid {GREEN}AA;
     color: {GREEN};
     font-weight: 700;
     font-size: 14px;
     letter-spacing: 1px;
 }}
 QPushButton#btn_buy:hover {{
-    background-color: {GREEN}33;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {GREEN}50, stop:1 {GREEN}25);
     border-color: {GREEN};
 }}
+QPushButton#btn_buy:pressed {{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {GREEN}10, stop:1 {GREEN}35);
+    border-top: 2px solid {GREEN}AA;
+    border-bottom: 1px solid {GREEN}55;
+    padding-top: 9px; padding-bottom: 7px;
+}}
 QPushButton#btn_sell {{
-    background-color: {RED}18;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {RED}28, stop:1 {RED}0C);
     border: 1px solid {RED}88;
+    border-top: 1px solid {RED}55;
+    border-bottom: 2px solid {RED}AA;
     color: {RED};
     font-weight: 700;
     font-size: 14px;
     letter-spacing: 1px;
 }}
 QPushButton#btn_sell:hover {{
-    background-color: {RED}33;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {RED}50, stop:1 {RED}25);
     border-color: {RED};
 }}
+QPushButton#btn_sell:pressed {{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {RED}10, stop:1 {RED}35);
+    border-top: 2px solid {RED}AA;
+    border-bottom: 1px solid {RED}55;
+    padding-top: 9px; padding-bottom: 7px;
+}}
 QPushButton#btn_cancel {{
-    background-color: {ORANGE}15;
-    border-color: {ORANGE}88;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {ORANGE}22, stop:1 {ORANGE}0A);
+    border: 1px solid {ORANGE}88;
+    border-bottom: 2px solid {ORANGE}AA;
     color: {ORANGE};
 }}
+QPushButton#btn_cancel:hover {{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {ORANGE}40, stop:1 {ORANGE}20);
+    border-color: {ORANGE};
+}}
 QPushButton#btn_primary {{
-    background-color: {ACCENT}20;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {ACCENT}28, stop:1 {ACCENT}0C);
     border: 1px solid {ACCENT}88;
+    border-top: 1px solid {ACCENT}55;
+    border-bottom: 2px solid {ACCENT}AA;
     color: {ACCENT};
     font-weight: 700;
     letter-spacing: 0.8px;
 }}
 QPushButton#btn_primary:hover {{
-    background-color: {ACCENT}40;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {ACCENT}50, stop:1 {ACCENT}25);
     border-color: {ACCENT};
 }}
+QPushButton#btn_primary:pressed {{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {ACCENT}10, stop:1 {ACCENT}35);
+    border-top: 2px solid {ACCENT}AA;
+    border-bottom: 1px solid {ACCENT}55;
+    padding-top: 9px; padding-bottom: 7px;
+}}
 QPushButton#btn_danger {{
-    background-color: {RED}18;
-    border-color: {RED}88;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {RED}28, stop:1 {RED}0C);
+    border: 1px solid {RED}88;
+    border-bottom: 2px solid {RED}AA;
     color: {RED};
 }}
 QPushButton#btn_danger:hover {{
-    background-color: {RED}33;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {RED}50, stop:1 {RED}25);
+    border-color: {RED};
 }}
 
-/* btn_start — available-to-start; pulses gently via QPropertyAnimation in code */
+/* btn_start — pulses gently via QPropertyAnimation in code */
 QPushButton#btn_start {{
-    background-color: {GREEN}12;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {GREEN}20, stop:1 {GREEN}08);
     border: 1px solid {GREEN}55;
+    border-top: 1px solid {GREEN}30;
+    border-bottom: 2px solid {GREEN}88;
     color: {GREEN};
     font-weight: 700;
     letter-spacing: 0.5px;
 }}
 QPushButton#btn_start:hover {{
-    background-color: {GREEN}28;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {GREEN}40, stop:1 {GREEN}18);
     border-color: {GREEN};
 }}
 QPushButton#btn_start:pressed {{
-    background-color: {GREEN}40;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {GREEN}08, stop:1 {GREEN}30);
+    border-top: 2px solid {GREEN}88;
+    border-bottom: 1px solid {GREEN}30;
+    padding-top: 9px; padding-bottom: 7px;
 }}
 
-/* btn_stop — active; turns grey when already stopped (set disabled=True in code) */
+/* btn_stop — turns grey when already stopped (set disabled=True in code) */
 QPushButton#btn_stop {{
-    background-color: {RED}12;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {RED}20, stop:1 {RED}08);
     border: 1px solid {RED}55;
+    border-top: 1px solid {RED}30;
+    border-bottom: 2px solid {RED}88;
     color: {RED};
     font-weight: 700;
     letter-spacing: 0.5px;
 }}
 QPushButton#btn_stop:hover {{
-    background-color: {RED}28;
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {RED}40, stop:1 {RED}18);
     border-color: {RED};
 }}
 QPushButton#btn_stop:disabled {{
-    background-color: {BG3};
-    border-color: {BORDER};
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                stop:0 {BG3}, stop:1 {BG2});
+    border: 1px solid {BORDER};
+    border-bottom: 2px solid {BORDER};
     color: {FG2};
 }}
 QPushButton#nav_btn {{

@@ -192,7 +192,7 @@ class NavButton(QToolButton):
     • Mouse enter + 10 s → contextual help QMessageBox
     • Mouse leave        → cancel both timers
     • set_alert(True)    → icon flashes RED to signal an alert
-    • set_nav_disabled(True) → greyed-out inactive appearance
+    • set_nav_disabled(True) → greyed-out + ForbiddenCursor + click blocked
     """
 
     clicked_index = pyqtSignal(int)
@@ -208,7 +208,7 @@ class NavButton(QToolButton):
         self._flash_on  = False
 
         self.setObjectName("nav_btn")
-        self.setFixedHeight(74)
+        self.setFixedHeight(100)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.setText(label)
@@ -233,47 +233,106 @@ class NavButton(QToolButton):
         self._flash_timer.setInterval(600)
         self._flash_timer.timeout.connect(self._on_flash_tick)
 
-        self.clicked.connect(lambda: self.clicked_index.emit(self._index))
+        # Use a method instead of lambda so we can block clicks when disabled
+        self.clicked.connect(self._on_clicked)
+
+    def _on_clicked(self) -> None:
+        """Only emit navigation signal when the button is not disabled."""
+        if not self._disabled_nav:
+            self.clicked_index.emit(self._index)
 
     def _set_icon(self, color: str) -> None:
-        self.setIcon(svg_icon(self._icon_name, color, 24))
-        self.setIconSize(QSize(24, 24))
+        self.setIcon(svg_icon(self._icon_name, color, 40))
+        self.setIconSize(QSize(40, 40))
 
     def _apply_style(self, active: bool) -> None:
         if self._disabled_nav:
-            col     = FG2
-            bg      = "transparent"
-            top_bar = "border-top:2px solid transparent;"
-            weight  = "400"
+            # Greyed-out: dim colours, no hover highlight — looks and feels inactive
+            self.setStyleSheet(f"""
+                QToolButton#nav_btn {{
+                    background: transparent;
+                    color: {FG2};
+                    border: none;
+                    border-top: 2px solid transparent;
+                    border-radius: 0;
+                    font-size: 12px; font-weight: 400;
+                    padding: 12px 6px 8px 6px;
+                }}
+                QToolButton#nav_btn:hover {{
+                    background: transparent;
+                    color: {FG2};
+                    border-top: 2px solid transparent;
+                }}
+            """)
         elif self._alerted:
-            col     = RED
-            bg      = f"{RED}18"
-            top_bar = f"border-top:2px solid {RED};"
-            weight  = "700"
+            # Alert flash — pulsing red glow gradient
+            self.setStyleSheet(f"""
+                QToolButton#nav_btn {{
+                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                                stop:0 {RED}28, stop:1 {RED}0C);
+                    color: {RED};
+                    border: none;
+                    border-top: 2px solid {RED};
+                    border-left: 3px solid {RED}55;
+                    border-radius: 0;
+                    font-size: 12px; font-weight: 700;
+                    padding: 12px 6px 8px 6px;
+                }}
+                QToolButton#nav_btn:hover {{
+                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                                stop:0 {RED}45, stop:1 {RED}20);
+                    color: {RED};
+                    border-top: 2px solid {RED};
+                }}
+            """)
+        elif active:
+            # Active: 3-D gradient + accent glow on top + left accent bar
+            self.setStyleSheet(f"""
+                QToolButton#nav_btn {{
+                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                                stop:0 {BG5}, stop:0.4 {BG4}, stop:1 {BG2});
+                    color: {ACCENT};
+                    border: none;
+                    border-top: 2px solid {ACCENT};
+                    border-left: 3px solid {ACCENT}66;
+                    border-right: 1px solid {BORDER};
+                    border-radius: 0;
+                    font-size: 12px; font-weight: 700;
+                    padding: 12px 6px 8px 6px;
+                }}
+                QToolButton#nav_btn:hover {{
+                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                                stop:0 {BG5}, stop:1 {BG3});
+                    color: {ACCENT};
+                    border-top: 2px solid {ACCENT};
+                    border-left: 3px solid {ACCENT}88;
+                }}
+            """)
         else:
-            col     = ACCENT if active else FG1
-            bg      = BG2    if active else "transparent"
-            top_bar = (f"border-top:2px solid {ACCENT};"
-                       if active else "border-top:2px solid transparent;")
-            weight  = "700" if active else "500"
-        self.setStyleSheet(f"""
-            QToolButton {{
-                background:{bg}; color:{col};
-                border:none; {top_bar}
-                border-radius:0;
-                font-size:10px; font-weight:{weight};
-                padding:6px 4px 5px 4px;
-            }}
-            QToolButton:hover {{
-                background:{BG3}; color:{FG0};
-                border-top:2px solid {BORDER2};
-            }}
-        """)
+            # Normal: flat transparent, 3-D lift on hover
+            self.setStyleSheet(f"""
+                QToolButton#nav_btn {{
+                    background: transparent;
+                    color: {FG1};
+                    border: none;
+                    border-top: 2px solid transparent;
+                    border-radius: 0;
+                    font-size: 12px; font-weight: 500;
+                    padding: 12px 6px 8px 6px;
+                }}
+                QToolButton#nav_btn:hover {{
+                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                                stop:0 {BG5}, stop:1 {BG3});
+                    color: {FG0};
+                    border-top: 2px solid {BORDER2};
+                    border-left: 3px solid {BORDER2}44;
+                }}
+            """)
 
     def set_active(self, active: bool) -> None:
         self._active = active
         if not self._alerted:
-            self._set_icon(ACCENT if active else (BG4 if self._disabled_nav else FG2))
+            self._set_icon(ACCENT if active else (FG2 if self._disabled_nav else FG2))
         self._apply_style(active)
 
     def set_alert(self, alerted: bool) -> None:
@@ -284,31 +343,45 @@ class NavButton(QToolButton):
         else:
             self._flash_timer.stop()
             self._flash_on = False
-            self._set_icon(ACCENT if self._active else (BG4 if self._disabled_nav else FG2))
+            self._set_icon(ACCENT if self._active else FG2)
             self._apply_style(self._active)
 
     def set_nav_disabled(self, disabled: bool) -> None:
-        """Grey out the button to indicate the underlying service is unavailable."""
+        """Grey out the button, block clicks, and show forbidden cursor on hover."""
         self._disabled_nav = disabled
-        icon_col = BG4 if disabled else (ACCENT if self._active else FG2)
+        icon_col = FG2 if disabled else (ACCENT if self._active else FG2)
         self._set_icon(icon_col)
         self._apply_style(self._active)
+        # Show "unavailable" tooltip when disabled
+        if disabled:
+            self.setToolTip(f"{self._label}  ⚠  Requires Binance API key")
+        else:
+            self.setToolTip(self._label)
 
     def _on_flash_tick(self) -> None:
         self._flash_on = not self._flash_on
-        self._set_icon(RED if self._flash_on else FG2)
+        # Respect disabled state for off-flash icon colour
+        off_col = FG2
+        self._set_icon(RED if self._flash_on else off_col)
         self._apply_style(self._active)
 
     def enterEvent(self, event) -> None:
-        if not self._active and not self._alerted:
-            self._set_icon(FG1)
+        if self._disabled_nav:
+            # Show "no entry" / forbidden cursor — service unavailable
+            self.setCursor(Qt.CursorShape.ForbiddenCursor)
+        else:
+            if not self._active and not self._alerted:
+                self._set_icon(FG0)
         self._tip_timer.start()
         self._pop_timer.start()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
-        if not self._active and not self._alerted:
-            self._set_icon(BG4 if self._disabled_nav else FG2)
+        if self._disabled_nav:
+            self.unsetCursor()
+        else:
+            if not self._active and not self._alerted:
+                self._set_icon(FG2)
         self._tip_timer.stop()
         self._pop_timer.stop()
         super().leaveEvent(event)
@@ -358,12 +431,25 @@ class HeaderBar(QFrame):
         self._ham_btn.setToolTip("Toggle navigation sidebar  (Ctrl+\\)")
         self._ham_btn.setStyleSheet(f"""
             QPushButton {{
-                background: transparent; color: {FG1};
-                border: none; border-radius: 4px;
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                            stop:0 {BG4}, stop:1 {BG2});
+                color: {FG1};
+                border: 1px solid {BORDER2};
+                border-top: 1px solid {BG5};
+                border-bottom: 2px solid {BORDER};
+                border-radius: 5px;
                 font-size: 16px; font-weight: 700;
             }}
-            QPushButton:hover  {{ background: {BG3}; color: {FG0}; }}
-            QPushButton:pressed {{ background: {BG4}; }}
+            QPushButton:hover  {{
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                            stop:0 {BG5}, stop:1 {BG3});
+                color: {FG0}; border-color: {BORDER2};
+            }}
+            QPushButton:pressed {{
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                            stop:0 {BG1}, stop:1 {BG3});
+                border-top: 2px solid {BORDER}; border-bottom: 1px solid {BG5};
+            }}
         """)
         self._ham_btn.clicked.connect(self.nav_toggle)
         layout.addWidget(self._ham_btn)
@@ -474,15 +560,25 @@ _NAV_ITEMS = [
     (9,  "help",         "Help"),
     (10, "simulation",   "Simulation"),
     (11, "reports",      "Reports"),
-    (12, "scan",         "Market Watch"),
-    (13, "ml",           "ML Tools"),
+    (12, "market",       "Market Watch"),
+    (13, "mltools",      "ML Tools"),
 ]
+
+# Section headers shown above groups of nav buttons (index → header label)
+_NAV_SECTIONS: dict[int, str] = {
+    0:  "TRADING",
+    2:  "ANALYSIS",
+    5:  "MANAGEMENT",
+    7:  "NETWORK",
+    8:  "SYSTEM",
+    10: "ADVANCED",
+}
 
 
 class NavSidebar(QFrame):
     page_requested = pyqtSignal(int)
 
-    _WIDTH = 120  # px — icon centred above text; enough for longest label
+    _WIDTH = 360  # px — tripled from 120; icon+label layout with section headers
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -498,11 +594,21 @@ class NavSidebar(QFrame):
         container.setStyleSheet(f"background:{BG0};")
         btn_layout = QVBoxLayout(container)
         btn_layout.setContentsMargins(0, 8, 0, 8)
-        btn_layout.setSpacing(1)
+        btn_layout.setSpacing(0)
         btn_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self._buttons: list[NavButton] = []
         for idx, icon, label in _NAV_ITEMS:
+            # Insert section header before first button of each group
+            if idx in _NAV_SECTIONS:
+                sec_lbl = QLabel(_NAV_SECTIONS[idx])
+                sec_lbl.setStyleSheet(
+                    f"QLabel {{ color:{BORDER2}; font-size:9px; font-weight:700; "
+                    f"letter-spacing:2.5px; padding:10px 14px 3px 14px; "
+                    f"background:{BG0}; }}"
+                )
+                btn_layout.addWidget(sec_lbl)
+
             btn = NavButton(idx, icon, label)
             btn.clicked_index.connect(self._on_nav)
             btn_layout.addWidget(btn)   # full width — no AlignHCenter
@@ -621,10 +727,24 @@ class MultiChartPanel(QWidget):
         self.overlay_btn.setFixedHeight(30)
         self.overlay_btn.setStyleSheet(f"""
             QPushButton {{
-                background:{BG4}; color:{FG1}; border:1px solid {BORDER2};
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                            stop:0 {BG5}, stop:1 {BG3});
+                color:{FG1}; border:1px solid {BORDER2};
+                border-top: 1px solid {BG5};
+                border-bottom: 2px solid {BORDER};
                 border-radius:4px; font-size:12px; padding:0 10px; text-align:left;
             }}
-            QPushButton:hover {{ color:{ACCENT}; border-color:{ACCENT}; }}
+            QPushButton:hover {{
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                            stop:0 {GLOW}, stop:1 {BG3});
+                color:{ACCENT}; border-color:{ACCENT};
+                border-bottom-color:{ACCENT}AA;
+            }}
+            QPushButton:pressed {{
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                            stop:0 {BG1}, stop:1 {BG3});
+                border-top: 2px solid {BORDER}; border-bottom: 1px solid {BG5};
+            }}
         """)
         self.overlay_btn.clicked.connect(self._show_overlay_menu)
         ctl.addWidget(self.overlay_btn)
@@ -637,9 +757,24 @@ class MultiChartPanel(QWidget):
         add_btn.setIconSize(QSize(14, 14))
         add_btn.setFixedSize(30, 30)
         add_btn.setToolTip("Add chart tab  (Ctrl++)")
-        add_btn.setStyleSheet(
-            f"background:{BG4}; border:1px solid {BORDER}; border-radius:4px;"
-        )
+        add_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                            stop:0 {BG5}, stop:1 {BG3});
+                border: 1px solid {BORDER2};
+                border-bottom: 2px solid {BORDER};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                            stop:0 {GLOW}, stop:1 {BG3});
+                border-color: {ACCENT};
+            }}
+            QPushButton:pressed {{
+                background: {BG2};
+                border-top: 2px solid {BORDER}; border-bottom: 1px solid {BG5};
+            }}
+        """)
         add_btn.clicked.connect(self._prompt_add_tab)
         ctl.addWidget(add_btn)
 
@@ -649,10 +784,25 @@ class MultiChartPanel(QWidget):
         fs_btn = QPushButton("⛶")
         fs_btn.setFixedSize(30, 30)
         fs_btn.setToolTip("Pop chart out to fullscreen  (double-click tab title)")
-        fs_btn.setStyleSheet(
-            f"background:{BG4}; border:1px solid {BORDER}; border-radius:4px;"
-            f" color:{FG1}; font-size:15px;"
-        )
+        fs_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                            stop:0 {BG5}, stop:1 {BG3});
+                border: 1px solid {BORDER2};
+                border-bottom: 2px solid {BORDER};
+                border-radius: 4px;
+                color: {FG1}; font-size: 15px;
+            }}
+            QPushButton:hover {{
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                            stop:0 {GLOW}, stop:1 {BG3});
+                color: {ACCENT}; border-color: {ACCENT};
+            }}
+            QPushButton:pressed {{
+                background: {BG2};
+                border-top: 2px solid {BORDER}; border-bottom: 1px solid {BG5};
+            }}
+        """)
         fs_btn.clicked.connect(self._open_fullscreen)
         ctl.addWidget(fs_btn)
 
@@ -834,12 +984,24 @@ def _dock_btn(symbol: str, tip: str) -> QPushButton:
     btn.setFixedSize(24, 24)
     btn.setStyleSheet(f"""
         QPushButton {{
-            background: transparent; color: {FG1};
-            border: none; border-radius: 4px;
+            background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                        stop:0 {BG4}, stop:1 {BG2});
+            color: {FG1};
+            border: 1px solid {BORDER};
+            border-bottom: 2px solid {BORDER};
+            border-radius: 4px;
             font-size: 12px; padding: 0;
         }}
-        QPushButton:hover  {{ background: {BG4}; color: {FG0}; }}
-        QPushButton:pressed {{ background: {BG5}; }}
+        QPushButton:hover  {{
+            background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                        stop:0 {BG5}, stop:1 {BG3});
+            color: {FG0}; border-color: {BORDER2};
+        }}
+        QPushButton:pressed {{
+            background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                        stop:0 {BG1}, stop:1 {BG3});
+            border-top: 2px solid {BORDER}; border-bottom: 1px solid {BG4};
+        }}
     """)
     return btn
 
@@ -1552,14 +1714,21 @@ class MainWindow(QMainWindow):
         ignore_btn = btns.addButton("Ignore", QDialogButtonBox.ButtonRole.RejectRole)
         setup_btn  = btns.addButton("Open Settings", QDialogButtonBox.ButtonRole.AcceptRole)
         ignore_btn.setStyleSheet(
-            f"QPushButton {{ background:{BG4}; color:{FG2}; border:1px solid {BORDER}; "
-            f"border-radius:4px; padding:6px 16px; font-size:11px; }}"
-            f"QPushButton:hover {{ color:{FG0}; border-color:{BORDER2}; }}"
+            f"QPushButton {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f"stop:0 {BG5},stop:1 {BG3}); color:{FG2}; border:1px solid {BORDER}; "
+            f"border-bottom:2px solid {BORDER}; border-radius:4px; padding:6px 16px; font-size:11px; }}"
+            f"QPushButton:hover {{ color:{FG0}; border-color:{BORDER2}; "
+            f"background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 {BG5},stop:1 {BG4}); }}"
+            f"QPushButton:pressed {{ background:{BG2}; border-top:2px solid {BORDER}; border-bottom:1px solid {BG5}; }}"
         )
         setup_btn.setStyleSheet(
-            f"QPushButton {{ background:{ACCENT}; color:#000; border:none; "
+            f"QPushButton {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f"stop:0 {ACCENT}DD,stop:1 {ACCENT}88); color:#000; "
+            f"border:1px solid {ACCENT}; border-bottom:2px solid {ACCENT}AA; "
             f"border-radius:4px; padding:6px 16px; font-size:11px; font-weight:700; }}"
-            f"QPushButton:hover {{ background:{ACCENT2}; }}"
+            f"QPushButton:hover {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f"stop:0 {ACCENT},stop:1 {ACCENT}BB); }}"
+            f"QPushButton:pressed {{ background:{ACCENT}88; border-top:2px solid {ACCENT}AA; border-bottom:1px solid {ACCENT}55; }}"
         )
         layout.addWidget(btns)
 
