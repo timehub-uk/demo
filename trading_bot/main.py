@@ -640,10 +640,13 @@ def build_services(settings):
     from core.order_manager import OrderManager
     from core.portfolio import PortfolioManager
     from core.risk_manager import RiskManager
-    from ml.trainer import MLTrainer
-    from ml.predictor import MLPredictor
-    from ml.continuous_learner import ContinuousLearner
     from tax.uk_tax import UKTaxCalculator
+
+    # In manual mode skip all ML training / auto-trading services to avoid
+    # excessive memory usage (OOM) and unnecessary background processing.
+    is_manual = getattr(settings.trading, "mode", "manual") == "manual"
+    if is_manual:
+        intel.system("Startup", "Manual mode detected – ML training and auto-trading services will be skipped.")
 
     intel.system("Startup", "Initialising Binance client…")
     binance = BinanceClient()
@@ -661,16 +664,23 @@ def build_services(settings):
         user_id=user_id,
     )
 
-    intel.system("Startup", "Initialising ML predictor…")
-    trainer   = MLTrainer(binance_client=binance)
-    predictor = MLPredictor()
+    trainer   = None
+    predictor = None
+    cl        = None
+    if not is_manual:
+        from ml.trainer import MLTrainer
+        from ml.predictor import MLPredictor
+        from ml.continuous_learner import ContinuousLearner
+        intel.system("Startup", "Initialising ML predictor…")
+        trainer   = MLTrainer(binance_client=binance)
+        predictor = MLPredictor()
 
-    intel.system("Startup", "Initialising continuous learner…")
-    cl = ContinuousLearner(
-        trainer=trainer,
-        predictor=predictor,
-        binance_client=binance,
-    )
+        intel.system("Startup", "Initialising continuous learner…")
+        cl = ContinuousLearner(
+            trainer=trainer,
+            predictor=predictor,
+            binance_client=binance,
+        )
 
     intel.system("Startup", "Initialising tax calculator…")
     tax_calc = UKTaxCalculator()
@@ -731,34 +741,56 @@ def build_services(settings):
     from ml.regime_detector import RegimeDetector
     regime_detector = RegimeDetector()
 
-    intel.system("Startup", "Initialising MTF confluence filter…")
-    from ml.mtf_confluence import MTFConfluenceFilter
-    mtf_filter = MTFConfluenceFilter(predictor=predictor, token_ml_manager=token_ml)
+    mtf_filter     = None
+    signal_council = None
+    ensemble       = None
+    if not is_manual:
+        intel.system("Startup", "Initialising MTF confluence filter…")
+        from ml.mtf_confluence import MTFConfluenceFilter
+        mtf_filter = MTFConfluenceFilter(predictor=predictor, token_ml_manager=token_ml)
 
-    intel.system("Startup", "Initialising signal council…")
-    from ml.signal_council import SignalCouncil
-    signal_council = SignalCouncil()
+        intel.system("Startup", "Initialising signal council…")
+        from ml.signal_council import SignalCouncil
+        signal_council = SignalCouncil()
 
-    intel.system("Startup", "Initialising ensemble aggregator…")
-    from ml.ensemble import EnsembleAggregator
-    ensemble = EnsembleAggregator(
-        regime_detector=regime_detector,
-        mtf_filter=mtf_filter,
-        sentiment_analyser=sentiment,
-    )
+        intel.system("Startup", "Initialising ensemble aggregator…")
+        from ml.ensemble import EnsembleAggregator
+        ensemble = EnsembleAggregator(
+            regime_detector=regime_detector,
+            mtf_filter=mtf_filter,
+            sentiment_analyser=sentiment,
+        )
 
     intel.system("Startup", "Initialising dynamic risk manager…")
     from core.dynamic_risk import DynamicRiskManager
     dynamic_risk = DynamicRiskManager(base_risk_manager=risk,
                                        regime_detector=regime_detector)
 
-    intel.system("Startup", "Initialising Monte Carlo simulator…")
-    from ml.monte_carlo import MonteCarloSimulator
-    monte_carlo = MonteCarloSimulator()
+    monte_carlo   = None
+    walk_forward  = None
+    forecast_tracker = None
+    archive_downloader = None
+    data_collector     = None
+    if not is_manual:
+        intel.system("Startup", "Initialising Monte Carlo simulator…")
+        from ml.monte_carlo import MonteCarloSimulator
+        monte_carlo = MonteCarloSimulator()
 
-    intel.system("Startup", "Initialising walk-forward validator…")
-    from ml.walk_forward import WalkForwardValidator
-    walk_forward = WalkForwardValidator(predictor=predictor, token_ml_manager=token_ml)
+        intel.system("Startup", "Initialising walk-forward validator…")
+        from ml.walk_forward import WalkForwardValidator
+        walk_forward = WalkForwardValidator(predictor=predictor, token_ml_manager=token_ml)
+
+        intel.system("Startup", "Initialising forecast tracker…")
+        from ml.forecast_tracker import ForecastTracker
+        forecast_tracker = ForecastTracker()
+
+        intel.system("Startup", "Initialising archive downloader…")
+        from ml.archive_downloader import BinanceArchiveDownloader
+        archive_downloader = BinanceArchiveDownloader()
+
+        intel.system("Startup", "Initialising data collector…")
+        from ml.data_collector import DataCollector
+        data_collector = DataCollector(binance_client=binance)
 
     intel.system("Startup", "Initialising trade journal…")
     from core.trade_journal import TradeJournal
@@ -773,48 +805,45 @@ def build_services(settings):
         binance_client=binance,
     )
 
-    intel.system("Startup", "Initialising forecast tracker…")
-    from ml.forecast_tracker import ForecastTracker
-    forecast_tracker = ForecastTracker()
+    market_scanner   = None
+    strategy_manager = None
+    ping_pong        = None
+    arb_trader       = None
+    trend_scanner    = None
+    pair_scanner     = None
+    pair_ml_analyzer = None
+    auto_trader      = None
+    if not is_manual:
+        intel.system("Startup", "Initialising market scanner…")
+        from ml.market_scanner import MarketScanner
+        market_scanner = MarketScanner(
+            binance_client=binance,
+            regime_detector=regime_detector,
+            mtf_filter=mtf_filter,
+            signal_council=signal_council,
+            ensemble=ensemble,
+            token_ml=token_ml,
+            dynamic_risk=dynamic_risk,
+            predictor=predictor,
+        )
 
-    intel.system("Startup", "Initialising archive downloader…")
-    from ml.archive_downloader import BinanceArchiveDownloader
-    archive_downloader = BinanceArchiveDownloader()
+        intel.system("Startup", "Initialising strategy manager…")
+        from core.strategy_manager import StrategyManager
+        strategy_manager = StrategyManager(
+            regime_detector=regime_detector,
+            ensemble=ensemble,
+            trade_journal=trade_journal,
+        )
 
-    intel.system("Startup", "Initialising data collector…")
-    from ml.data_collector import DataCollector
-    data_collector = DataCollector(binance_client=binance)
-
-    intel.system("Startup", "Initialising market scanner…")
-    from ml.market_scanner import MarketScanner
-    market_scanner = MarketScanner(
-        binance_client=binance,
-        regime_detector=regime_detector,
-        mtf_filter=mtf_filter,
-        signal_council=signal_council,
-        ensemble=ensemble,
-        token_ml=token_ml,
-        dynamic_risk=dynamic_risk,
-        predictor=predictor,
-    )
-
-    intel.system("Startup", "Initialising strategy manager…")
-    from core.strategy_manager import StrategyManager
-    strategy_manager = StrategyManager(
-        regime_detector=regime_detector,
-        ensemble=ensemble,
-        trade_journal=trade_journal,
-    )
-
-    intel.system("Startup", "Initialising ping-pong range trader…")
-    from core.ping_pong_trader import PingPongTrader
-    ping_pong = PingPongTrader(
-        engine=engine,
-        regime_detector=regime_detector,
-        dynamic_risk=dynamic_risk,
-        trade_journal=trade_journal,
-        binance_client=binance,
-    )
+        intel.system("Startup", "Initialising ping-pong range trader…")
+        from core.ping_pong_trader import PingPongTrader
+        ping_pong = PingPongTrader(
+            engine=engine,
+            regime_detector=regime_detector,
+            dynamic_risk=dynamic_risk,
+            trade_journal=trade_journal,
+            binance_client=binance,
+        )
 
     intel.system("Startup", "Initialising arbitrage detector…")
     from core.arbitrage_detector import ArbitrageDetector
@@ -823,35 +852,36 @@ def build_services(settings):
         trade_journal=trade_journal,
     )
 
-    intel.system("Startup", "Initialising arbitrage auto-trader…")
-    from core.arbitrage_auto_trader import ArbitrageAutoTrader
-    arb_trader = ArbitrageAutoTrader(
-        detector=arb_detector,
-        engine=engine,
-        trade_journal=trade_journal,
-        budget_usdt=100.0,
-        paper=True,    # paper mode by default; user can toggle in UI
-    )
+    if not is_manual:
+        intel.system("Startup", "Initialising arbitrage auto-trader…")
+        from core.arbitrage_auto_trader import ArbitrageAutoTrader
+        arb_trader = ArbitrageAutoTrader(
+            detector=arb_detector,
+            engine=engine,
+            trade_journal=trade_journal,
+            budget_usdt=100.0,
+            paper=True,    # paper mode by default; user can toggle in UI
+        )
 
-    intel.system("Startup", "Initialising multi-timeframe trend scanner…")
-    from ml.trend_scanner import TrendScanner
-    trend_scanner = TrendScanner(binance_client=binance)
+        intel.system("Startup", "Initialising multi-timeframe trend scanner…")
+        from ml.trend_scanner import TrendScanner
+        trend_scanner = TrendScanner(binance_client=binance)
 
-    intel.system("Startup", "Initialising pair discovery scanner…")
-    from ml.pair_scanner import PairScanner
-    pair_scanner = PairScanner(binance_client=binance)
+        intel.system("Startup", "Initialising pair discovery scanner…")
+        from ml.pair_scanner import PairScanner
+        pair_scanner = PairScanner(binance_client=binance)
 
-    intel.system("Startup", "Initialising pair ML cross-reference analyzer…")
-    from ml.pair_ml_analyzer import PairMLAnalyzer
-    pair_ml_analyzer = PairMLAnalyzer(
-        pair_scanner=pair_scanner,
-        trend_scanner=trend_scanner,
-        predictor=predictor,
-        whale_watcher=whale_watcher,
-        sentiment=sentiment,
-        regime_detector=regime_detector,
-        arb_detector=arb_detector,
-    )
+        intel.system("Startup", "Initialising pair ML cross-reference analyzer…")
+        from ml.pair_ml_analyzer import PairMLAnalyzer
+        pair_ml_analyzer = PairMLAnalyzer(
+            pair_scanner=pair_scanner,
+            trend_scanner=trend_scanner,
+            predictor=predictor,
+            whale_watcher=whale_watcher,
+            sentiment=sentiment,
+            regime_detector=regime_detector,
+            arb_detector=arb_detector,
+        )
 
     intel.system("Startup", "Initialising MetaMask wallet bridge (optional)…")
     from core.metamask_wallet import MetaMaskWallet
@@ -863,61 +893,71 @@ def build_services(settings):
         threshold_usdt=getattr(settings, "metamask_threshold_usdt", 100.0),
     )
 
-    intel.system("Startup", "Initialising accumulation detector…")
-    from ml.accumulation_detector import AccumulationDetector
-    accumulation_detector = AccumulationDetector(
-        binance_client=binance,
-        pair_scanner=pair_scanner,
-    )
+    accumulation_detector = None
+    liquidity_analyzer    = None
+    breakout_detector     = None
+    gap_detector          = None
+    large_candle_watcher  = None
+    iceberg_detector      = None
+    ml_central            = None
+    sim_twin              = None
+    mutation_lab          = None
+    if not is_manual:
+        intel.system("Startup", "Initialising accumulation detector…")
+        from ml.accumulation_detector import AccumulationDetector
+        accumulation_detector = AccumulationDetector(
+            binance_client=binance,
+            pair_scanner=pair_scanner,
+        )
 
-    intel.system("Startup", "Initialising liquidity depth analyzer…")
-    from ml.liquidity_depth_analyzer import LiquidityDepthAnalyzer
-    liquidity_analyzer = LiquidityDepthAnalyzer(
-        binance_client=binance,
-        pair_scanner=pair_scanner,
-    )
+        intel.system("Startup", "Initialising liquidity depth analyzer…")
+        from ml.liquidity_depth_analyzer import LiquidityDepthAnalyzer
+        liquidity_analyzer = LiquidityDepthAnalyzer(
+            binance_client=binance,
+            pair_scanner=pair_scanner,
+        )
 
-    intel.system("Startup", "Initialising volume breakout detector…")
-    from ml.volume_breakout_detector import VolumeBreakoutDetector
-    breakout_detector = VolumeBreakoutDetector(
-        binance_client=binance,
-        pair_scanner=pair_scanner,
-    )
+        intel.system("Startup", "Initialising volume breakout detector…")
+        from ml.volume_breakout_detector import VolumeBreakoutDetector
+        breakout_detector = VolumeBreakoutDetector(
+            binance_client=binance,
+            pair_scanner=pair_scanner,
+        )
 
-    intel.system("Startup", "Initialising gap detector (gap up/down ML scanner)…")
-    from ml.gap_detector import GapDetector
-    gap_detector = GapDetector(
-        binance_client=binance,
-        pair_scanner=pair_scanner,
-    )
+        intel.system("Startup", "Initialising gap detector (gap up/down ML scanner)…")
+        from ml.gap_detector import GapDetector
+        gap_detector = GapDetector(
+            binance_client=binance,
+            pair_scanner=pair_scanner,
+        )
 
-    intel.system("Startup", "Initialising large candle watcher (rapid expansion alerts)…")
-    from ml.large_candle_watcher import LargeCandleWatcher
-    large_candle_watcher = LargeCandleWatcher(
-        binance_client=binance,
-        pair_scanner=pair_scanner,
-    )
+        intel.system("Startup", "Initialising large candle watcher (rapid expansion alerts)…")
+        from ml.large_candle_watcher import LargeCandleWatcher
+        large_candle_watcher = LargeCandleWatcher(
+            binance_client=binance,
+            pair_scanner=pair_scanner,
+        )
 
-    intel.system("Startup", "Initialising iceberg detector (hidden order discovery, ICEBERG_PARTS=100)…")
-    from ml.iceberg_detector import IcebergDetector
-    iceberg_detector = IcebergDetector(
-        binance_client=binance,
-        pair_scanner=pair_scanner,
-    )
+        intel.system("Startup", "Initialising iceberg detector (hidden order discovery, ICEBERG_PARTS=100)…")
+        from ml.iceberg_detector import IcebergDetector
+        iceberg_detector = IcebergDetector(
+            binance_client=binance,
+            pair_scanner=pair_scanner,
+        )
 
-    intel.system("Startup", "Initialising ML central command (unified signal pipeline)…")
-    from ml.ml_central_command import MLCentralCommand
-    ml_central = MLCentralCommand()
+        intel.system("Startup", "Initialising ML central command (unified signal pipeline)…")
+        from ml.ml_central_command import MLCentralCommand
+        ml_central = MLCentralCommand()
 
-    intel.system("Startup", "Initialising auto-trader…")
-    from core.auto_trader import AutoTrader
-    auto_trader = AutoTrader(
-        engine=engine,
-        scanner=market_scanner,
-        dynamic_risk=dynamic_risk,
-        trade_journal=trade_journal,
-        binance_client=binance,
-    )
+        intel.system("Startup", "Initialising auto-trader…")
+        from core.auto_trader import AutoTrader
+        auto_trader = AutoTrader(
+            engine=engine,
+            scanner=market_scanner,
+            dynamic_risk=dynamic_risk,
+            trade_journal=trade_journal,
+            binance_client=binance,
+        )
 
     intel.system("Startup", "Initialising safety analysis suite…")
     from safety.contract_analyzer import ContractAnalyzer
@@ -945,25 +985,26 @@ def build_services(settings):
         rugpull_scorer=rugpull_scorer,
     )
 
-    intel.system("Startup", "Initialising live simulation twin…")
-    from ml.live_simulation_twin import LiveSimulationTwin
-    sim_twin = LiveSimulationTwin()
+    if not is_manual:
+        intel.system("Startup", "Initialising live simulation twin…")
+        from ml.live_simulation_twin import LiveSimulationTwin
+        sim_twin = LiveSimulationTwin()
 
-    intel.system("Startup", "Initialising strategy mutation lab…")
-    from ml.strategy_mutation_lab import StrategyMutationLab, ParameterSpace
-    from core.strategy_registry import StrategyRegistry
-    _param_space = ParameterSpace({
-        "rsi_period":    {"type": "int",   "min": 5,   "max": 30,  "default": 14},
-        "ema_fast":      {"type": "int",   "min": 5,   "max": 50,  "default": 12},
-        "ema_slow":      {"type": "int",   "min": 20,  "max": 200, "default": 26},
-        "atr_multiplier":{"type": "float", "min": 0.5, "max": 4.0, "default": 2.0},
-        "threshold":     {"type": "float", "min": 0.1, "max": 2.0, "default": 0.5},
-        "use_volume":    {"type": "bool",                           "default": True},
-    })
-    mutation_lab = StrategyMutationLab(
-        parameter_space=_param_space,
-        registry=StrategyRegistry(),
-    )
+        intel.system("Startup", "Initialising strategy mutation lab…")
+        from ml.strategy_mutation_lab import StrategyMutationLab, ParameterSpace
+        from core.strategy_registry import StrategyRegistry
+        _param_space = ParameterSpace({
+            "rsi_period":    {"type": "int",   "min": 5,   "max": 30,  "default": 14},
+            "ema_fast":      {"type": "int",   "min": 5,   "max": 50,  "default": 12},
+            "ema_slow":      {"type": "int",   "min": 20,  "max": 200, "default": 26},
+            "atr_multiplier":{"type": "float", "min": 0.5, "max": 4.0, "default": 2.0},
+            "threshold":     {"type": "float", "min": 0.1, "max": 2.0, "default": 0.5},
+            "use_volume":    {"type": "bool",                           "default": True},
+        })
+        mutation_lab = StrategyMutationLab(
+            parameter_space=_param_space,
+            registry=StrategyRegistry(),
+        )
 
     # ── New market-watch services ──────────────────────────────────────
     intel.system("Startup", "Initialising funding rate monitor…")
@@ -996,20 +1037,24 @@ def build_services(settings):
     engine.set_token_ml_manager(token_ml)
     engine.set_sentiment_analyser(sentiment)
 
-    # Wire advanced intelligence into trading engine
+    # Wire advanced intelligence into trading engine (auto/hybrid only)
     engine.set_regime_detector(regime_detector)
-    engine.set_ensemble(ensemble)
-    engine.set_signal_council(signal_council)
-    engine.set_mtf_filter(mtf_filter)
+    if ensemble:
+        engine.set_ensemble(ensemble)
+    if signal_council:
+        engine.set_signal_council(signal_council)
+    if mtf_filter:
+        engine.set_mtf_filter(mtf_filter)
     engine.set_dynamic_risk(dynamic_risk)
     engine.set_trade_journal(trade_journal)
 
-    # Feed LSTM predictor signals through ensemble
-    predictor.on_signal(lambda s: ensemble.feed("lstm_predictor", {
-        "symbol": s.get("symbol", ""),
-        "signal": s.get("action", "HOLD"),
-        "confidence": s.get("confidence", 0.5),
-    }))
+    # Feed LSTM predictor signals through ensemble (auto/hybrid only)
+    if predictor and ensemble:
+        predictor.on_signal(lambda s: ensemble.feed("lstm_predictor", {
+            "symbol": s.get("symbol", ""),
+            "signal": s.get("action", "HOLD"),
+            "confidence": s.get("confidence", 0.5),
+        }))
 
     return {
         "binance": binance,
@@ -1087,6 +1132,10 @@ def start_background_services(services: dict, settings) -> None:
     mem_mgr    = get_memory_manager()
     mem_mgr.start_monitoring(interval_sec=30.0)
     intel.system("Startup", "Memory monitor started.")
+
+    is_manual = getattr(settings.trading, "mode", "manual") == "manual"
+    if is_manual:
+        intel.system("Startup", "Manual mode: ML training, auto-trading and scanner services are disabled.")
 
     engine = services.get("engine")
     if not engine:
