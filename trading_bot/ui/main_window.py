@@ -1299,7 +1299,11 @@ class TradingStatusBar(QStatusBar):
 class MainWindow(QMainWindow):
     """BinanceML Pro – Futuristic AI Trading Desk."""
 
-    _toast_signal = pyqtSignal(str, str)   # message, level – cross-thread safe
+    _toast_signal      = pyqtSignal(str, str)    # message, level – cross-thread safe
+    _nav_alert_signal  = pyqtSignal(int)          # page index – cross-thread safe
+    _at_state_signal   = pyqtSignal(str)          # auto-trader state value
+    _regime_signal     = pyqtSignal(object)       # regime snap
+    _bid_ask_signal    = pyqtSignal(float, float) # bid, ask
 
     def __init__(
         self,
@@ -1446,6 +1450,15 @@ class MainWindow(QMainWindow):
         # Wire toast to intel logger (ERROR + WARNING entries from any thread)
         self._toast_signal.connect(self._toast.show_toast)
         self._intel.subscribe(self._on_intel_for_toast)
+
+        # Cross-thread safe UI update signals
+        self._nav_alert_signal.connect(lambda p: self.nav.set_alert(p, True))
+        self._at_state_signal.connect(lambda v: self.status_bar.set_at_state(v))
+        self._regime_signal.connect(self._on_regime_changed)
+        self._bid_ask_signal.connect(
+            lambda b, a: self.trading_page.set_bid_ask(b, a)
+            if hasattr(self, "trading_page") else None
+        )
 
         self.nav.set_active(0)
         self._intel.system("MainWindow", "BinanceML Pro trading desk ready.")
@@ -2468,9 +2481,8 @@ class MainWindow(QMainWindow):
         hm.addSeparator()
         hm.addAction(self._act("About BinanceML Pro",           self._show_about))
 
-    @staticmethod
-    def _act(label: str, fn, shortcut: str = "") -> QAction:
-        act = QAction(label)
+    def _act(self, label: str, fn, shortcut: str = "") -> QAction:
+        act = QAction(label, self)   # parent=self prevents premature GC
         act.triggered.connect(fn)
         if shortcut:
             act.setShortcut(QKeySequence(shortcut))
@@ -2568,8 +2580,7 @@ class MainWindow(QMainWindow):
                 None,
             )
             if page is not None and hasattr(self, "nav"):
-                # Schedule on the GUI thread
-                QTimer.singleShot(0, lambda p=page: self.nav.set_alert(p, True))
+                self._nav_alert_signal.emit(page)
 
     def _connect_signals(self) -> None:
         if self._engine:
@@ -2581,9 +2592,7 @@ class MainWindow(QMainWindow):
             self._predictor.on_signal(self._on_ml_signal)
         if self._auto_trader:
             self._auto_trader.on_state_change(
-                lambda state: QTimer.singleShot(
-                    0, lambda s=state: self.status_bar.set_at_state(s.value)
-                )
+                lambda state: self._at_state_signal.emit(state.value)
             )
         if self._new_token_watcher:
             try:
@@ -2608,7 +2617,7 @@ class MainWindow(QMainWindow):
                         f"conf={snap.confidence:.0%}  "
                         f"bull_prob={snap.bull_probability:.0%}  "
                         f"pos_mult={snap.position_multiplier:.2f}x")
-                    QTimer.singleShot(0, lambda s=snap: self._on_regime_changed(s))
+                    self._regime_signal.emit(snap)
                 self._regime_detector.on_regime_change(_on_regime)
             except Exception:
                 pass
@@ -2841,7 +2850,7 @@ class MainWindow(QMainWindow):
                 result = client.get_ticker_book(symbol=symbol)
                 bid = float(result.get("bidPrice", 0))
                 ask = float(result.get("askPrice", 0))
-                QTimer.singleShot(0, lambda: self.trading_page.set_bid_ask(bid, ask))
+                self._bid_ask_signal.emit(bid, ask)
             except Exception:
                 pass
         threading.Thread(target=_fetch, daemon=True, name="bid-ask-fetch").start()

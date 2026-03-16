@@ -400,8 +400,8 @@ def _check_database_integrity(splash: _SplashScreen) -> None:
 def _check_redis_connectivity(splash: _SplashScreen) -> None:
     """Ping Redis and report status on the splash screen."""
     try:
-        from db.redis_client import get_redis_client
-        client = get_redis_client()
+        from db.redis_client import get_redis
+        client = get_redis()
         if client and client.ping():
             splash.add_check("Redis", "✓ Connected")
         else:
