@@ -2293,7 +2293,48 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-            self.ml_tools_page = tabs
+            # ── Engage bar (force-start override) ────────────────────────────
+            engage_bar = QWidget()
+            engage_bar.setStyleSheet(
+                f"background:{BG2}; border-bottom:1px solid {BORDER};"
+            )
+            _eb = QHBoxLayout(engage_bar)
+            _eb.setContentsMargins(8, 4, 8, 4)
+            _eb.setSpacing(6)
+
+            _engage_btn = QPushButton("⚡  ENGAGE  —  Force Start All ML Tools")
+            _engage_btn.setToolTip(
+                "Force-starts every ML tool regardless of mode "
+                "(hybrid / auto / paper / manual).\n"
+                "Use this to override stuck or non-starting tools."
+            )
+            _engage_btn.setStyleSheet(
+                f"QPushButton {{"
+                f"  background:{YELLOW}; color:#000; font-weight:700; font-size:12px;"
+                f"  border:1px solid {ACCENT}; border-radius:4px; padding:4px 18px;"
+                f"}}"
+                f"QPushButton:hover {{ background:{ACCENT}; color:#000; }}"
+                f"QPushButton:pressed {{ background:{ACCENT2}; }}"
+            )
+            _engage_btn.clicked.connect(self._engage_ml_tools)
+            _eb.addWidget(_engage_btn)
+
+            _status_lbl = QLabel("")
+            _status_lbl.setStyleSheet(f"color:{FG2}; font-size:11px;")
+            _eb.addWidget(_status_lbl)
+            _eb.addStretch()
+            self._engage_status_lbl = _status_lbl
+
+            # Outer container: engage bar on top, tabs below
+            _page = QWidget()
+            _pl = QVBoxLayout(_page)
+            _pl.setContentsMargins(0, 0, 0, 0)
+            _pl.setSpacing(0)
+            _pl.addWidget(engage_bar)
+            _pl.addWidget(tabs)
+
+            self._ml_tools_tabs = tabs   # used by _open_ml_tools_tab
+            self.ml_tools_page = _page
         except Exception as exc:
             logger.warning(f"ML Tools page unavailable: {exc}")
             self.ml_tools_page = _placeholder("ML Tools", f"Not available: {exc}")
@@ -2914,12 +2955,91 @@ class MainWindow(QMainWindow):
         """Navigate to ML Tools page and select the tab matching *tab_title*."""
         self._navigate_to(13)
         try:
-            if hasattr(self, "ml_tools_page") and hasattr(self.ml_tools_page, "setCurrentIndex"):
-                idx = self._tab_index_by_title(self.ml_tools_page, tab_title)
+            tabs = getattr(self, "_ml_tools_tabs", None) or getattr(self, "ml_tools_page", None)
+            if tabs and hasattr(tabs, "setCurrentIndex"):
+                idx = self._tab_index_by_title(tabs, tab_title)
                 if idx >= 0:
-                    self.ml_tools_page.setCurrentIndex(idx)
+                    tabs.setCurrentIndex(idx)
         except Exception:
             pass
+
+    def _engage_ml_tools(self) -> None:
+        """
+        Force-start every ML tool regardless of current running state or engine mode.
+        Resets each tool's _running flag then calls start(), bypassing the
+        'already running' guard so stuck or never-started tools resume.
+        """
+        import threading as _thr
+
+        _DEFAULT_SYMS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
+
+        # (tool, start_args, start_kwargs)
+        _tools: list[tuple] = [
+            # Core ML pipeline
+            (self._predictor,            (),            {}),
+            (self._cl,                   (_DEFAULT_SYMS,), {}),
+            (self._regime_detector,      (_DEFAULT_SYMS,), {}),
+            (self._whale_watcher,        (_DEFAULT_SYMS,), {}),
+            (self._sentiment,            (_DEFAULT_SYMS,), {}),
+            # ML Tools panel
+            (self._ml_central,           (),            {}),
+            (self._trend_scanner,        (),            {}),
+            (self._pair_scanner,         (),            {}),
+            (self._pair_ml_analyzer,     (),            {}),
+            (self._accumulation_detector,(),            {}),
+            (self._liquidity_analyzer,   (),            {}),
+            (self._breakout_detector,    (),            {}),
+            (self._gap_detector,         (),            {}),
+            (self._large_candle_watcher, (),            {}),
+            (self._iceberg_detector,     (),            {}),
+            # Broader market tools
+            (self._market_pulse,         (),            {}),
+            (self._market_scanner,       (),            {"interval_sec": 300}),
+            (self._new_token_watcher,    (),            {}),
+            (self._auto_trader,          (),            {}),
+        ]
+
+        started: list[str] = []
+        failed:  list[str] = []
+
+        def _do_engage():
+            for tool, args, kwargs in _tools:
+                if tool is None:
+                    continue
+                name = type(tool).__name__
+                try:
+                    # Reset running flag so start() won't bail early
+                    if hasattr(tool, "_running"):
+                        tool._running = False
+                    tool.start(*args, **kwargs)
+                    started.append(name)
+                    logger.info(f"Engage: force-started {name}")
+                except Exception as exc:
+                    failed.append(name)
+                    logger.warning(f"Engage: force-start failed for {name}: {exc!r}")
+
+            msg = f"ENGAGE complete — {len(started)} tools started"
+            if failed:
+                msg += f", {len(failed)} failed: {', '.join(failed)}"
+            intel.system("Engage", msg)
+
+            # Update status label on the main thread
+            try:
+                from PyQt6.QtCore import QMetaObject, Qt as _Qt
+                lbl = getattr(self, "_engage_status_lbl", None)
+                if lbl:
+                    lbl.setText(f"  Last engage: {len(started)} started" +
+                                (f", {len(failed)} failed" if failed else " ✓"))
+            except Exception:
+                pass
+
+            try:
+                lvl = "warning" if failed else "success"
+                self._toast_signal.emit(msg, lvl)
+            except Exception:
+                pass
+
+        _thr.Thread(target=_do_engage, daemon=True, name="ml-engage").start()
 
     def _open_market_watch_tab(self, tab_index: int) -> None:
         """Navigate to Market Watch page and select a specific tab."""
