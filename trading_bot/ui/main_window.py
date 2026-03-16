@@ -532,7 +532,8 @@ class NavSidebar(QFrame):
         self.page_requested.emit(index)
 
     def set_active(self, index: int) -> None:
-        self._on_nav(index)
+        for btn in self._buttons:
+            btn.set_active(btn._index == index)
 
     def set_alert(self, page_index: int, alerted: bool) -> None:
         """Flash the nav button for the given page when an alert is active."""
