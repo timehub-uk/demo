@@ -180,7 +180,7 @@ def _btn(label: str, colour: str = ACCENT, width: int = 0) -> QPushButton:
     b.setStyleSheet(
         f"QPushButton{{background:{colour};color:#000;font-weight:700;font-size:11px;"
         f"border:none;border-radius:3px;padding:0 12px;}}"
-        f"QPushButton:hover{{filter:brightness(120%);}}"
+        f"QPushButton:hover{{background:{colour}cc;}}"
         f"QPushButton:disabled{{background:{BG4};color:{FG2};}}"
     )
     return b

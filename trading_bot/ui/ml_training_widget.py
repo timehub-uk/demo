@@ -16,7 +16,7 @@ from __future__ import annotations
 import time
 
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject, QMetaObject, Q_ARG
 from PyQt6.QtGui import QColor, QBrush, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -136,6 +136,8 @@ class PhaseCard(QFrame):
 class MLTrainingWidget(QWidget):
     training_started  = pyqtSignal()
     training_finished = pyqtSignal()
+    _whale_event_sig  = pyqtSignal(object)
+    _add_signal_sig   = pyqtSignal(dict)
 
     def __init__(self, trainer=None, parent=None) -> None:
         super().__init__(parent)
@@ -148,6 +150,8 @@ class MLTrainingWidget(QWidget):
         self._signal_history: list[dict] = []
         self._setup_ui()
         self._start_status_timer()
+        self._whale_event_sig.connect(self._do_add_whale_event)
+        self._add_signal_sig.connect(self._do_add_signal)
 
     # ── UI setup ───────────────────────────────────────────────────────
     def _setup_ui(self) -> None:
@@ -522,6 +526,10 @@ class MLTrainingWidget(QWidget):
 
     # ── Public: add signal ──────────────────────────────────────────────
     def add_signal(self, signal: dict) -> None:
+        """Thread-safe entry point – marshal to main thread via signal."""
+        self._add_signal_sig.emit(signal)
+
+    def _do_add_signal(self, signal: dict) -> None:
         """Add a new ML signal to the signals table (from universal or per-token model)."""
         action = signal.get("action", signal.get("signal", ""))
         colour = GREEN if action == "BUY" else RED if action == "SELL" else YELLOW
@@ -547,6 +555,10 @@ class MLTrainingWidget(QWidget):
 
     # ── Public: add whale event ─────────────────────────────────────────
     def add_whale_event(self, event) -> None:
+        """Thread-safe entry point – marshal to main thread via signal."""
+        self._whale_event_sig.emit(event)
+
+    def _do_add_whale_event(self, event) -> None:
         """Add a whale event to the whale activity table."""
         evt_type = getattr(event, "event_type", str(event))
         color_map = {
