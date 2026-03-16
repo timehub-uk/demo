@@ -1590,6 +1590,7 @@ class MainWindow(QMainWindow):
         check whether PostgreSQL just became available after SQLite was active."""
         self._settings = get_settings()
         self._apply_api_nav_state()
+        self._set_engine_mode(self._settings.trading.mode)
         if self._settings.binance.api_key:
             self._binance_api_ignored = False
 
