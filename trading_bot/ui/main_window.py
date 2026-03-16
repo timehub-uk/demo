@@ -2685,13 +2685,14 @@ class MainWindow(QMainWindow):
 
     def _toggle_nav(self) -> None:
         """Slide the navigation sidebar in or out with an animated transition."""
+        self._nav_anim.stop()
         if self._nav_collapsed:
-            # Expand: animate from 0 → _WIDTH
-            self._nav_anim.setStartValue(0)
+            # Expand: animate from current width → _WIDTH
+            self._nav_anim.setStartValue(self.nav.maximumWidth())
             self._nav_anim.setEndValue(NavSidebar._WIDTH)
         else:
-            # Collapse: animate from _WIDTH → 0
-            self._nav_anim.setStartValue(NavSidebar._WIDTH)
+            # Collapse: animate from current width → 0
+            self._nav_anim.setStartValue(self.nav.maximumWidth())
             self._nav_anim.setEndValue(0)
         self._nav_collapsed = not self._nav_collapsed
         self._nav_anim.start()
