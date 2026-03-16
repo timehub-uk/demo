@@ -129,6 +129,9 @@ def init_db(db_url: str, pool_size: int = 10, max_overflow: int = 20) -> None:
         )
         logger.info("PostgreSQL connected and tables created.")
 
+    # sync_schema runs outside the lock so it can acquire its own connections
+    sync_schema()
+
 
 def init_sqlite(db_path: str | None = None) -> None:
     """
@@ -170,6 +173,71 @@ def init_sqlite(db_path: str | None = None) -> None:
         )
         _using_sqlite = True
         logger.info(f"SQLite fallback active – local DB at {db_path}")
+
+    # sync_schema runs outside the lock so it can acquire its own connections
+    sync_schema()
+
+
+def sync_schema() -> list[str]:
+    """
+    Compare the live database schema against the ORM models and add any
+    missing columns to existing tables.  New tables are also created.
+
+    Returns a list of ALTER TABLE statements that were applied.
+    Safe to call on every startup — it is a no-op when the schema is current.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    if _engine is None:
+        raise RuntimeError("Database not initialised – call init_db() first.")
+
+    # Ensure all tables defined in the models exist (creates new ones)
+    Base.metadata.create_all(_engine)
+
+    inspector = sa_inspect(_engine)
+    applied: list[str] = []
+
+    for table_name, table in Base.metadata.tables.items():
+        if not inspector.has_table(table_name):
+            # create_all already handled it; nothing more to do
+            continue
+
+        existing_cols = {col["name"] for col in inspector.get_columns(table_name)}
+
+        for col in table.columns:
+            if col.name in existing_cols:
+                continue  # column already present
+
+            try:
+                col_type = col.type.compile(_engine.dialect)
+            except Exception:
+                col_type = "TEXT"   # safe fallback
+
+            if _using_sqlite:
+                # SQLite does not support ADD COLUMN IF NOT EXISTS
+                sql = f'ALTER TABLE "{table_name}" ADD COLUMN "{col.name}" {col_type}'
+            else:
+                sql = (
+                    f'ALTER TABLE "{table_name}" '
+                    f'ADD COLUMN IF NOT EXISTS "{col.name}" {col_type}'
+                )
+
+            try:
+                with _engine.begin() as conn:
+                    conn.execute(text(sql))
+                applied.append(sql)
+                logger.info(f"Schema sync: added column {table_name}.{col.name}")
+            except Exception as exc:
+                logger.warning(
+                    f"Schema sync: could not add {table_name}.{col.name}: {exc}"
+                )
+
+    if not applied:
+        logger.debug("Schema sync: no changes required.")
+    else:
+        logger.info(f"Schema sync: applied {len(applied)} change(s).")
+
+    return applied
 
 
 @contextmanager

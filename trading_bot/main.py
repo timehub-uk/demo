@@ -348,28 +348,42 @@ def create_splash(app: QApplication) -> _SplashScreen:
 
 def _check_database_integrity(splash: _SplashScreen) -> None:
     """
-    Run a lightweight DB integrity check during startup and report via splash.
-    Checks: connection, required tables present, SQLite PRAGMA (if applicable).
+    Run a DB integrity check during startup and report via splash.
+    Checks: connection, all ORM tables present, missing columns synced,
+    and SQLite PRAGMA integrity (if applicable).
     """
     try:
-        from db.postgres import get_db
+        from db.postgres import get_db, sync_schema
         from sqlalchemy import text, inspect as sa_inspect
+        from db.models import Base
+
+        # Sync schema first — adds missing tables/columns from the current models
+        try:
+            applied = sync_schema()
+            if applied:
+                splash.add_check("Schema Sync", f"✓ Applied {len(applied)} update(s)")
+                for stmt in applied:
+                    intel.system("Schema", stmt)
+            else:
+                splash.add_check("Schema Sync", "✓ Up to date")
+        except Exception as sync_exc:
+            splash.add_check("Schema Sync", f"⚠ {sync_exc!s:.60}")
 
         with get_db() as db:
             # Basic connectivity
             db.execute(text("SELECT 1"))
 
-            # Check required tables exist
+            # Check all ORM-defined tables exist
             engine = db.get_bind()
             inspector = sa_inspect(engine)
             existing = set(inspector.get_table_names())
-            required = {"trades", "orders", "ml_models", "portfolio_snapshots"}
+            required = set(Base.metadata.tables.keys())
             missing  = required - existing
 
             if missing:
                 splash.add_check("Database", f"⚠ Missing tables: {', '.join(sorted(missing))}")
             else:
-                splash.add_check("Database", "✓ Schema OK")
+                splash.add_check("Database", f"✓ Schema OK ({len(required)} tables)")
 
             # SQLite PRAGMA integrity check (cheap, fast)
             if "sqlite" in str(engine.url):
