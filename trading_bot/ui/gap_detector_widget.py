@@ -138,7 +138,8 @@ class GapDetectorWidget(QWidget):
     """
 
     # Emitted when user double-clicks a symbol row → main window follows the symbol
-    symbol_selected = pyqtSignal(str)
+    symbol_selected  = pyqtSignal(str)
+    _refresh_signal  = pyqtSignal()
 
     def __init__(
         self,
@@ -152,6 +153,7 @@ class GapDetectorWidget(QWidget):
         self._filter_state = "OPEN"
         self._filter_tf    = "ALL"
 
+        self._refresh_signal.connect(self._refresh_table)
         self._build_ui()
         self._connect_detector()
 
@@ -332,11 +334,11 @@ class GapDetectorWidget(QWidget):
 
     def _on_gap_up_signal(self, results: list) -> None:
         """Called from background thread — defer to Qt main thread."""
-        QTimer.singleShot(0, self._refresh_table)
+        self._refresh_signal.emit()
 
     def _on_gap_down_signal(self, results: list) -> None:
         """Called from background thread — defer to Qt main thread."""
-        QTimer.singleShot(0, self._refresh_table)
+        self._refresh_signal.emit()
 
     # ── Table refresh ─────────────────────────────────────────────────────────
 

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -63,11 +63,14 @@ _ARB_TYPE_COLORS = {
 class ArbitrageWidget(QWidget):
     """Live arbitrage opportunity and auto-trader panel."""
 
+    _refresh_signal = pyqtSignal()
+
     def __init__(self, arbitrage_detector=None, arbitrage_trader=None,
                  parent=None) -> None:
         super().__init__(parent)
         self._det    = arbitrage_detector
         self._trader = arbitrage_trader
+        self._refresh_signal.connect(self._refresh)
         self._setup_ui()
         self._connect_backend()
         QTimer(self, interval=5000, timeout=self._refresh).start()
@@ -333,14 +336,14 @@ class ArbitrageWidget(QWidget):
         if self._det:
             try:
                 self._det.on_opportunity(
-                    lambda opp: QTimer.singleShot(0, self._refresh)
+                    lambda opp: self._refresh_signal.emit()
                 )
             except Exception as exc:
                 logger.warning(f"ArbitrageWidget: failed to subscribe to detector: {exc}")
         if self._trader:
             try:
                 self._trader.on_trade(
-                    lambda evt: QTimer.singleShot(0, self._refresh)
+                    lambda evt: self._refresh_signal.emit()
                 )
             except Exception as exc:
                 logger.warning(f"ArbitrageWidget: failed to subscribe to trader: {exc}")

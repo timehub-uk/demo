@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -55,6 +55,8 @@ class LiquidityWidget(QWidget):
     Instantiate with a ``LiquidityDepthAnalyzer`` instance (or None for demo).
     """
 
+    _refresh_signal = pyqtSignal()
+
     def __init__(
         self,
         liquidity_analyzer: Optional[LiquidityDepthAnalyzer] = None,
@@ -65,6 +67,7 @@ class LiquidityWidget(QWidget):
         self._results: list[LiquidityResult] = []
         self._filter_grade = "ALL"
 
+        self._refresh_signal.connect(self._refresh_table)
         self._build_ui()
         self._connect_analyzer()
 
@@ -185,7 +188,7 @@ class LiquidityWidget(QWidget):
 
     def _on_analyzer_update(self, results: list) -> None:
         self._results = list(results)
-        QTimer.singleShot(0, self._refresh_table)
+        self._refresh_signal.emit()
 
     # ── Table refresh ───────────────────────────────────────────────────────────
 

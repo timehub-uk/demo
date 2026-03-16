@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -56,6 +56,8 @@ class AccumulationWidget(QWidget):
     Instantiate with an ``AccumulationDetector`` instance (or None for demo).
     """
 
+    _refresh_signal = pyqtSignal()
+
     def __init__(
         self,
         accumulation_detector: Optional[AccumulationDetector] = None,
@@ -66,6 +68,7 @@ class AccumulationWidget(QWidget):
         self._results: list[AccumulationResult] = []
         self._filter_label = "ALL"
 
+        self._refresh_signal.connect(self._refresh_table)
         self._build_ui()
         self._connect_detector()
 
@@ -190,7 +193,7 @@ class AccumulationWidget(QWidget):
     def _on_detector_update(self, results: list) -> None:
         """Called from background thread — defer to Qt main thread."""
         self._results = results
-        QTimer.singleShot(0, self._refresh_table)
+        self._refresh_signal.emit()
 
     # ── Table refresh ───────────────────────────────────────────────────────────
 

@@ -63,7 +63,8 @@ class LargeCandleWidget(QWidget):
     Fires ``symbol_selected`` signal when user double-clicks a row.
     """
 
-    symbol_selected = pyqtSignal(str)
+    symbol_selected  = pyqtSignal(str)
+    _refresh_signal  = pyqtSignal()
 
     def __init__(
         self,
@@ -76,6 +77,7 @@ class LargeCandleWidget(QWidget):
         self._filter_label = "ALL"
         self._filter_tf    = "ALL"
 
+        self._refresh_signal.connect(self._refresh_table)
         self._build_ui()
         self._connect_watcher()
 
@@ -222,7 +224,7 @@ class LargeCandleWidget(QWidget):
     def _on_watcher_update(self, results: list) -> None:
         """Called from background thread — defer to Qt main thread."""
         self._results = results
-        QTimer.singleShot(0, self._refresh_table)
+        self._refresh_signal.emit()
 
     # ── Table refresh ───────────────────────────────────────────────────────────
 

@@ -138,7 +138,8 @@ class IcebergWidget(QWidget):
     Instantiate with an ``IcebergDetector`` instance (or None for demo mode).
     """
 
-    symbol_selected = pyqtSignal(str)
+    symbol_selected  = pyqtSignal(str)
+    _refresh_signal  = pyqtSignal()
 
     def __init__(
         self,
@@ -151,6 +152,7 @@ class IcebergWidget(QWidget):
         self._filter_side  = "ALL"
         self._filter_level = "ALL"
 
+        self._refresh_signal.connect(self._refresh_table)
         self._build_ui()
         self._connect_detector()
 
@@ -328,7 +330,7 @@ class IcebergWidget(QWidget):
     def _on_detector_update(self, signals: list) -> None:
         """Called from background thread — defer update to Qt main thread."""
         self._results = signals
-        QTimer.singleShot(0, self._refresh_table)
+        self._refresh_signal.emit()
 
     # ── Table refresh ─────────────────────────────────────────────────────────
 

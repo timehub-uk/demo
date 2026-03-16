@@ -43,7 +43,8 @@ class PingPongWidget(QWidget):
     Control panel and live monitor for the Ping-Pong range trader.
     """
 
-    symbol_changed = pyqtSignal(str)
+    symbol_changed   = pyqtSignal(str)
+    _refresh_signal  = pyqtSignal()
 
     SYMBOLS = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
                "ADAUSDT","DOTUSDT","LINKUSDT","AVAXUSDT","MATICUSDT"]
@@ -51,6 +52,7 @@ class PingPongWidget(QWidget):
     def __init__(self, ping_pong_trader=None, parent=None) -> None:
         super().__init__(parent)
         self._pp = ping_pong_trader
+        self._refresh_signal.connect(self._refresh)
         self._setup_ui()
         self._connect_backend()
         QTimer(self, interval=2000, timeout=self._refresh).start()
@@ -384,7 +386,7 @@ class PingPongWidget(QWidget):
     # ── Backend callbacks (called from worker thread) ──────────────────────────
 
     def _on_pp_state(self, status) -> None:
-        QTimer.singleShot(0, self._refresh)
+        self._refresh_signal.emit()
 
     def _on_pp_trade(self, trade) -> None:
-        QTimer.singleShot(0, self._refresh)
+        self._refresh_signal.emit()
