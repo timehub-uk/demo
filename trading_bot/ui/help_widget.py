@@ -421,7 +421,7 @@ without hardware.</p>
   <tr><td>GET</td><td>/api/v1/signals</td><td>Latest ML signals</td></tr>
   <tr><td>GET</td><td>/api/v1/trades</td><td>Recent trades (?limit=50&amp;symbol=BTCUSDT)</td></tr>
   <tr><td>POST</td><td>/api/v1/order</td><td>Place a limit order</td></tr>
-  <tr><td>DELETE</td><td>/api/v1/order/{id}</td><td>Cancel an order</td></tr>
+  <tr><td>DELETE</td><td>/api/v1/order/{{id}}</td><td>Cancel an order</td></tr>
   <tr><td>POST</td><td>/api/v1/ml/predict</td><td>On-demand prediction</td></tr>
   <tr><td>GET</td><td>/api/v1/tax/monthly</td><td>Monthly CGT summary</td></tr>
   <tr><td>POST</td><td>/api/v1/webhook/register</td><td>Register a webhook URL</td></tr>

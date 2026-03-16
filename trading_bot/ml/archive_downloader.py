@@ -325,24 +325,42 @@ def _add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     low    = df["low"]
     volume = df["volume"]
 
-    df["rsi"]        = ta.rsi(close, length=14)
-    macd_df          = ta.macd(close)
-    if macd_df is not None and not macd_df.empty:
-        df["macd"]         = macd_df.get("MACD_12_26_9")
-        df["macd_signal"]  = macd_df.get("MACDs_12_26_9")
-    bb               = ta.bbands(close, length=20)
-    if bb is not None and not bb.empty:
-        df["bb_upper"] = bb.get("BBU_20_2.0")
-        df["bb_lower"] = bb.get("BBL_20_2.0")
-    df["ema_20"]     = ta.ema(close, length=20)
-    df["ema_50"]     = ta.ema(close, length=50)
-    df["ema_200"]    = ta.ema(close, length=200)
-    df["atr"]        = ta.atr(high, low, close, length=14)
-    df["obv"]        = ta.obv(close, volume)
-    adx_df           = ta.adx(high, low, close, length=14)
-    if adx_df is not None and not adx_df.empty:
-        df["adx"]    = adx_df.get("ADX_14")
-    df["vwap"]       = (close * volume).cumsum() / volume.replace(0, np.nan).cumsum()
+    try:
+        df["rsi"] = ta.rsi(close, length=14)
+    except AttributeError:
+        df["rsi"] = df.ta.rsi(length=14) if hasattr(df, 'ta') else None
+    try:
+        macd_df = ta.macd(close)
+        if macd_df is not None and not macd_df.empty:
+            df["macd"]        = macd_df.get("MACD_12_26_9")
+            df["macd_signal"] = macd_df.get("MACDs_12_26_9")
+    except AttributeError:
+        pass
+    try:
+        bb = ta.bbands(close, length=20)
+        if bb is not None and not bb.empty:
+            df["bb_upper"] = bb.get("BBU_20_2.0")
+            df["bb_lower"] = bb.get("BBL_20_2.0")
+    except AttributeError:
+        pass
+    for col, fn_args in [
+        ("ema_20",  lambda: ta.ema(close, length=20)),
+        ("ema_50",  lambda: ta.ema(close, length=50)),
+        ("ema_200", lambda: ta.ema(close, length=200)),
+        ("atr",     lambda: ta.atr(high, low, close, length=14)),
+        ("obv",     lambda: ta.obv(close, volume)),
+    ]:
+        try:
+            df[col] = fn_args()
+        except AttributeError:
+            pass
+    try:
+        adx_df = ta.adx(high, low, close, length=14)
+        if adx_df is not None and not adx_df.empty:
+            df["adx"] = adx_df.get("ADX_14")
+    except AttributeError:
+        pass
+    df["vwap"] = (close * volume).cumsum() / volume.replace(0, np.nan).cumsum()
     return df
 
 
