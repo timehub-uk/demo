@@ -857,11 +857,106 @@ class MultiChartPanel(QWidget):
         self.chart_tabs.setCurrentIndex(idx)
 
     def _prompt_add_tab(self) -> None:
-        sym, ok = QInputDialog.getText(
-            self, "Add Chart", "Symbol (e.g. ETHUSDT):"
+        """Show a dropdown of all known Binance pairs to add a new chart tab."""
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QVBoxLayout, QLineEdit
+        from PyQt6.QtCore import Qt
+
+        # Build the known pairs list — try Redis first, fallback to curated list
+        pairs = self._get_known_pairs()
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Add Chart")
+        dlg.setMinimumWidth(320)
+        dlg.setStyleSheet(
+            f"QDialog {{ background:{BG3}; color:{FG0}; border:1px solid {BORDER}; }}"
+            f"QLabel {{ color:{FG1}; font-size:12px; }}"
+            f"QComboBox {{ background:{BG4}; color:{FG0}; border:1px solid {BORDER}; "
+            f"border-radius:4px; padding:4px 8px; font-size:12px; }}"
+            f"QComboBox QAbstractItemView {{ background:{BG3}; color:{FG0}; "
+            f"selection-background-color:{ACCENT}44; }}"
+            f"QLineEdit {{ background:{BG4}; color:{FG0}; border:1px solid {BORDER}; "
+            f"border-radius:4px; padding:4px 8px; font-size:12px; }}"
         )
-        if ok and sym.strip():
-            self._add_chart_tab(sym.strip().upper())
+
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        layout.addWidget(QLabel("Select or type a trading pair:"))
+
+        # Search/filter field
+        search = QLineEdit()
+        search.setPlaceholderText("Filter (e.g. BTC, ETH, SOL…)")
+        search.setClearButtonEnabled(True)
+        layout.addWidget(search)
+
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.addItems(pairs)
+        combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        layout.addWidget(combo)
+
+        def _filter(text: str) -> None:
+            combo.clear()
+            text = text.upper()
+            combo.addItems([p for p in pairs if text in p] if text else pairs)
+
+        search.textChanged.connect(_filter)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.setStyleSheet(
+            f"QPushButton {{ background:{BG4}; color:{FG0}; border:1px solid {BORDER}; "
+            f"border-radius:4px; padding:5px 14px; font-size:11px; }}"
+            f"QPushButton:hover {{ background:{BG5}; color:{ACCENT}; border-color:{ACCENT}; }}"
+        )
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addWidget(btns)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            sym = combo.currentText().strip().upper()
+            if sym:
+                self._add_chart_tab(sym)
+
+    def _get_known_pairs(self) -> list[str]:
+        """Return a comprehensive list of known Binance trading pairs."""
+        # Try loading from pair scanner results in Redis
+        try:
+            from db.redis_client import RedisClient
+            rc = RedisClient()
+            scanned = rc.get("pair_scanner:all_pairs")
+            if scanned:
+                import json
+                data = json.loads(scanned) if isinstance(scanned, (str, bytes)) else scanned
+                if isinstance(data, list) and data:
+                    return sorted(str(p) for p in data)
+        except Exception:
+            pass
+
+        # Comprehensive curated list of Binance USDT pairs
+        return [
+            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+            "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "MATICUSDT",
+            "LINKUSDT", "LTCUSDT", "SHIBUSDT", "ATOMUSDT", "UNIUSDT",
+            "XLMUSDT", "ETCUSDT", "BCHUSDT", "FILUSDT", "APTUSDT",
+            "NEARUSDT", "OPUSDT", "ARBUSDT", "INJUSDT", "SUIUSDT",
+            "SEIUSDT", "TIAUSDT", "WLDUSDT", "ORDIUSDT", "JUPUSDT",
+            "PYTHUSDT", "RENDERUSDT", "FETUSDT", "ALGOUSDT", "ICPUSDT",
+            "VETUSDT", "HBARUSDT", "QNTUSDT", "EGLDUSDT", "FTMUSDT",
+            "SANDUSDT", "MANAUSDT", "AXSUSDT", "CHZUSDT", "APEUSDT",
+            "GRTUSDT", "AAVEUSDT", "MKRUSDT", "SNXUSDT", "CRVUSDT",
+            "LDOUSDT", "STXUSDT", "RUNEUSDT", "KAVAUSDT", "ZILUSDT",
+            "IOTAUSDT", "ONEUSDT", "HOTUSDT", "ENJUSDT", "BATUSDT",
+            "ZRXUSDT", "COMPUSDT", "YFIUSDT", "SUSHIUSDT", "CAKEUSDT",
+            "1INCHUSDT", "DYDXUSDT", "GALAUSDT", "FLOKIUSDT", "CFXUSDT",
+            "MASKUSDT", "IMXUSDT", "LRCUSDT", "COTIUSDT", "STORJUSDT",
+            "OCEANUSDT", "ROSEUSDT", "CELOUSDT", "KSMUSDT", "XTZUSDT",
+            "THETAUSDT", "IOTXUSDT", "ONDOUSDT", "STRKUSDT", "WUSDT",
+            "ETHBTC", "BNBBTC", "SOLBTC", "XRPBTC", "ADABTC",
+            "LTCBTC", "BCHBTC", "LINKBTC", "DOTBTC", "UNIBTC",
+        ]
 
     def _close_tab(self, index: int) -> None:
         if self.chart_tabs.count() <= 1:
@@ -1132,9 +1227,12 @@ class TradingPage(QWidget):
         self.orderbook = OrderBookWidget(self._default_symbols[0])
         self._ob_dock = TradeDock("📋  Order Book")
         self._ob_dock.setWidget(self.orderbook)
-        self._ob_dock.setMinimumWidth(240)
+        self._ob_dock.setMinimumWidth(320)
         self._ob_dock.minimize_requested.connect(self._minimize_to_bottom)
         self._inner.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._ob_dock)
+
+        # Connect order-book price click → populate order entry form
+        self.orderbook.price_clicked.connect(self._on_orderbook_price_clicked)
 
         # ── Right dock: Trading Panel (stacked below Order Book) ───────
         from ui.trading_panel import TradingPanel
@@ -1183,6 +1281,13 @@ class TradingPage(QWidget):
 
     def set_bid_ask(self, bid: float, ask: float) -> None:
         self.trading_panel.set_bid_ask(bid, ask)
+
+    def _on_orderbook_price_clicked(self, price: float, side: str) -> None:
+        """Populate the order entry price when a row in the order book is clicked."""
+        try:
+            self.trading_panel.order_entry.set_price(price)
+        except Exception:
+            pass
 
     def current_symbol(self) -> str:
         return self.chart_panel.current_symbol()
@@ -1353,9 +1458,9 @@ class TradingStatusBar(QStatusBar):
                    time.strftime("%H:%M:%S  %d %b %Y")
                )).start()
 
-        # Health-check every 30 s — dispatched to a background thread
+        # Health-check every 15 s — dispatched to a background thread
         self._health_timer = QTimer(self)
-        self._health_timer.setInterval(30_000)
+        self._health_timer.setInterval(15_000)
         self._health_timer.timeout.connect(self._run_health_check)
 
         # Network check every 15 s — dispatched to a background thread
@@ -1371,7 +1476,7 @@ class TradingStatusBar(QStatusBar):
         self._net_timer.start()
 
     def _run_health_check(self) -> None:
-        """Dispatch DB + Redis probes to a background thread to avoid blocking the UI."""
+        """Dispatch DB + Redis + Binance API probes to a background thread."""
         def _probe():
             # PostgreSQL
             try:
@@ -1391,9 +1496,21 @@ class TradingStatusBar(QStatusBar):
             except Exception:
                 redis_ok = False
 
+            # Binance REST API ping
+            try:
+                import socket as _sock
+                s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+                s.settimeout(3)
+                s.connect(("api.binance.com", 443))
+                s.close()
+                api_ok = True
+            except Exception:
+                api_ok = False
+
             # Marshal results back onto the UI thread
-            QTimer.singleShot(0, lambda: self.set_service("db", db_ok))
+            QTimer.singleShot(0, lambda: self.set_service("db",    db_ok))
             QTimer.singleShot(0, lambda: self.set_service("redis", redis_ok))
+            QTimer.singleShot(0, lambda: self.set_service("api",   api_ok))
 
         threading.Thread(target=_probe, daemon=True, name="statusbar-health").start()
 

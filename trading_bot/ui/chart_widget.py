@@ -53,6 +53,55 @@ pg.setConfigOption("background", BG2)
 pg.setConfigOption("foreground", FG1)
 
 
+# ── Custom date/time axis with month-year separation ──────────────────────────
+
+class TradingDateAxis(pg.DateAxisItem):
+    """
+    Enhanced DateAxisItem that clearly separates date from time and
+    shows month/year transitions as a distinct tier on the axis.
+    """
+
+    def tickStrings(self, values, scale, spacing):  # noqa: N802
+        strings = []
+        seen_month = None
+        for v in values:
+            try:
+                dt = datetime.utcfromtimestamp(v)
+            except (OSError, OverflowError, ValueError):
+                strings.append("")
+                continue
+
+            month_key = (dt.year, dt.month)
+
+            if spacing >= 86400 * 25:          # ≥ ~1 month → "Jan\n2025"
+                strings.append(dt.strftime("%b\n%Y"))
+            elif spacing >= 86400 * 6:         # ≥ ~1 week → "15 Jan" or "Jan\n2025" boundary
+                if month_key != seen_month:
+                    strings.append(dt.strftime("%b\n%Y"))
+                    seen_month = month_key
+                else:
+                    strings.append(dt.strftime("%d %b"))
+            elif spacing >= 86400:             # ≥ 1 day → "15 Jan" with year on new month
+                if month_key != seen_month:
+                    strings.append(dt.strftime("%d\n%b '%y"))
+                    seen_month = month_key
+                else:
+                    strings.append(dt.strftime("%d %b"))
+            elif spacing >= 3600:              # ≥ 1 hour → "14:00 · 15 Jan"
+                if month_key != seen_month:
+                    strings.append(dt.strftime("%H:%M\n%d %b '%y"))
+                    seen_month = month_key
+                else:
+                    strings.append(dt.strftime("%H:%M\n%d %b"))
+            else:                              # minutes → "14:32"
+                if month_key != seen_month:
+                    strings.append(dt.strftime("%H:%M\n%d %b"))
+                    seen_month = month_key
+                else:
+                    strings.append(dt.strftime("%H:%M"))
+        return strings
+
+
 # ── Colour palette ─────────────────────────────────────────────────────────────
 
 _C = {
@@ -432,11 +481,17 @@ class TradeMarkerLayer:
 _EVENT_CONFIG: dict[str, tuple[str, str, str]] = {
     "CASCADE":      ("#FF5722", "▼", "bottom"),
     "WHALE":        ("#CE93D8", "◆", "top"),
+    "WHALE_BUY":    ("#CE93D8", "▲", "bottom"),
+    "WHALE_SELL":   ("#BA68C8", "▼", "top"),
     "FUNDING":      ("#FFD700", "◆", "top"),
     "LEAD_LAG":     ("#26C6DA", "→", "top"),
     "AGGRESSOR":    ("#FF7043", "★", "top"),
-    "ML_SIGNAL":    ("#4CAF50", "▲", "top"),
-    "ML_SELL":      ("#EF5350", "▼", "bottom"),
+    "ML_SIGNAL":    ("#4CAF50", "▲", "top"),      # legacy alias
+    "ML_BUY":       ("#00E676", "▲", "bottom"),   # green up triangle — BUY signal
+    "ML_SELL":      ("#EF5350", "▼", "top"),      # red down triangle — SELL signal
+    "ML_HOLD":      ("#FFD740", "◆", "top"),      # yellow diamond — HOLD/NEUTRAL
+    "ENTRY":        ("#FFD700", "▲", "bottom"),   # gold up arrow — get-in price
+    "EXIT":         ("#FF7043", "▼", "top"),      # orange down arrow — get-out price
     "VOLUME_SPIKE": ("#AB47BC", "↑", "top"),
 }
 
@@ -527,6 +582,131 @@ class EventAnnotationLayer:
                     best_dist = dist
                     best = ev
         return best
+
+
+# ── ML signal marker layer ─────────────────────────────────────────────────────
+
+# pyqtgraph scatter symbol mapping per signal type
+_ML_MARKER_CFG: dict[str, tuple[str, str, int, float]] = {
+    # event_type: (pg_symbol, color, size, y_anchor)
+    "ML_BUY":    ("t",  "#00E676", 16, 1.3),   # up triangle below bar
+    "ML_SELL":   ("t1", "#EF5350", 16, -0.3),  # down triangle above bar
+    "ML_HOLD":   ("d",  "#FFD740", 10, 0.5),   # diamond
+    "WHALE_BUY": ("t",  "#CE93D8", 18, 1.5),   # large purple up triangle
+    "WHALE_SELL":("t1", "#BA68C8", 18, -0.5),  # large purple down triangle
+    "ENTRY":     ("t",  "#FFD700", 14, 1.3),   # gold up — get-in
+    "EXIT":      ("t1", "#FF7043", 14, -0.3),  # orange down — get-out
+}
+
+
+class MLMarkerLayer:
+    """
+    Renders ML signal, whale and entry/exit price markers as coloured
+    triangles / diamonds on the price chart.
+
+    Call draw() with a list of ChartEvent objects.  Call refresh_from_redis()
+    to auto-load the latest signals directly from the cache.
+    """
+
+    def __init__(self, price_plot: "pg.PlotWidget") -> None:
+        self._plot   = price_plot
+        self._items: list = []
+
+    def clear(self) -> None:
+        for item in self._items:
+            try:
+                self._plot.removeItem(item)
+            except Exception:
+                pass
+        self._items.clear()
+
+    def draw(self, events: list["ChartEvent"]) -> None:
+        self.clear()
+        # Group by type for batch rendering
+        groups: dict[str, list] = {}
+        for ev in events:
+            groups.setdefault(ev.event_type, []).append(ev)
+
+        for etype, evlist in groups.items():
+            cfg = _ML_MARKER_CFG.get(etype)
+            if not cfg:
+                continue
+            symbol, color, size, anchor_y = cfg
+            xs = [ev.ts for ev in evlist]
+            ys = [ev.price for ev in evlist]
+            scatter = pg.ScatterPlotItem(
+                x=xs, y=ys,
+                symbol=symbol, size=size,
+                pen=pg.mkPen(color, width=1),
+                brush=QBrush(QColor(color + "BB")),
+            )
+            self._plot.addItem(scatter)
+            self._items.append(scatter)
+
+            # Small label above/below each marker
+            _font = QFont("monospace", 7)
+            _font.setBold(True)
+            for ev in evlist:
+                short = ev.label[:12] if ev.label else etype.replace("_", " ")
+                lbl = pg.TextItem(text=short, color=color, anchor=(0.5, anchor_y))
+                lbl.setFont(_font)
+                lbl.setPos(ev.ts, ev.price)
+                self._plot.addItem(lbl, ignoreBounds=True)
+                self._items.append(lbl)
+
+    def refresh_from_redis(self, symbol: str, ts_array: "np.ndarray") -> None:
+        """
+        Load ML BUY/SELL signals and whale events from Redis and draw them.
+        Only draws events whose timestamps fall within ts_array range.
+        """
+        if ts_array is None or len(ts_array) == 0:
+            return
+        t_min, t_max = float(ts_array[0]), float(ts_array[-1])
+        events: list[ChartEvent] = []
+
+        try:
+            from db.redis_client import RedisClient
+            rc = RedisClient()
+
+            # ML signals
+            raw_signals = rc.get_signals(symbol) if hasattr(rc, "get_signals") else []
+            for s in (raw_signals or []):
+                t   = float(s.get("t", s.get("timestamp", 0)))
+                if not (t_min <= t <= t_max):
+                    continue
+                action = str(s.get("action", s.get("signal", ""))).upper()
+                price  = float(s.get("price", s.get("entry_price", 0)))
+                conf   = float(s.get("confidence", 0))
+                if action in ("BUY", "LONG"):
+                    etype = "ML_BUY"
+                    label = f"BUY {conf:.0%}" if conf else "BUY"
+                elif action in ("SELL", "SHORT"):
+                    etype = "ML_SELL"
+                    label = f"SELL {conf:.0%}" if conf else "SELL"
+                else:
+                    etype = "ML_HOLD"
+                    label = "HOLD"
+                if price > 0:
+                    events.append(ChartEvent(t, price, etype, label))
+
+            # Whale events
+            raw_whale = rc.get_whale_events(symbol) if hasattr(rc, "get_whale_events") else []
+            for w in (raw_whale or []):
+                t     = float(w.get("t", w.get("timestamp", 0)))
+                if not (t_min <= t <= t_max):
+                    continue
+                price = float(w.get("price", 0))
+                side  = str(w.get("side", "")).upper()
+                etype = "WHALE_BUY" if side in ("BUY", "LONG") else "WHALE_SELL"
+                val   = w.get("value_usd", 0)
+                label = f"WHALE ${val/1e6:.1f}M" if val >= 1e6 else "WHALE"
+                if price > 0:
+                    events.append(ChartEvent(t, price, etype, label))
+
+        except Exception:
+            pass
+
+        self.draw(events)
 
 
 # ── Panel title text item ──────────────────────────────────────────────────────
@@ -741,6 +921,10 @@ class ChartWidget(QWidget):
         self._event_layer:  Optional[EventAnnotationLayer] = None
         self._event_hover:  Optional[pg.TextItem] = None
 
+        # ML signal / whale / entry-exit marker layer
+        self._ml_layer: Optional[MLMarkerLayer] = None
+        self._show_ml_markers: bool = True
+
         # Chart navigation
         self._auto_scale:  bool = True
         self._auto_follow: bool = True
@@ -912,6 +1096,11 @@ class ChartWidget(QWidget):
         events_pill = IndicatorPill("EVENTS", "#FF7043", checked=True)
         events_pill.toggled.connect(self._on_events_toggled)
         lay.addWidget(events_pill)
+        # ML signal / whale marker toggle
+        ml_pill = IndicatorPill("ML▲▼", "#00E676", checked=True)
+        ml_pill.toggled.connect(self._on_ml_markers_toggled)
+        ml_pill.setToolTip("Show/hide ML BUY/SELL triangles, whale markers and entry/exit levels")
+        lay.addWidget(ml_pill)
         sr_pill = IndicatorPill("S/R", "#78909C", checked=False)
         sr_pill.toggled.connect(lambda c: self._toggle("sr", c))
         lay.addWidget(sr_pill)
@@ -1191,11 +1380,23 @@ class ChartWidget(QWidget):
         self._price_plot.setMenuEnabled(False)
         self._price_plot.showGrid(x=True, y=True, alpha=0.08)
         self._price_plot.setMouseEnabled(x=True, y=True)
-        self._price_plot.setAxisItems({"bottom": pg.DateAxisItem(utcOffset=0)})
+        self._price_plot.setAxisItems({"bottom": TradingDateAxis(utcOffset=0)})
         self._price_plot.getAxis("right").show()
         self._price_plot.showAxis("right")
         self._price_plot.setMinimumHeight(220)
         self._splitter.addWidget(self._price_plot)
+
+        # Current-price horizontal arrow line (yellow, right-axis label)
+        self._price_arrow = pg.InfiniteLine(
+            angle=0, movable=False,
+            pen=pg.mkPen("#FFD700", width=1.5, style=Qt.PenStyle.DotLine),
+            label="{value:.4f}",
+            labelOpts={
+                "position": 1.0, "color": "#000000",
+                "fill": "#FFD700", "movable": False,
+            },
+        )
+        self._price_plot.addItem(self._price_arrow, ignoreBounds=True)
 
         # Crosshair on price chart
         self._vline = pg.InfiniteLine(
@@ -1241,6 +1442,9 @@ class ChartWidget(QWidget):
         self._event_hover.setZValue(101)
         self._price_plot.addItem(self._event_hover, ignoreBounds=True)
 
+        # ML signal / whale / entry-exit marker layer
+        self._ml_layer = MLMarkerLayer(self._price_plot)
+
     def _build_sub_panels(self) -> None:
         # Each sub-panel: (internal_key, title_text, title_colour, y_range, reference_lines)
         panel_specs = [
@@ -1259,7 +1463,7 @@ class ChartWidget(QWidget):
             pw.setMenuEnabled(False)
             pw.showGrid(x=True, y=True, alpha=0.08)
             pw.setXLink(self._price_plot)
-            pw.setAxisItems({"bottom": pg.DateAxisItem(utcOffset=0)})
+            pw.setAxisItems({"bottom": TradingDateAxis(utcOffset=0)})
             pw.setMaximumHeight(120)
             pw.setMinimumHeight(60)
             if yrange:
@@ -1290,7 +1494,7 @@ class ChartWidget(QWidget):
     def _setup_timer(self) -> None:
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._refresh_data)
-        self._refresh_timer.start(5000)
+        self._refresh_timer.start(2000)   # 2-second live updates
 
     # ── Data ───────────────────────────────────────────────────────────
 
@@ -1308,9 +1512,46 @@ class ChartWidget(QWidget):
 
     def set_symbol(self, symbol: str) -> None:
         self._symbol = symbol
+        # Add to combo if not already present
+        if self.sym_combo.findText(symbol) < 0:
+            self.sym_combo.addItem(symbol)
         idx = self.sym_combo.findText(symbol)
         if idx >= 0:
             self.sym_combo.setCurrentIndex(idx)
+
+    def add_ml_event(self, ts: float, price: float, event_type: str,
+                     label: str = "", detail: str = "") -> None:
+        """
+        Add a single ML / trade event marker to the chart.
+        event_type can be ML_BUY, ML_SELL, ML_HOLD, WHALE_BUY, WHALE_SELL,
+        ENTRY, EXIT, CASCADE, FUNDING, etc.
+        """
+        ev = ChartEvent(ts, price, event_type, label or event_type, detail=detail)
+        self._chart_events.append(ev)
+        if self._data:
+            self._draw_event_annotations()
+            self._draw_ml_markers()
+
+    def set_entry_exit(self, entry_price: float, entry_ts: float,
+                       exit_price: float = 0.0, exit_ts: float = 0.0) -> None:
+        """
+        Draw entry (gold ▲) and optional exit (orange ▼) price markers.
+        Replaces any existing entry/exit markers.
+        """
+        self._chart_events = [
+            e for e in self._chart_events
+            if e.event_type not in ("ENTRY", "EXIT")
+        ]
+        if entry_price and entry_ts:
+            self._chart_events.append(
+                ChartEvent(entry_ts, entry_price, "ENTRY", f"IN {entry_price:,.4f}")
+            )
+        if exit_price and exit_ts:
+            self._chart_events.append(
+                ChartEvent(exit_ts, exit_price, "EXIT", f"OUT {exit_price:,.4f}")
+            )
+        if self._data:
+            self._draw_event_annotations()
 
     def _refresh_data(self) -> None:
         # 1. Try Redis (live streaming data)
@@ -1391,6 +1632,8 @@ class ChartWidget(QWidget):
         self._price_plot.clear()
         self._price_plot.addItem(self._vline, ignoreBounds=True)
         self._price_plot.addItem(self._hline, ignoreBounds=True)
+        if hasattr(self, "_price_arrow"):
+            self._price_plot.addItem(self._price_arrow, ignoreBounds=True)
 
         self._draw_price_series(data, ts, cls, ops, his, los, vols)
         self._draw_overlays(ts, cls, ops, his, los, vols)
@@ -1420,6 +1663,9 @@ class ChartWidget(QWidget):
             self._price_plot.addItem(self._event_hover, ignoreBounds=True)
             self._event_hover.setVisible(False)
 
+        # ML signal triangles, whale markers, entry/exit price markers
+        self._draw_ml_markers()
+
         # AI forecast projection
         self._draw_forecast(ts, cls, his, los)
 
@@ -1442,6 +1688,11 @@ class ChartWidget(QWidget):
         self._draw_adx_panel(ts, his, los, cls)
 
         self._update_panel_visibility()
+
+        # Update current-price arrow to latest close
+        if len(cls) > 0 and hasattr(self, "_price_arrow"):
+            self._price_arrow.setValue(float(cls[-1]))
+            self._price_plot.addItem(self._price_arrow, ignoreBounds=True)
 
         # Auto-follow: scroll to show the latest N candles
         if self._auto_follow and len(ts) >= 2:
@@ -2248,11 +2499,26 @@ class ChartWidget(QWidget):
         visible = [ev for ev in self._chart_events if t_min <= ev.ts <= t_max]
         self._event_layer.draw(visible)
 
+    def _draw_ml_markers(self) -> None:
+        """Draw ML BUY/SELL triangles, whale markers, entry/exit prices from Redis."""
+        if not self._ml_layer or not self._show_ml_markers:
+            return
+        if self._ts is None or len(self._ts) == 0:
+            return
+        self._ml_layer.refresh_from_redis(self._symbol, self._ts)
+
     def _on_events_toggled(self, checked: bool) -> None:
         self._show_events = checked
         self._overlays["events"] = checked
         if self._data:
             self._draw_event_annotations()
+
+    def _on_ml_markers_toggled(self, checked: bool) -> None:
+        self._show_ml_markers = checked
+        if not checked and self._ml_layer:
+            self._ml_layer.clear()
+        elif checked and self._data:
+            self._draw_ml_markers()
 
     def _check_event_hover(self, x: float, y: float) -> None:
         """Show event tooltip when the cursor is near an event diamond."""
